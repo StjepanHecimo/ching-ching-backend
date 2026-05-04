@@ -1,1 +1,1 @@
-# ching-ching-backend
+# chin-chin-backend
