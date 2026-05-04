@@ -24,6 +24,15 @@ enum UserStatus {
   DISABLED
 }
 
+enum SpaceLayoutStatus {
+  DRAFT
+  AI_SUGGESTED
+  SAVED
+  PENDING_CHIN_CHIN_REVIEW
+  CHIN_CHIN_CHANGES_REQUESTED
+  APPROVED
+}
+
 model User {
   id              String     @id @default(uuid())
   email           String     @unique
@@ -40,6 +49,7 @@ model User {
   venues                  Venue[]
   emailVerificationTokens EmailVerificationToken[]
   refreshTokens           RefreshToken[]
+  spaceLayoutProjects     SpaceLayoutProject[]
 
   @@index([status])
   @@map("users")
@@ -56,10 +66,35 @@ model Venue {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner               User                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  spaceLayoutProjects SpaceLayoutProject[]
 
   @@index([ownerId])
   @@map("venues")
+}
+
+model SpaceLayoutProject {
+  id               String            @id @default(uuid())
+  ownerId          String
+  venueId          String
+  name             String?
+  status           SpaceLayoutStatus @default(DRAFT)
+  photos           Json
+  space            Json
+  aiSuggestion     Json?
+  savedLayout      Json?
+  reviewSubmission Json?
+  approvedAt       DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([venueId])
+  @@index([status])
+  @@map("space_layout_projects")
 }
 
 model EmailVerificationToken {
