@@ -1,17 +1,12 @@
 import { IsOptional, IsString, IsUrl, Length, Matches } from "class-validator";
 
-export class LayoutPhotoDto {
-  @IsOptional()
-  @IsString()
-  @Length(2, 120)
-  id?: string;
-
+export class LayoutReferenceFileDto {
   @IsString()
   @Length(2, 180)
   fileName!: string;
 
   @IsString()
-  @Matches(/^image\/(jpeg|jpg|png|webp|heic|heif)$/)
+  @Matches(/^(image\/(jpeg|jpg|png|webp|heic|heif)|application\/pdf)$/)
   mimeType!: string;
 
   @IsOptional()

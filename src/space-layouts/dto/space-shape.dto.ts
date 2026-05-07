@@ -1,4 +1,7 @@
+import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
   IsArray,
   IsIn,
   IsInt,
@@ -9,7 +12,9 @@ import {
   Length,
   Max,
   Min,
+  ValidateNested,
 } from "class-validator";
+import { LayoutPhotoDto } from "./layout-photo.dto";
 
 export class SpaceShapeDto {
   @IsOptional()
@@ -46,4 +51,24 @@ export class SpaceShapeDto {
     x: number;
     y: number;
   }>;
+
+  @IsOptional()
+  @IsObject()
+  features?: {
+    hasToilet?: boolean;
+    hasBar?: boolean;
+    hasBilliardsOrDarts?: boolean;
+    hasTv?: boolean;
+    hasDjMusicCorner?: boolean;
+    hasStairs?: boolean;
+    hasMainWalkway?: boolean;
+  };
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => LayoutPhotoDto)
+  photos?: LayoutPhotoDto[];
 }

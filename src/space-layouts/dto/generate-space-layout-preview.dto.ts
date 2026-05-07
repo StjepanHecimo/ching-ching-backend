@@ -5,40 +5,13 @@ import {
   IsArray,
   IsDefined,
   IsOptional,
-  IsString,
-  IsUUID,
-  Length,
   ValidateNested,
 } from "class-validator";
 import { LayoutPhotoDto } from "./layout-photo.dto";
 import { LayoutReferenceFileDto } from "./layout-reference-file.dto";
 import { SpaceShapeDto } from "./space-shape.dto";
 
-export class CreateSpaceLayoutDto {
-  @IsUUID()
-  venueId!: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(2, 120)
-  name?: string;
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMinSize(1)
-  @ArrayMaxSize(50)
-  @ValidateNested({ each: true })
-  @Type(() => LayoutPhotoDto)
-  photos?: LayoutPhotoDto[];
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMinSize(4)
-  @ArrayMaxSize(4)
-  @ValidateNested({ each: true })
-  @Type(() => LayoutPhotoDto)
-  venuePhotos?: LayoutPhotoDto[];
-
+export class GenerateSpaceLayoutPreviewDto {
   @IsDefined()
   @ValidateNested()
   @Type(() => LayoutReferenceFileDto)
@@ -56,4 +29,12 @@ export class CreateSpaceLayoutDto {
   @ValidateNested({ each: true })
   @Type(() => SpaceShapeDto)
   rooms?: SpaceShapeDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMinSize(4)
+  @ArrayMaxSize(4)
+  @ValidateNested({ each: true })
+  @Type(() => LayoutPhotoDto)
+  venuePhotos?: LayoutPhotoDto[];
 }

@@ -40,6 +40,16 @@ export class AuthController {
     return this.authService.resendVerification(dto);
   }
 
+  @Post("request-login-verification")
+  requestLoginVerification(@Body() dto: ResendVerificationDto) {
+    return this.authService.requestLoginVerification(dto);
+  }
+
+  @Post("request-login-vertification")
+  requestLoginVertificationAlias(@Body() dto: ResendVerificationDto) {
+    return this.authService.requestLoginVerification(dto);
+  }
+
   @Post("login")
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);

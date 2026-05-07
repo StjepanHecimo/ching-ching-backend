@@ -145,6 +145,9 @@ export class AuthService {
     const normalizedEmail = dto.email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({
       where: { email: normalizedEmail },
+      include: {
+        venues: true,
+      },
     });
 
     if (!user || user.status === UserStatus.ACTIVE) {
@@ -183,6 +186,71 @@ export class AuthService {
       message:
         "If an unverified account exists for this email, a new verification email has been sent.",
       devVerificationToken: verificationToken,
+    };
+  }
+
+  async requestLoginVerification(dto: ResendVerificationDto) {
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      include: {
+        venues: true,
+      },
+    });
+
+    if (!user) {
+      return {
+        message:
+          "If an account exists for this email, a login verification email has been sent.",
+      };
+    }
+
+    const verificationToken = this.createVerificationToken();
+    const tokenHash = this.hashToken(verificationToken);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.emailVerificationToken.updateMany({
+        where: {
+          userId: user.id,
+          usedAt: null,
+        },
+        data: {
+          usedAt: new Date(),
+        },
+      });
+
+      await tx.emailVerificationToken.create({
+        data: {
+          userId: user.id,
+          tokenHash,
+          expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+        },
+      });
+    });
+
+    this.logVerificationEmail(user.email, verificationToken);
+
+    return {
+      message:
+        "If an account exists for this email, a login verification email has been sent.",
+      devVerificationToken: verificationToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        status: user.status,
+      },
+      venue: user.venues[0]
+        ? {
+            id: user.venues[0].id,
+            name: user.venues[0].name,
+            slug: user.venues[0].slug,
+            address: user.venues[0].address,
+            city: user.venues[0].city,
+            country: user.venues[0].country,
+          }
+        : null,
     };
   }
 

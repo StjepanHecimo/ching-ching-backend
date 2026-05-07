@@ -13,6 +13,7 @@ import { AuthenticatedRequest } from "../auth/authenticated-request";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CreateSpaceLayoutDto } from "./dto/create-space-layout.dto";
 import { SaveSpaceLayoutDto } from "./dto/save-space-layout.dto";
+import { SubmitCompleteSpaceLayoutReviewDto } from "./dto/submit-complete-space-layout-review.dto";
 import {
   ReviewSpaceLayoutDto,
   SubmitSpaceLayoutReviewDto,
@@ -38,6 +39,17 @@ export class SpaceLayoutsController {
     @Query("venueId") venueId?: string,
   ) {
     return this.spaceLayoutsService.list(request.user.userId, venueId);
+  }
+
+  @Post("submit-complete-for-review")
+  submitCompleteForReview(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: SubmitCompleteSpaceLayoutReviewDto,
+  ) {
+    return this.spaceLayoutsService.submitCompleteForReview(
+      request.user.userId,
+      dto,
+    );
   }
 
   @Get(":id")

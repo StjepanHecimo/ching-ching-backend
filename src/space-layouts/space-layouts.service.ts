@@ -1,14 +1,21 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
 import { SpaceLayoutStatus } from "../../generated/prisma/enums";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateSpaceLayoutDto } from "./dto/create-space-layout.dto";
+import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
+import { LayoutPhotoDto } from "./dto/layout-photo.dto";
+import { LayoutReferenceFileDto } from "./dto/layout-reference-file.dto";
 import { SaveSpaceLayoutDto } from "./dto/save-space-layout.dto";
 import { SpaceShapeDto } from "./dto/space-shape.dto";
+import { SubmitCompleteSpaceLayoutReviewDto } from "./dto/submit-complete-space-layout-review.dto";
 import {
   ReviewSpaceLayoutDto,
   SubmitSpaceLayoutReviewDto,
@@ -17,6 +24,9 @@ import {
 type LayoutTable = {
   id: string;
   label: string;
+  tableRole: "CHIN_CHIN_TABLE" | "ORDINARY_TABLE";
+  tablePhotoId: string;
+  tablePhotoStatus: "APPROVED_WITH_PHOTO" | "MISSING_PHOTO" | "NOT_REQUIRED";
   x: number;
   y: number;
   width: number;
@@ -27,29 +37,33 @@ type LayoutTable = {
   reservable: boolean;
   rotation: number;
   shape: "round" | "rectangle";
+  chinChinCandidate: boolean;
 };
 
 @Injectable()
 export class SpaceLayoutsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(SpaceLayoutsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async create(userId: string, dto: CreateSpaceLayoutDto) {
     await this.ensureVenueOwnership(userId, dto.venueId);
-    this.ensureUsablePhotoReferences(dto.photos);
-    this.ensureUsableSpace(dto.space);
+    const normalizedSpace = this.normalizeSetupSpace(dto);
+    this.ensureUsableSetupPhotos(dto, normalizedSpace.rooms.length);
+    this.ensureUsableVenuePhotos(dto.venuePhotos);
+    this.ensureUsableFloorPlanFile(dto.floorPlanFile);
+    this.ensureUsableSpace(normalizedSpace.primaryRoom);
 
     const project = await this.prisma.spaceLayoutProject.create({
       data: {
         ownerId: userId,
         venueId: dto.venueId,
         name: dto.name?.trim(),
-        photos: dto.photos.map((photo) => ({
-          fileName: photo.fileName.trim(),
-          mimeType: photo.mimeType,
-          dataUrl: photo.dataUrl,
-          remoteUrl: photo.remoteUrl,
-        })) as Prisma.InputJsonValue,
-        space: this.normalizeSpace(dto.space) as Prisma.InputJsonValue,
+      photos: this.normalizeGlobalPhotos(dto) as Prisma.InputJsonValue,
+        space: normalizedSpace as Prisma.InputJsonValue,
       },
       include: {
         venue: true,
@@ -86,9 +100,19 @@ export class SpaceLayoutsService {
     return this.serializeProject(project);
   }
 
+  async generatePreview(dto: GenerateSpaceLayoutPreviewDto) {
+    const normalizedSpace = this.normalizeSetupSpace(dto);
+    this.ensureUsableSetupPhotos(dto, normalizedSpace.rooms.length);
+    this.ensureUsableVenuePhotos(dto.venuePhotos);
+    this.ensureUsableFloorPlanFile(dto.floorPlanFile);
+    this.ensureUsableSpace(normalizedSpace.primaryRoom);
+
+    return this.createSuggestion(normalizedSpace as Prisma.JsonValue);
+  }
+
   async generateSuggestion(userId: string, id: string) {
     const project = await this.findOwnedProject(userId, id);
-    const suggestion = this.createStubSuggestion(project.space);
+    const suggestion = await this.createSuggestion(project.space);
 
     const updatedProject = await this.prisma.spaceLayoutProject.update({
       where: { id },
@@ -102,6 +126,13 @@ export class SpaceLayoutsService {
     });
 
     return this.serializeProject(updatedProject);
+  }
+
+  private async createSuggestion(space: Prisma.JsonValue) {
+    return this.configService.get<string>("SPACE_LAYOUT_AI_PROVIDER") ===
+      "openai"
+      ? this.createOpenAiSuggestion(space)
+      : this.createStubSuggestion(space);
   }
 
   async saveLayout(userId: string, id: string, dto: SaveSpaceLayoutDto) {
@@ -145,20 +176,7 @@ export class SpaceLayoutsService {
       where: { id },
       data: {
         status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW,
-        reviewSubmission: {
-          topDrinks: dto.topDrinks.map((drink) => drink.trim()),
-          musicType: dto.musicType.trim(),
-          themeTags: dto.themeTags.map((tag) =>
-            tag.trim().replace(/^#/, "").toLowerCase(),
-          ),
-          servesFood: dto.servesFood,
-          foodDescription: dto.foodDescription?.trim(),
-          ownerNotes: dto.ownerNotes?.trim(),
-          submittedAt: new Date().toISOString(),
-          review: {
-            status: "pending",
-          },
-        } as Prisma.InputJsonValue,
+        reviewSubmission: this.createReviewSubmission(dto),
       },
       include: {
         venue: true,
@@ -170,6 +188,78 @@ export class SpaceLayoutsService {
       message:
         "Layout submitted. It will become available after Chin-Chin team approval.",
     };
+  }
+
+  async submitCompleteForReview(
+    userId: string,
+    dto: SubmitCompleteSpaceLayoutReviewDto,
+  ) {
+    await this.ensureVenueOwnership(userId, dto.venueId);
+    const normalizedSpace = this.normalizeSetupSpace(dto);
+    this.ensureUsableSetupPhotos(dto, normalizedSpace.rooms.length);
+    this.ensureUsableVenuePhotos(dto.venuePhotos);
+    this.ensureUsableFloorPlanFile(dto.floorPlanFile);
+    this.ensureUsableSpace(normalizedSpace.primaryRoom);
+    this.ensureUsableRenderedImage(dto);
+
+    const now = new Date().toISOString();
+    const project = await this.prisma.spaceLayoutProject.create({
+      data: {
+        ownerId: userId,
+        venueId: dto.venueId,
+        name: dto.name?.trim(),
+        status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW,
+        photos: this.normalizeGlobalPhotos(dto) as Prisma.InputJsonValue,
+        space: normalizedSpace as Prisma.InputJsonValue,
+        aiSuggestion: dto.aiSuggestion as Prisma.InputJsonValue,
+        savedLayout: {
+          selectedLayoutOptionId: dto.selectedLayoutOptionId,
+          editedBy: dto.editedBy ?? "flutter-editor",
+          layout: dto.layout,
+          renderedImage: dto.renderedImage,
+          savedAt: now,
+        } as Prisma.InputJsonValue,
+        reviewSubmission: this.createReviewSubmission(dto, now),
+      },
+      include: {
+        venue: true,
+      },
+    });
+
+    return {
+      ...this.serializeProject(project),
+      message:
+        "Complete layout package submitted. Chin-Chin team can now review and adjust it before approval.",
+    };
+  }
+
+  async submitCompletePreviewForReview(
+    dto: SubmitCompleteSpaceLayoutReviewDto,
+  ) {
+    const venue = await this.prisma.venue.findUnique({
+      where: { id: dto.venueId },
+      select: { ownerId: true },
+    });
+
+    if (!venue) {
+      throw new NotFoundException("Venue was not found.");
+    }
+
+    return this.submitCompleteForReview(venue.ownerId, dto);
+  }
+
+  async getLatestVenueProjectPreview(venueId: string) {
+    const project = await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId },
+      orderBy: { updatedAt: "desc" },
+      include: { venue: true },
+    });
+
+    if (!project) {
+      throw new NotFoundException("Space layout project was not found.");
+    }
+
+    return this.serializeProject(project);
   }
 
   async review(userId: string, id: string, dto: ReviewSpaceLayoutDto) {
@@ -248,16 +338,97 @@ export class SpaceLayoutsService {
     return project;
   }
 
-  private ensureUsablePhotoReferences(photos: CreateSpaceLayoutDto["photos"]) {
+  private ensureUsablePhotoReferences(photos: LayoutPhotoDto[]) {
     const invalidPhoto = photos.find(
       (photo) => !photo.dataUrl && !photo.remoteUrl,
     );
 
     if (invalidPhoto) {
       throw new BadRequestException(
-        "Each photo must include either dataUrl or remoteUrl for the test flow.",
+        "Each Chin-Chin table photo must include either dataUrl or remoteUrl.",
       );
     }
+  }
+
+  private ensureUsableVenuePhotos(venuePhotos?: LayoutPhotoDto[]) {
+    if (!venuePhotos?.length) {
+      return;
+    }
+
+    if (venuePhotos.length !== 4) {
+      throw new BadRequestException(
+        "Provide exactly 4 venue space photos.",
+      );
+    }
+
+    this.ensureUsablePhotoReferences(venuePhotos);
+  }
+
+  private ensureUsableFloorPlanFile(floorPlanFile?: LayoutReferenceFileDto) {
+    if (!floorPlanFile) {
+      throw new BadRequestException(
+        "Floor plan, sketch, or PDF file is required before AI layout generation.",
+      );
+    }
+
+    if (!floorPlanFile.dataUrl && !floorPlanFile.remoteUrl) {
+      throw new BadRequestException(
+        "Floor plan file must include either dataUrl or remoteUrl.",
+      );
+    }
+  }
+
+  private ensureUsableSetupPhotos(
+    dto: {
+      rooms?: SpaceShapeDto[];
+      space?: SpaceShapeDto;
+      photos?: LayoutPhotoDto[];
+    },
+    normalizedRoomCount: number,
+  ) {
+    const rooms = dto.rooms?.length ? dto.rooms : dto.space ? [dto.space] : [];
+
+    if (dto.photos?.length) {
+      const maxGlobalPhotos = this.maxAllowedChinChinPhotos(rooms);
+      if (dto.photos.length > maxGlobalPhotos) {
+        throw new BadRequestException(
+          `Provide at most ${maxGlobalPhotos} Chin-Chin table photo(s) for the selected tables.`,
+        );
+      }
+
+      this.ensureUsablePhotoReferences(dto.photos);
+      return;
+    }
+
+    const roomsWithPhotos = rooms.filter((room) => room.photos?.length);
+
+    if (roomsWithPhotos.length !== normalizedRoomCount) {
+      throw new BadRequestException(
+        "Provide at least one Chin-Chin table photo globally or at least one table photo for each room.",
+      );
+    }
+
+    for (const room of roomsWithPhotos) {
+      const allowedPhotos = this.maxAllowedChinChinPhotos([room]);
+      const roomPhotoCount = room.photos?.length ?? 0;
+
+      if (roomPhotoCount > allowedPhotos) {
+        throw new BadRequestException(
+          `${room.roomLabel ?? "Room"} can include at most ${allowedPhotos} Chin-Chin table photo(s).`,
+        );
+      }
+
+      this.ensureUsablePhotoReferences(room.photos ?? []);
+    }
+  }
+
+  private maxAllowedChinChinPhotos(rooms: SpaceShapeDto[]) {
+    const totalAllowed = rooms.reduce((total, room) => {
+      const requestedTableCount = room.requestedTableCount ?? 0;
+      return total + Math.max(1, Math.floor(requestedTableCount / 4));
+    }, 0);
+
+    return Math.max(1, totalAllowed);
   }
 
   private ensureUsableSpace(space: SpaceShapeDto) {
@@ -271,7 +442,9 @@ export class SpaceLayoutsService {
     }
   }
 
-  private ensureUsableRenderedImage(dto: SaveSpaceLayoutDto) {
+  private ensureUsableRenderedImage(dto: {
+    renderedImage?: { dataUrl?: string; remoteUrl?: string };
+  }) {
     if (!dto.renderedImage) {
       return;
     }
@@ -283,6 +456,67 @@ export class SpaceLayoutsService {
     }
   }
 
+  private normalizeSetupSpace(dto: {
+    rooms?: SpaceShapeDto[];
+    space?: SpaceShapeDto;
+    floorPlanFile?: LayoutReferenceFileDto;
+    venuePhotos?: LayoutPhotoDto[];
+  }) {
+    const rooms = dto.rooms?.length ? dto.rooms : dto.space ? [dto.space] : [];
+
+    if (!rooms.length) {
+      throw new BadRequestException(
+        "Provide at least one room through rooms[] or a single space object.",
+      );
+    }
+
+    const normalizedRooms = rooms.map((room, index) =>
+      this.normalizeSpace(room, index),
+    );
+
+    return {
+      primaryRoom: normalizedRooms[0],
+      rooms: normalizedRooms,
+      venuePhotos: dto.venuePhotos?.length
+        ? dto.venuePhotos.map((photo, index) =>
+            this.normalizePhoto(photo, `venue-photo-${index + 1}`),
+          )
+        : [],
+      ...(dto.floorPlanFile
+        ? { floorPlanFile: this.normalizeReferenceFile(dto.floorPlanFile) }
+        : {}),
+    };
+  }
+
+  private normalizeGlobalPhotos(dto: { photos?: LayoutPhotoDto[] }) {
+    if (!dto.photos?.length) {
+      return [];
+    }
+
+    return dto.photos.map((photo, index) =>
+      this.normalizePhoto(photo, `chin-chin-photo-${index + 1}`),
+    );
+  }
+
+  private normalizePhoto(photo: LayoutPhotoDto, fallbackId?: string) {
+    return {
+      id: photo.id?.trim() || fallbackId || this.photoIdFromFileName(photo),
+      fileName: photo.fileName.trim(),
+      mimeType: photo.mimeType,
+      dataUrl: photo.dataUrl,
+      remoteUrl: photo.remoteUrl,
+    };
+  }
+
+  private normalizeReferenceFile(file: LayoutReferenceFileDto) {
+    return {
+      fileName: file.fileName.trim(),
+      mimeType: file.mimeType,
+      dataUrl: file.dataUrl,
+      remoteUrl: file.remoteUrl,
+    };
+  }
+
   private asJsonObject(value: Prisma.JsonValue) {
     if (typeof value !== "object" || !value || Array.isArray(value)) {
       return null;
@@ -291,21 +525,722 @@ export class SpaceLayoutsService {
     return value;
   }
 
-  private normalizeSpace(space: SpaceShapeDto) {
+  private createReviewSubmission(
+    dto: SubmitSpaceLayoutReviewDto | SubmitCompleteSpaceLayoutReviewDto,
+    submittedAt = new Date().toISOString(),
+  ) {
+    const topDrinks = dto.topDrinks
+      .map((drink) => drink.trim())
+      .filter(Boolean);
+    const themeTags = dto.themeTags
+      .map((tag) => tag.trim().replace(/^#/, "").toLowerCase())
+      .filter(Boolean);
+    const draftBeers =
+      "draftBeers" in dto
+        ? (dto.draftBeers ?? []).map((beer) => beer.trim()).filter(Boolean)
+        : [];
+
+    if (!topDrinks.length) {
+      throw new BadRequestException("Provide at least one top drink.");
+    }
+
+    if (!themeTags.length) {
+      throw new BadRequestException("Provide at least one theme hashtag.");
+    }
+
+    const submission: Record<string, unknown> = {
+      topDrinks,
+      musicType: dto.musicType.trim(),
+      themeTags,
+      servesFood: dto.servesFood,
+      foodDescription: dto.foodDescription?.trim(),
+      ownerNotes: dto.ownerNotes?.trim(),
+      submittedAt,
+      review: {
+        status: "pending",
+      },
+    };
+
+    if ("hasDraftBeer" in dto) {
+      submission.hasDraftBeer = dto.hasDraftBeer;
+      submission.draftBeers = draftBeers;
+    }
+
+    if ("hasWeekendEvents" in dto) {
+      submission.hasWeekendEvents = dto.hasWeekendEvents;
+    }
+
+    if ("weekendEventDescription" in dto && dto.weekendEventDescription) {
+      submission.weekendEventDescription = dto.weekendEventDescription.trim();
+    }
+
+    if ("cafeVibe" in dto) {
+      submission.cafeVibe = dto.cafeVibe.trim();
+    }
+
+    return submission as Prisma.InputJsonValue;
+  }
+
+  private normalizeSpace(space: SpaceShapeDto, index = 0) {
     return {
-      roomLabel: space.roomLabel?.trim() ?? "Prostorija A",
+      roomLabel:
+        space.roomLabel?.trim() ??
+        `Prostorija ${String.fromCharCode(65 + index)}`,
       requestedTableCount: space.requestedTableCount,
       shapeType: space.shapeType ?? (space.outline ? "custom" : "rectangle"),
       widthMeters: space.widthMeters,
       lengthMeters: space.lengthMeters,
       outline: space.outline,
+      photos:
+        space.photos?.map((photo, photoIndex) =>
+          this.normalizePhoto(
+            photo,
+            `room-${index + 1}-chin-chin-photo-${photoIndex + 1}`,
+          ),
+        ) ?? [],
+      features: {
+        hasToilet: Boolean(space.features?.hasToilet),
+        hasBar: Boolean(space.features?.hasBar),
+        hasBilliardsOrDarts: Boolean(space.features?.hasBilliardsOrDarts),
+        hasTv: Boolean(space.features?.hasTv),
+        hasDjMusicCorner: Boolean(space.features?.hasDjMusicCorner),
+        hasStairs: Boolean(space.features?.hasStairs),
+        hasMainWalkway: Boolean(space.features?.hasMainWalkway),
+      },
     };
+  }
+
+  private photoIdFromFileName(photo: LayoutPhotoDto) {
+    const slug = photo.fileName
+      .trim()
+      .toLowerCase()
+      .replace(/\.[^.]+$/, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    return slug ? `photo-${slug}` : "photo-reference";
+  }
+
+  private async createOpenAiSuggestion(spaceJson: Prisma.JsonValue) {
+    const apiKey = this.configService.get<string>("OPENAI_API_KEY");
+
+    if (!apiKey) {
+      throw new InternalServerErrorException(
+        "OPENAI_API_KEY is required when SPACE_LAYOUT_AI_PROVIDER=openai.",
+      );
+    }
+
+    const model =
+      this.configService.get<string>("OPENAI_SPACE_LAYOUT_MODEL") ??
+      this.configService.get<string>("OPENAI_MODEL") ??
+      "gpt-4o-mini";
+
+    const requestBody = this.createOpenAiLayoutRequest(model, spaceJson);
+    const requestSummary = this.createOpenAiRequestSummary(
+      spaceJson,
+      requestBody,
+    );
+    this.logger.log(
+      `OpenAI layout request: model=${model}, rooms=${requestSummary.roomCount}, floorPlanFile=${requestSummary.floorPlanFile}, chinChinTablePhotos=${requestSummary.chinChinTablePhotoCount}, tablePhotosSentToAi=false, imageDetail=${requestSummary.imageDetail}, promptChars=${requestSummary.promptChars}`,
+    );
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    const responseJson = (await response.json()) as Record<string, unknown>;
+
+    if (!response.ok) {
+      const message =
+        this.readOpenAiErrorMessage(responseJson) ??
+        "OpenAI layout generation failed.";
+      this.logger.error(`OpenAI layout request failed: ${message}`);
+      throw new InternalServerErrorException(message);
+    }
+
+    const outputText = this.extractOpenAiOutputText(responseJson);
+    const parsed = this.parseOpenAiLayoutJson(outputText);
+    const optionCount = Array.isArray(parsed.layoutOptions)
+      ? parsed.layoutOptions.length
+      : 0;
+    this.logger.log(
+      `OpenAI layout response: options=${optionCount}, outputChars=${outputText.length}`,
+    );
+
+    return {
+      ...parsed,
+      source: "openai",
+      model,
+    };
+  }
+
+  private createOpenAiRequestSummary(
+    spaceJson: Prisma.JsonValue,
+    requestBody: { input?: unknown },
+  ) {
+    const imageCount = this.extractRoomPhotos(spaceJson).length;
+    const imageDetail =
+      this.configService.get<string>("OPENAI_SPACE_LAYOUT_IMAGE_DETAIL") ??
+      "high";
+
+    return {
+      chinChinTablePhotoCount: imageCount,
+      floorPlanFile: this.extractFloorPlanFile(spaceJson)?.mimeType ?? "none",
+      imageDetail,
+      promptChars: this.countOpenAiTextInputChars(requestBody.input),
+      roomCount: this.countRooms(spaceJson),
+    };
+  }
+
+  private countOpenAiTextInputChars(input: unknown) {
+    if (!Array.isArray(input)) {
+      return 0;
+    }
+
+    let total = 0;
+
+    for (const message of input) {
+      if (
+        typeof message !== "object" ||
+        !message ||
+        !("content" in message) ||
+        !Array.isArray(message.content)
+      ) {
+        continue;
+      }
+
+      for (const contentItem of message.content) {
+        if (
+          typeof contentItem === "object" &&
+          contentItem &&
+          "type" in contentItem &&
+          contentItem.type === "input_text" &&
+          "text" in contentItem &&
+          typeof contentItem.text === "string"
+        ) {
+          total += contentItem.text.length;
+        }
+      }
+    }
+
+    return total;
+  }
+
+  private countRooms(spaceJson: Prisma.JsonValue) {
+    if (
+      typeof spaceJson !== "object" ||
+      !spaceJson ||
+      Array.isArray(spaceJson)
+    ) {
+      return 0;
+    }
+
+    return Array.isArray(spaceJson.rooms) ? spaceJson.rooms.length : 0;
+  }
+
+  private createOpenAiLayoutRequest(
+    model: string,
+    spaceJson: Prisma.JsonValue,
+  ) {
+    const promptSpaceJson = this.createPromptSafeSpaceJson(spaceJson);
+    const imageDetail =
+      this.configService.get<string>("OPENAI_SPACE_LAYOUT_IMAGE_DETAIL") ??
+      "high";
+    const floorPlanFile = this.extractFloorPlanFile(spaceJson);
+    const floorPlanContent = floorPlanFile
+      ? [this.createOpenAiFloorPlanContent(floorPlanFile, imageDetail)]
+      : [];
+
+    return {
+      model,
+      input: [
+        {
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: "You are Chin-Chin's cafe floor-plan generator. Return only valid JSON matching the schema. A floorPlanFile/sketch/PDF is attached and it is the primary visual source for room geometry, walls, openings, fixed objects, table positions, and spatial relationships. Use JSON dimensions and requested table count as hard constraints. Ignore screenshot/page whitespace, title blocks, external labels, and annotation arrows when creating geometry. Preserve the floor plan proportions: do not simplify the room to a rectangle when the plan has angled walls, cutouts, curved edges, columns, stairs, service areas, or irregular boundaries. Return a tight outline polygon for each room in the same meter coordinate system: min outline x/y should be near 0, max outline x/y should be near canvas width/length, and curved walls should be approximated with multiple points. Interpret visible circles and small square blocks as tables unless they are explicitly labelled as another object. Return conventional fixed objects such as columns, bars, toilets, stairs, doors, counters, passages, booth/separe dividers, and interior partition lines as fixtures, not as large seating/service rectangles. Rectangles with a written label are the object named by the label: sank/šank/bar is a bar, wc/toilet/toalet is a toilet, ZID/zid/wall is a wall, and PROLAZ/prolaz is an open passage. A handwritten BAR or sank/šank label inside, touching, or just above a bottom rectangle is still a bar even if the label is faint, near the image edge, or partially cropped; do not discard it as an external label. If the sketch labels a fixed amenity, return it as a fixture: sank/šank/bar as bar, wc/toilet/toalet as toilet, biljar/pool table as feature, and tv/television/televizor as feature with label TV. If the sketch labels ulaz, glavni ulaz, entrance, or main entrance, return a door or passage fixture at that exact entry location with label Main entrance; this fixture is an icon marker and must not block the passage. Zones are only semantic metadata for broad areas and should be sparse. The drawn lines are the most important source data. Preserve every visible hand-drawn architectural line segment as a straight wall fixture with shape=line and type=wall, whether or not it is labelled as ZID, wall, pregrada, separe, booth, divider, or anything else. Do not decide that a line is only decorative, only a separe, only a partition, or unimportant; every visible room boundary, divider, booth/separe line, internal separator, and counter edge must be returned as a wall line fixture in the same approximate position, length, angle, count, spacing, and start/end alignment as drawn. Convert slightly wavy hand-drawn strokes into straight line fixtures that follow the stroke direction. Closed booth/separe boxes around a table must also be preserved as their visible wall line fixtures. Entrances, doors, and main passages must remain open; never invent a new closing line across an explicitly marked passage, but preserve the drawn wall lines around that passage exactly as shown. Croatian labels such as ulaz, glavni ulaz, main entrance, entrance, prolaz, PROLAZ, glavni prolaz, drugi dio, and arrows indicate access/continuation unless they are clearly labelled as walls. Every table must have a stable id. Use ids like room-a-table-1, room-a-table-2 in top-to-bottom then left-to-right visual order. Every table must have tableRole: CHIN_CHIN_TABLE for a plus-marked Chin-Chin table, otherwise ORDINARY_TABLE. Chin-Chin table photo image payloads are not sent to you, but JSON space data may include photos metadata with ids. Assign tablePhotoId only to plus-marked Chin-Chin tables, using available room photo ids in the same top-to-bottom/left-to-right table order; set tablePhotoStatus=APPROVED_WITH_PHOTO when a photo id is assigned. Ordinary tables must always have tablePhotoId='' and tablePhotoStatus=NOT_REQUIRED. Never reuse one uploaded table photo id for multiple tables. If a plus-marked table has no available photo id, keep tableRole=CHIN_CHIN_TABLE and set tablePhotoStatus=MISSING_PHOTO. If a table is marked with a plus sign (+) on or inside the table shape, keep that plus-sign interpretation as the Chin-Chin table marker and set chinChinCandidate=true for that table; the plus sign is source notation only and must not be returned as a fixture or table shape, and it must not be used as the table center if the visible table outline has a clearer center. Also accept other explicit Chin-Chin labels when they are directly attached to a table. Do not invent Chin-Chin tables. Tables must be separated from each other with visible clearance and must never overlap. Keep every table visually centered within its booth/separe cell or open seating area with clear distance from walls and partition lines; when a table is inside a separe/booth, center it inside that separe/booth cell. Never place a table center or table body on top of another table, a wall, room outline, partition, booth divider, column, bar, passage, or fixed fixture. If a table center is unclear, infer it as the center of the available free area around that table so spacing from nearby walls, dividers, and neighboring tables is balanced. If no Chin-Chin table markings are clear, set chinChinCandidate=false, tableRole=ORDINARY_TABLE, tablePhotoId='', and tablePhotoStatus=NOT_REQUIRED for every table and explain that in notes. Coordinates are in meters from the top-left of the tight usable room outline, not from the full uploaded image/page.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "Inspect the attached floor plan/sketch/PDF before generating the layout. Generate exactly one practical, editable cafe floor-plan option. First crop mentally to the actual floor-plan walls and ignore empty page margins. Then extract the usable public room outline from the plan: include angled walls, major cutouts, entry/stair/service bands, and curved facade edges approximated with 10-18 outline points where needed. The outline must follow the visible outer wall/usable boundary, not the rectangular bounding box of the image. Keep any visible entry or marked main passage open. Croatian labels like ulaz, glavni ulaz, main entrance, entrance, prolaz, PROLAZ, glavni prolaz, drugi dio, and arrows mean access/continuation and must not be converted into blocking walls. Next extract conventional fixed objects into fixtures: columns/pillars as small square or circular fixtures, bar/counter as rectangle fixtures, stairs as stair fixtures, toilet/service rooms as fixtures, passages/doors as opening fixtures, and every visible drawn line as a wall line fixture. Add a visible non-blocking door or passage fixture for any label ulaz, glavni ulaz, entrance, or main entrance, with label Main entrance, so the frontend can draw the entrance icon. Strictly interpret simple sketch symbols: circles are tables, small square blocks are tables, and rectangles with text labels are the object written on them. A rectangle labelled sank, šank, or bar is the bar; a rectangle labelled wc, toilet, or toalet is the toilet/WC; a label ZID/zid/wall means wall; a label PROLAZ/prolaz means an open passage. Treat a faint or edge-adjacent handwritten BAR label at the bottom as belonging to the bottom rectangle; return that bottom rectangle as a bar fixture with label BAR, not as an unlabeled blocked/service area. If a hand-drawn sketch labels an amenity, add it as a fixture only when visible/labelled: sank/šank/bar as a bar fixture, wc/toilet/toalet as a toilet fixture, biljar/pool table as a feature fixture labelled biljar, and tv/television/televizor as a feature fixture labelled TV. Lines are the highest priority visual data. Preserve every visible architectural hand-drawn line segment as its own straight fixture with type=wall and shape=line, even when it is not labelled. Do not classify lines as separe, partition, booth, decoration, helper strokes, or optional separators; for this output, every drawn boundary/divider/separator line is a wall line. Copy the line geometry as drawn: same approximate count, position, length, horizontal/vertical/angled direction, spacing, and start/end alignment. Convert slightly wavy hand-drawn strokes into straight lines following their main direction. Closed or partial boxes should be decomposed into their visible straight wall line segments. Do not replace line drawings with vague zones, broad rectangles, or simplified decorative lines. Do not model separe dividers as broad zones. Do not create large opaque rectangles over table grids just to represent seating/service areas. Never invent a new wall across a labelled path such as entrance, ulaz, glavni ulaz, main entrance, prolaz, PROLAZ, glavni prolaz, or drugi dio, but preserve all wall lines that are actually drawn around those paths. Then detect visible tables and align the output with requestedTableCount unless there is a physical conflict; if you reduce the count, explain why in notes. Every table must have a stable id like room-a-table-1 in visual reading order and a tableRole. A plus sign (+) drawn on or inside a table is the primary Chin-Chin marker and this rule must stay active. For tables with a plus sign, set chinChinCandidate=true, tableRole=CHIN_CHIN_TABLE, and do not return the plus as a fixture; Flutter will render the usual crossed-glasses logo. For all other tables set tableRole=ORDINARY_TABLE, chinChinCandidate=false, tablePhotoId='', and tablePhotoStatus=NOT_REQUIRED. Use available room photos metadata only as photo id references: assign each plus-marked Chin-Chin table one unique tablePhotoId from the room photos list in the same visual order and set tablePhotoStatus=APPROVED_WITH_PHOTO. If no photo id is available for a plus-marked table, set tablePhotoId='' and tablePhotoStatus=MISSING_PHOTO. Use the visible round/rectangular table outline to determine the table center, not the plus marker or text label. In every area, place each table in the visual center of its own available free space/cell, with balanced clearance from all nearby walls, room outlines, columns, bars, fixed fixtures, booth dividers, partition lines, passages, and neighboring tables. Tables must be separated from one another and must never touch or overlap. If a table is inside a separe/booth cell, center the table inside that separe/booth cell. No table body may touch or overlap another table, a wall, partition, booth divider, column, bar, passage, or room outline. If the exact center is not visible on the sketch, infer a clean centered position from the surrounding free space and keep spacing consistent with neighboring tables. Also accept direct Chin-Chin labels attached to a table. Never mark more than one quarter of total tables as Chin-Chin; if the plan marks more, keep the clearest/best marked tables up to that limit and explain in notes. If the plan does not clearly mark Chin-Chin tables, set all chinChinCandidate=false, tableRole=ORDINARY_TABLE, tablePhotoId='', tablePhotoStatus=NOT_REQUIRED, and chinChinCandidateCount=0. Keep tables inside the outline, keep tables clear of fixtures, leave service paths clear, and write the label/strategy/summary as a cafe layout. JSON space data:\n" +
+                JSON.stringify(promptSpaceJson),
+            },
+            ...floorPlanContent,
+          ],
+        },
+      ],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "chin_chin_space_layout",
+          strict: true,
+          schema: this.openAiLayoutSchema(),
+        },
+      },
+    };
+  }
+
+  private createOpenAiFloorPlanContent(
+    file: {
+      fileName: string;
+      mimeType: string;
+      dataUrl?: string;
+      remoteUrl?: string;
+    },
+    imageDetail: string,
+  ) {
+    if (file.mimeType === "application/pdf") {
+      return {
+        type: "input_file",
+        filename: file.fileName,
+        file_data: file.dataUrl
+          ? this.extractDataPayload(file.dataUrl)
+          : undefined,
+        file_url: file.remoteUrl,
+      };
+    }
+
+    return {
+      type: "input_image",
+      image_url: file.dataUrl ?? file.remoteUrl,
+      detail: imageDetail,
+    };
+  }
+
+  private extractDataPayload(dataUrl: string) {
+    const commaIndex = dataUrl.indexOf(",");
+    return commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
+  }
+
+  private extractFloorPlanFile(spaceJson: Prisma.JsonValue) {
+    if (
+      typeof spaceJson !== "object" ||
+      !spaceJson ||
+      Array.isArray(spaceJson) ||
+      typeof spaceJson.floorPlanFile !== "object" ||
+      !spaceJson.floorPlanFile ||
+      Array.isArray(spaceJson.floorPlanFile)
+    ) {
+      return null;
+    }
+
+    const file = spaceJson.floorPlanFile;
+    const fileName =
+      typeof file.fileName === "string" ? file.fileName : "floor-plan";
+    const mimeType =
+      typeof file.mimeType === "string" ? file.mimeType : undefined;
+    const dataUrl = typeof file.dataUrl === "string" ? file.dataUrl : undefined;
+    const remoteUrl =
+      typeof file.remoteUrl === "string" ? file.remoteUrl : undefined;
+
+    if (!mimeType || (!dataUrl && !remoteUrl)) {
+      return null;
+    }
+
+    return { fileName, mimeType, dataUrl, remoteUrl };
+  }
+
+  private createPromptSafeSpaceJson(spaceJson: Prisma.JsonValue) {
+    return this.stripImagePayloads(spaceJson);
+  }
+
+  private stripImagePayloads(value: Prisma.JsonValue): Prisma.JsonValue {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.stripImagePayloads(item));
+    }
+
+    if (typeof value !== "object" || value === null) {
+      return value;
+    }
+
+    const result: Record<string, Prisma.JsonValue> = {};
+
+    for (const [key, entry] of Object.entries(value) as Array<
+      [string, Prisma.JsonValue]
+    >) {
+      if (key === "photos") {
+        result[key] = Array.isArray(entry)
+          ? entry.map((photo, index) =>
+              this.stripPhotoForPrompt(photo, `chin-chin-photo-${index + 1}`),
+            )
+          : [];
+        continue;
+      }
+
+      if (key === "dataUrl" || key === "remoteUrl") {
+        result[key] = entry ? "[provided-as-image-input]" : "";
+        continue;
+      }
+
+      result[key] = this.stripImagePayloads(entry);
+    }
+
+    return result;
+  }
+
+  private stripPhotoForPrompt(value: Prisma.JsonValue, fallbackId: string) {
+    if (typeof value !== "object" || !value || Array.isArray(value)) {
+      return { id: fallbackId };
+    }
+
+    const photo = value as Record<string, Prisma.JsonValue>;
+
+    return {
+      id:
+        typeof photo.id === "string" && photo.id.trim()
+          ? photo.id.trim()
+          : fallbackId,
+      fileName:
+        typeof photo.fileName === "string" ? photo.fileName : "table-photo",
+      mimeType: typeof photo.mimeType === "string" ? photo.mimeType : "image",
+      imagePayload: "[not-sent-to-ai]",
+    };
+  }
+
+  private openAiLayoutSchema() {
+    const numberSchema = { type: "number" };
+    const stringSchema = { type: "string" };
+    const pointSchema = {
+      type: "object",
+      additionalProperties: false,
+      required: ["x", "y"],
+      properties: {
+        x: numberSchema,
+        y: numberSchema,
+      },
+    };
+    const fixtureSchema = {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "id",
+        "label",
+        "type",
+        "shape",
+        "x",
+        "y",
+        "width",
+        "height",
+        "rotation",
+      ],
+      properties: {
+        id: stringSchema,
+        label: stringSchema,
+        type: {
+          type: "string",
+          enum: [
+            "column",
+            "bar",
+            "counter",
+            "toilet",
+            "stairs",
+            "door",
+            "passage",
+            "partition",
+            "booth",
+            "wall",
+            "window",
+            "service",
+            "feature",
+          ],
+        },
+        shape: {
+          type: "string",
+          enum: ["square", "rectangle", "circle", "line"],
+        },
+        x: numberSchema,
+        y: numberSchema,
+        width: numberSchema,
+        height: numberSchema,
+        rotation: numberSchema,
+      },
+    };
+
+    return {
+      type: "object",
+      additionalProperties: false,
+      required: ["version", "source", "units", "layoutOptions", "notes"],
+      properties: {
+        version: { type: "integer" },
+        source: { type: "string" },
+        units: { type: "string", enum: ["meters"] },
+        notes: { type: "array", items: stringSchema },
+        layoutOptions: {
+          type: "array",
+          minItems: 1,
+          maxItems: 1,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "label", "strategy", "rooms", "summary"],
+            properties: {
+              id: stringSchema,
+              label: stringSchema,
+              strategy: stringSchema,
+              summary: {
+                type: "object",
+                additionalProperties: false,
+                required: ["tableCount", "seats", "chinChinCandidateCount"],
+                properties: {
+                  tableCount: { type: "integer" },
+                  seats: { type: "integer" },
+                  chinChinCandidateCount: { type: "integer" },
+                },
+              },
+              rooms: {
+                type: "array",
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: [
+                    "roomLabel",
+                    "canvas",
+                    "outline",
+                    "fixtures",
+                    "zones",
+                    "tables",
+                  ],
+                  properties: {
+                    roomLabel: stringSchema,
+                    canvas: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["width", "length"],
+                      properties: {
+                        width: numberSchema,
+                        length: numberSchema,
+                      },
+                    },
+                    outline: {
+                      type: "array",
+                      minItems: 4,
+                      items: pointSchema,
+                    },
+                    fixtures: {
+                      type: "array",
+                      items: fixtureSchema,
+                    },
+                    zones: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: [
+                          "id",
+                          "label",
+                          "type",
+                          "x",
+                          "y",
+                          "width",
+                          "height",
+                        ],
+                        properties: {
+                          id: stringSchema,
+                          label: stringSchema,
+                          type: {
+                            type: "string",
+                            enum: [
+                              "seating",
+                              "service",
+                              "walkway",
+                              "bar",
+                              "toilet",
+                              "stairs",
+                              "feature",
+                              "blocked",
+                            ],
+                          },
+                          x: numberSchema,
+                          y: numberSchema,
+                          width: numberSchema,
+                          height: numberSchema,
+                        },
+                      },
+                    },
+                    tables: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        additionalProperties: false,
+                        required: [
+                          "id",
+                          "label",
+                          "tableRole",
+                          "tablePhotoId",
+                          "tablePhotoStatus",
+                          "x",
+                          "y",
+                          "width",
+                          "height",
+                          "seats",
+                          "minPartySize",
+                          "maxPartySize",
+                          "reservable",
+                          "rotation",
+                          "shape",
+                          "chinChinCandidate",
+                        ],
+                        properties: {
+                          id: stringSchema,
+                          label: stringSchema,
+                          tableRole: {
+                            type: "string",
+                            enum: ["CHIN_CHIN_TABLE", "ORDINARY_TABLE"],
+                          },
+                          tablePhotoId: stringSchema,
+                          tablePhotoStatus: {
+                            type: "string",
+                            enum: [
+                              "APPROVED_WITH_PHOTO",
+                              "MISSING_PHOTO",
+                              "NOT_REQUIRED",
+                            ],
+                          },
+                          x: numberSchema,
+                          y: numberSchema,
+                          width: numberSchema,
+                          height: numberSchema,
+                          seats: { type: "integer" },
+                          minPartySize: { type: "integer" },
+                          maxPartySize: { type: "integer" },
+                          reservable: { type: "boolean" },
+                          rotation: numberSchema,
+                          shape: {
+                            type: "string",
+                            enum: ["round", "rectangle"],
+                          },
+                          chinChinCandidate: { type: "boolean" },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+  }
+
+  private extractRoomPhotos(spaceJson: Prisma.JsonValue) {
+    const result: Array<{ dataUrl?: string; remoteUrl?: string }> = [];
+
+    if (
+      typeof spaceJson !== "object" ||
+      !spaceJson ||
+      Array.isArray(spaceJson)
+    ) {
+      return result;
+    }
+
+    const rooms = Array.isArray(spaceJson.rooms) ? spaceJson.rooms : [];
+
+    for (const room of rooms) {
+      if (
+        typeof room !== "object" ||
+        !room ||
+        Array.isArray(room) ||
+        !Array.isArray(room.photos)
+      ) {
+        continue;
+      }
+
+      for (const photo of room.photos) {
+        if (typeof photo !== "object" || !photo) {
+          continue;
+        }
+
+        const dataUrl =
+          "dataUrl" in photo && typeof photo.dataUrl === "string"
+            ? photo.dataUrl
+            : undefined;
+        const remoteUrl =
+          "remoteUrl" in photo && typeof photo.remoteUrl === "string"
+            ? photo.remoteUrl
+            : undefined;
+
+        if (dataUrl || remoteUrl) {
+          result.push({ dataUrl, remoteUrl });
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private extractOpenAiOutputText(responseJson: Record<string, unknown>) {
+    if (typeof responseJson.output_text === "string") {
+      return responseJson.output_text;
+    }
+
+    const output = Array.isArray(responseJson.output)
+      ? responseJson.output
+      : [];
+
+    for (const item of output) {
+      if (typeof item !== "object" || !item || !("content" in item)) {
+        continue;
+      }
+
+      const content = Array.isArray(item.content) ? item.content : [];
+
+      for (const contentItem of content) {
+        if (
+          typeof contentItem === "object" &&
+          contentItem &&
+          "text" in contentItem &&
+          typeof contentItem.text === "string"
+        ) {
+          return contentItem.text;
+        }
+      }
+    }
+
+    throw new InternalServerErrorException("OpenAI returned no JSON text.");
+  }
+
+  private parseOpenAiLayoutJson(outputText: string) {
+    try {
+      return JSON.parse(outputText) as Record<string, unknown>;
+    } catch {
+      throw new InternalServerErrorException(
+        "OpenAI returned invalid layout JSON.",
+      );
+    }
+  }
+
+  private readOpenAiErrorMessage(responseJson: Record<string, unknown>) {
+    const error = responseJson.error;
+
+    if (
+      typeof error === "object" &&
+      error &&
+      "message" in error &&
+      typeof error.message === "string"
+    ) {
+      return error.message;
+    }
+
+    return null;
   }
 
   private createStubSuggestion(spaceJson: Prisma.JsonValue) {
     const space = this.readSpaceDimensions(spaceJson);
-    const compactTables = this.createTableGrid(space, "compact");
-    const comfortableTables = this.createTableGrid(space, "comfortable");
+    const tables = this.createTableGrid(space, "comfortable");
+    const zones = this.createZones(space, "center-service");
 
     return {
       version: 1,
@@ -322,37 +1257,43 @@ export class SpaceLayoutsService {
       layoutOptions: [
         {
           id: "layout-a",
-          label: "Nacrt A",
-          strategy: "compact-capacity",
-          zones: this.createZones(space, "left-service"),
-          tables: compactTables,
+          label: "AI nacrt",
+          strategy: "balanced-service-path",
+          rooms: [
+            {
+              roomLabel: space.roomLabel,
+              canvas: {
+                width: space.widthMeters,
+                length: space.lengthMeters,
+              },
+              outline: this.createRectangleOutline(space),
+              fixtures: [],
+              zones,
+              tables,
+            },
+          ],
           summary: {
-            tableCount: compactTables.length,
-            seats: compactTables.reduce(
-              (total, table) => total + table.seats,
-              0,
-            ),
-          },
-        },
-        {
-          id: "layout-b",
-          label: "Nacrt B",
-          strategy: "comfortable-service-path",
-          zones: this.createZones(space, "center-service"),
-          tables: comfortableTables,
-          summary: {
-            tableCount: comfortableTables.length,
-            seats: comfortableTables.reduce(
-              (total, table) => total + table.seats,
-              0,
-            ),
+            tableCount: tables.length,
+            seats: tables.reduce((total, table) => total + table.seats, 0),
+            chinChinCandidateCount: 0,
           },
         },
       ],
       notes: [
-        "Test suggestion generated without OpenAI. Later this can be replaced by a hybrid JSON + vision OpenAI flow.",
+        "Test suggestion generated without OpenAI. Chin-Chin tables are intentionally not selected in this step.",
       ],
     };
+  }
+
+  private createRectangleOutline(
+    space: ReturnType<typeof this.readSpaceDimensions>,
+  ) {
+    return [
+      { x: 0, y: 0 },
+      { x: space.widthMeters, y: 0 },
+      { x: space.widthMeters, y: space.lengthMeters },
+      { x: 0, y: space.lengthMeters },
+    ];
   }
 
   private createZones(
@@ -443,6 +1384,9 @@ export class SpaceLayoutsService {
       return {
         id: `table-${density}-${index + 1}`,
         label: `S${index + 1}`,
+        tableRole: "ORDINARY_TABLE",
+        tablePhotoId: "",
+        tablePhotoStatus: "NOT_REQUIRED",
         x: this.round(leftPadding + (column + 1) * xGap),
         y: this.round((row + 1) * yGap),
         width: shape === "round" ? 0.9 : 1.3,
@@ -453,6 +1397,7 @@ export class SpaceLayoutsService {
         reservable: true,
         rotation: density === "comfortable" && row % 2 === 1 ? 90 : 0,
         shape,
+        chinChinCandidate: false,
       };
     });
   }
@@ -471,18 +1416,30 @@ export class SpaceLayoutsService {
       };
     }
 
+    const sourceSpace =
+      "primaryRoom" in spaceJson &&
+      typeof spaceJson.primaryRoom === "object" &&
+      spaceJson.primaryRoom &&
+      !Array.isArray(spaceJson.primaryRoom)
+        ? spaceJson.primaryRoom
+        : spaceJson;
+
     const roomLabel =
-      typeof spaceJson.roomLabel === "string"
-        ? spaceJson.roomLabel
+      typeof sourceSpace.roomLabel === "string"
+        ? sourceSpace.roomLabel
         : "Prostorija A";
     const requestedTableCount =
-      typeof spaceJson.requestedTableCount === "number"
-        ? spaceJson.requestedTableCount
+      typeof sourceSpace.requestedTableCount === "number"
+        ? sourceSpace.requestedTableCount
         : undefined;
     const widthMeters =
-      typeof spaceJson.widthMeters === "number" ? spaceJson.widthMeters : 10;
+      typeof sourceSpace.widthMeters === "number"
+        ? sourceSpace.widthMeters
+        : 10;
     const lengthMeters =
-      typeof spaceJson.lengthMeters === "number" ? spaceJson.lengthMeters : 8;
+      typeof sourceSpace.lengthMeters === "number"
+        ? sourceSpace.lengthMeters
+        : 8;
 
     return { roomLabel, requestedTableCount, widthMeters, lengthMeters };
   }
