@@ -9,6 +9,7 @@ import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
 import { SpaceLayoutStatus } from "../../generated/prisma/enums";
 import { PrismaService } from "../prisma/prisma.service";
+import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
 import { CreateSpaceLayoutDto } from "./dto/create-space-layout.dto";
 import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
 import { LayoutPhotoDto } from "./dto/layout-photo.dto";
@@ -260,6 +261,69 @@ export class SpaceLayoutsService {
     }
 
     return this.serializeProject(project);
+  }
+
+  async listReviewQueuePreview() {
+    const projects = await this.prisma.spaceLayoutProject.findMany({
+      where: { status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW },
+      orderBy: { updatedAt: "desc" },
+      take: 25,
+      include: { venue: true },
+    });
+
+    return projects.map((project) => this.serializeProject(project));
+  }
+
+  async approveAdjustedLayoutPreview(
+    id: string,
+    dto: ApproveAdjustedLayoutPreviewDto,
+  ) {
+    const project = await this.prisma.spaceLayoutProject.findUnique({
+      where: { id },
+      include: { venue: true },
+    });
+
+    if (!project) {
+      throw new NotFoundException("Space layout project was not found.");
+    }
+
+    const now = new Date().toISOString();
+    const previousSavedLayout =
+      this.asJsonObject(project.savedLayout) ?? ({} as Record<string, unknown>);
+    const layoutId =
+      dto.layout.id?.toString() ??
+      previousSavedLayout.selectedLayoutOptionId?.toString();
+
+    const updatedProject = await this.prisma.spaceLayoutProject.update({
+      where: { id },
+      data: {
+        status: SpaceLayoutStatus.APPROVED,
+        approvedAt: new Date(now),
+        savedLayout: {
+          ...previousSavedLayout,
+          selectedLayoutOptionId: layoutId,
+          editedBy: "admin",
+          adjustedBy: dto.adjustedBy?.trim() || "chin-chin-admin-panel",
+          adjustedAt: now,
+          layout: dto.layout,
+          previousSavedLayout: project.savedLayout,
+        } as Prisma.InputJsonValue,
+        reviewSubmission: {
+          ...(this.asJsonObject(project.reviewSubmission) ?? {}),
+          review: {
+            status: "approved",
+            reviewedByUserId: "admin-preview",
+            reviewNotes:
+              dto.reviewNotes?.trim() ||
+              "Approved from Chin-Chin admin panel preview endpoint.",
+            reviewedAt: now,
+          },
+        } as Prisma.InputJsonValue,
+      },
+      include: { venue: true },
+    });
+
+    return this.serializeProject(updatedProject);
   }
 
   async review(userId: string, id: string, dto: ReviewSpaceLayoutDto) {
