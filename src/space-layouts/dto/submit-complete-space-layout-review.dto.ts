@@ -129,6 +129,10 @@ export class SubmitCompleteSpaceLayoutReviewDto {
   foodDescription?: string;
 
   @IsOptional()
+  @IsIn(["ADD_ROOM"])
+  changeRequestType?: "ADD_ROOM";
+
+  @IsOptional()
   @IsString()
   @Length(2, 500)
   ownerNotes?: string;

@@ -33,6 +33,12 @@ enum SpaceLayoutStatus {
   APPROVED
 }
 
+enum VenueDocumentStatus {
+  PENDING_REVIEW
+  CHANGES_REQUESTED
+  APPROVED
+}
+
 model User {
   id              String     @id @default(uuid())
   email           String     @unique
@@ -50,6 +56,7 @@ model User {
   emailVerificationTokens EmailVerificationToken[]
   refreshTokens           RefreshToken[]
   spaceLayoutProjects     SpaceLayoutProject[]
+  venueDocumentRequests   VenueDocumentRequest[]
 
   @@index([status])
   @@map("users")
@@ -66,8 +73,9 @@ model Venue {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner               User                 @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  spaceLayoutProjects SpaceLayoutProject[]
+  owner                 User                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  spaceLayoutProjects   SpaceLayoutProject[]
+  documentRequests      VenueDocumentRequest[]
 
   @@index([ownerId])
   @@map("venues")
@@ -95,6 +103,28 @@ model SpaceLayoutProject {
   @@index([venueId])
   @@index([status])
   @@map("space_layout_projects")
+}
+
+model VenueDocumentRequest {
+  id          String              @id @default(uuid())
+  ownerId     String
+  venueId     String
+  status      VenueDocumentStatus @default(PENDING_REVIEW)
+  documents   Json
+  ownerNotes  String?
+  reviewNotes String?
+  submittedAt DateTime            @default(now())
+  reviewedAt  DateTime?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@index([venueId])
+  @@index([status])
+  @@map("venue_document_requests")
 }
 
 model EmailVerificationToken {

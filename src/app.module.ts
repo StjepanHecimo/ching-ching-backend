@@ -4,6 +4,7 @@ import { AppController } from "./app.controller";
 import { AuthModule } from "./auth/auth.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { SpaceLayoutsModule } from "./space-layouts/space-layouts.module";
+import { VenueDocumentsModule } from "./venue-documents/venue-documents.module";
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { SpaceLayoutsModule } from "./space-layouts/space-layouts.module";
     PrismaModule,
     AuthModule,
     SpaceLayoutsModule,
+    VenueDocumentsModule,
   ],
   controllers: [AppController],
 })

@@ -14,6 +14,7 @@ import { CreateSpaceLayoutDto } from "./dto/create-space-layout.dto";
 import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
 import { LayoutPhotoDto } from "./dto/layout-photo.dto";
 import { LayoutReferenceFileDto } from "./dto/layout-reference-file.dto";
+import { RequestTableAdditionPreviewDto } from "./dto/request-table-addition-preview.dto";
 import { SaveSpaceLayoutDto } from "./dto/save-space-layout.dto";
 import { SpaceShapeDto } from "./dto/space-shape.dto";
 import { SubmitCompleteSpaceLayoutReviewDto } from "./dto/submit-complete-space-layout-review.dto";
@@ -219,6 +220,7 @@ export class SpaceLayoutsService {
           layout: dto.layout,
           renderedImage: dto.renderedImage,
           savedAt: now,
+          ...(dto.changeRequestType ? { changeRequestType: dto.changeRequestType } : {}),
         } as Prisma.InputJsonValue,
         reviewSubmission: this.createReviewSubmission(dto, now),
       },
@@ -263,6 +265,20 @@ export class SpaceLayoutsService {
     return this.serializeProject(project);
   }
 
+  async getLatestApprovedVenueProjectPreview(venueId: string) {
+    const project = await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId, status: SpaceLayoutStatus.APPROVED },
+      orderBy: { approvedAt: "desc" },
+      include: { venue: true },
+    });
+
+    if (!project) {
+      throw new NotFoundException("Approved space layout project was not found.");
+    }
+
+    return this.serializeProject(project);
+  }
+
   async listReviewQueuePreview() {
     const projects = await this.prisma.spaceLayoutProject.findMany({
       where: { status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW },
@@ -272,6 +288,86 @@ export class SpaceLayoutsService {
     });
 
     return projects.map((project) => this.serializeProject(project));
+  }
+
+
+  async requestTableAdditionPreview(
+    venueId: string,
+    dto: RequestTableAdditionPreviewDto,
+  ) {
+    const sourceProject = await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId, status: SpaceLayoutStatus.APPROVED },
+      orderBy: { approvedAt: "desc" },
+      include: { venue: true },
+    }) ?? await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId },
+      orderBy: { updatedAt: "desc" },
+      include: { venue: true },
+    });
+
+    if (!sourceProject) {
+      throw new NotFoundException("Space layout project was not found.");
+    }
+
+    const sourceSavedLayout = this.asJsonObject(sourceProject.savedLayout);
+    const sourceLayout = this.asJsonObject(sourceSavedLayout?.layout ?? null);
+    if (!sourceLayout) {
+      throw new BadRequestException("Approved layout is required before requesting a table addition.");
+    }
+
+    const photo = this.normalizePhoto(dto.photo, `change-request-${dto.tableId}-photo`);
+    const updatedLayout = this.markTableAsChinChinCandidate(
+      sourceLayout,
+      dto.tableId,
+      photo.id,
+    );
+    const now = new Date().toISOString();
+    const photos = Array.isArray(sourceProject.photos)
+      ? [...sourceProject.photos, photo]
+      : [photo];
+
+    const project = await this.prisma.spaceLayoutProject.create({
+      data: {
+        ownerId: sourceProject.ownerId,
+        venueId: sourceProject.venueId,
+        name: `${sourceProject.name ?? sourceProject.venue.name} - table change request`,
+        status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW,
+        photos: photos as Prisma.InputJsonValue,
+        space: sourceProject.space as Prisma.InputJsonValue,
+        aiSuggestion: sourceProject.aiSuggestion as Prisma.InputJsonValue,
+        savedLayout: {
+          ...(sourceSavedLayout ?? {}),
+          selectedLayoutOptionId: updatedLayout.id?.toString() ??
+            sourceSavedLayout?.selectedLayoutOptionId?.toString(),
+          editedBy: "flutter-editor",
+          changeRequestType: "ADD_CHIN_CHIN_TABLE",
+          requestedTableId: dto.tableId,
+          requestedTablePhotoId: photo.id,
+          ownerNotes: dto.ownerNotes?.trim(),
+          layout: updatedLayout,
+          sourceProjectId: sourceProject.id,
+          requestedAt: now,
+        } as Prisma.InputJsonValue,
+        reviewSubmission: {
+          submittedAt: now,
+          ownerNotes: dto.ownerNotes?.trim(),
+          review: { status: "pending" },
+          changeRequest: {
+            type: "ADD_CHIN_CHIN_TABLE",
+            sourceProjectId: sourceProject.id,
+            tableId: dto.tableId,
+            tablePhotoId: photo.id,
+              requestedAt: now,
+          },
+        } as Prisma.InputJsonValue,
+      },
+      include: { venue: true },
+    });
+
+    return {
+      ...this.serializeProject(project),
+      message: "Table change request submitted for Chin-Chin review.",
+    };
   }
 
   async approveAdjustedLayoutPreview(
@@ -293,23 +389,34 @@ export class SpaceLayoutsService {
     const layoutId =
       dto.layout.id?.toString() ??
       previousSavedLayout.selectedLayoutOptionId?.toString();
+    const reviewSubmission =
+      this.asJsonObject(project.reviewSubmission) ?? {};
+    const changeRequest = this.asJsonObject(
+      reviewSubmission.changeRequest as Prisma.JsonValue | null,
+    );
+    const layoutForApproval =
+      changeRequest?.type === "ADD_ROOM"
+        ? await this.mergeAdditionalRoomLayout(project.venueId, dto.layout)
+        : dto.layout;
+
+    const adjustedBy = dto.adjustedBy?.trim() || "chin-chin-admin-panel";
+    const versionedSavedLayout = this.createApprovedSavedLayoutVersion({
+      previousSavedLayout,
+      layout: layoutForApproval,
+      layoutId,
+      adjustedBy,
+      approvedAt: now,
+      previousStatus: project.status,
+    });
 
     const updatedProject = await this.prisma.spaceLayoutProject.update({
       where: { id },
       data: {
         status: SpaceLayoutStatus.APPROVED,
         approvedAt: new Date(now),
-        savedLayout: {
-          ...previousSavedLayout,
-          selectedLayoutOptionId: layoutId,
-          editedBy: "admin",
-          adjustedBy: dto.adjustedBy?.trim() || "chin-chin-admin-panel",
-          adjustedAt: now,
-          layout: dto.layout,
-          previousSavedLayout: project.savedLayout,
-        } as Prisma.InputJsonValue,
+        savedLayout: versionedSavedLayout as Prisma.InputJsonValue,
         reviewSubmission: {
-          ...(this.asJsonObject(project.reviewSubmission) ?? {}),
+          ...reviewSubmission,
           review: {
             status: "approved",
             reviewedByUserId: "admin-preview",
@@ -589,6 +696,212 @@ export class SpaceLayoutsService {
     return value;
   }
 
+  private markTableAsChinChinCandidate(
+    layout: Record<string, unknown>,
+    tableId: string,
+    photoId: string,
+  ) {
+    const clonedLayout = JSON.parse(JSON.stringify(layout)) as Record<string, unknown>;
+    const rooms = Array.isArray(clonedLayout.rooms) ? clonedLayout.rooms : [];
+    let updated = false;
+
+    for (const room of rooms) {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        continue;
+      }
+
+      const roomMap = room as Record<string, unknown>;
+      const tables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+      for (const table of tables) {
+        if (typeof table !== "object" || !table || Array.isArray(table)) {
+          continue;
+        }
+
+        const tableMap = table as Record<string, unknown>;
+        if (tableMap.id?.toString() !== tableId) {
+          continue;
+        }
+
+        tableMap.tableRole = "CHIN_CHIN_TABLE";
+        tableMap.chinChinCandidate = true;
+        tableMap.tablePhotoId = photoId;
+        tableMap.tablePhotoStatus = "APPROVED_WITH_PHOTO";
+        updated = true;
+      }
+    }
+
+    if (!updated) {
+      throw new BadRequestException(`Table ${tableId} was not found in the approved layout.`);
+    }
+
+    const summary = this.asJsonObject(clonedLayout.summary as Prisma.JsonValue | null);
+    if (summary) {
+      const chinChinCount = rooms.reduce((count, room) => {
+        if (typeof room !== "object" || !room || Array.isArray(room)) {
+          return count;
+        }
+        const tables = Array.isArray((room as Record<string, unknown>).tables)
+          ? ((room as Record<string, unknown>).tables as unknown[])
+          : [];
+        return count + tables.filter((table) =>
+          typeof table === "object" &&
+          table !== null &&
+          !Array.isArray(table) &&
+          ((table as Record<string, unknown>).tableRole === "CHIN_CHIN_TABLE" ||
+            (table as Record<string, unknown>).chinChinCandidate === true),
+        ).length;
+      }, 0);
+      summary.chinChinCandidateCount = chinChinCount;
+    }
+
+    return clonedLayout;
+  }
+
+  private createApprovedSavedLayoutVersion({
+    previousSavedLayout,
+    layout,
+    layoutId,
+    adjustedBy,
+    approvedAt,
+    previousStatus,
+  }: {
+    previousSavedLayout: Record<string, unknown>;
+    layout: Record<string, unknown>;
+    layoutId?: string;
+    adjustedBy: string;
+    approvedAt: string;
+    previousStatus: SpaceLayoutStatus;
+  }) {
+    const existingHistory = Array.isArray(previousSavedLayout.versionHistory)
+      ? previousSavedLayout.versionHistory.filter(
+          (entry): entry is Record<string, unknown> =>
+            typeof entry === "object" && entry !== null && !Array.isArray(entry),
+        )
+      : [];
+    const nextVersion = existingHistory.length + 1;
+    const versionEntry = {
+      version: nextVersion,
+      status: SpaceLayoutStatus.APPROVED,
+      previousStatus,
+      selectedLayoutOptionId: layoutId,
+      editedBy: "admin",
+      adjustedBy,
+      adjustedAt: approvedAt,
+      approvedAt,
+      layout,
+    };
+
+    return {
+      ...previousSavedLayout,
+      selectedLayoutOptionId: layoutId,
+      editedBy: "admin",
+      adjustedBy,
+      adjustedAt: approvedAt,
+      approvedAt,
+      layoutVersion: nextVersion,
+      layout,
+      versionHistory: [...existingHistory, versionEntry],
+    };
+  }
+
+  private async mergeAdditionalRoomLayout(
+    venueId: string,
+    additionalLayout: Record<string, unknown>,
+  ) {
+    const approvedProject = await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId, status: SpaceLayoutStatus.APPROVED },
+      orderBy: { approvedAt: "desc" },
+    });
+    const approvedSavedLayout = this.asJsonObject(
+      approvedProject?.savedLayout ?? null,
+    );
+    const approvedLayout = this.asJsonObject(
+      approvedSavedLayout?.layout ?? null,
+    );
+
+    if (!approvedLayout) {
+      return additionalLayout;
+    }
+
+    const existingRooms = Array.isArray(approvedLayout.rooms)
+      ? approvedLayout.rooms
+      : [];
+    const incomingRooms = Array.isArray(additionalLayout.rooms)
+      ? additionalLayout.rooms
+      : [];
+    if (!incomingRooms.length) {
+      throw new BadRequestException("Additional room layout has no rooms.");
+    }
+
+    const existingLabels = new Set(
+      existingRooms
+        .map((room) =>
+          typeof room === "object" && room && !Array.isArray(room)
+            ? (room as Record<string, unknown>).roomLabel?.toString().trim().toLowerCase()
+            : "",
+        )
+        .filter(Boolean),
+    );
+    const duplicateRoom = incomingRooms.find((room) => {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        return false;
+      }
+      const label = (room as Record<string, unknown>).roomLabel
+        ?.toString()
+        .trim()
+        .toLowerCase();
+      return !!label && existingLabels.has(label);
+    });
+    if (duplicateRoom) {
+      throw new BadRequestException("Room name already exists in approved layout.");
+    }
+
+    const mergedLayout = JSON.parse(JSON.stringify(approvedLayout)) as Record<string, unknown>;
+    mergedLayout.rooms = [...existingRooms, ...incomingRooms];
+    mergedLayout.summary = this.recalculateLayoutSummary(mergedLayout);
+    mergedLayout.strategy = [
+      approvedLayout.strategy?.toString(),
+      additionalLayout.strategy?.toString(),
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    return mergedLayout;
+  }
+
+  private recalculateLayoutSummary(layout: Record<string, unknown>) {
+    const rooms = Array.isArray(layout.rooms) ? layout.rooms : [];
+    let tableCount = 0;
+    let seats = 0;
+    let chinChinCandidateCount = 0;
+
+    for (const room of rooms) {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        continue;
+      }
+
+      const tables = Array.isArray((room as Record<string, unknown>).tables)
+        ? ((room as Record<string, unknown>).tables as unknown[])
+        : [];
+      tableCount += tables.length;
+      for (const table of tables) {
+        if (typeof table !== "object" || !table || Array.isArray(table)) {
+          continue;
+        }
+        const tableMap = table as Record<string, unknown>;
+        seats += typeof tableMap.seats === "number" ? tableMap.seats : 0;
+        if (
+          tableMap.tableRole === "CHIN_CHIN_TABLE" ||
+          tableMap.chinChinCandidate === true
+        ) {
+          chinChinCandidateCount += 1;
+        }
+      }
+    }
+
+    return { seats, tableCount, chinChinCandidateCount };
+  }
+
   private createReviewSubmission(
     dto: SubmitSpaceLayoutReviewDto | SubmitCompleteSpaceLayoutReviewDto,
     submittedAt = new Date().toISOString(),
@@ -624,6 +937,13 @@ export class SpaceLayoutsService {
         status: "pending",
       },
     };
+
+    if ("changeRequestType" in dto && dto.changeRequestType) {
+      submission.changeRequest = {
+        type: dto.changeRequestType,
+        requestedAt: submittedAt,
+      };
+    }
 
     if ("hasDraftBeer" in dto) {
       submission.hasDraftBeer = dto.hasDraftBeer;
@@ -828,7 +1148,7 @@ export class SpaceLayoutsService {
           content: [
             {
               type: "input_text",
-              text: "You are Chin-Chin's cafe floor-plan generator. Return only valid JSON matching the schema. A floorPlanFile/sketch/PDF is attached and it is the primary visual source for room geometry, walls, openings, fixed objects, table positions, and spatial relationships. Use JSON dimensions and requested table count as hard constraints. Ignore screenshot/page whitespace, title blocks, external labels, and annotation arrows when creating geometry. Preserve the floor plan proportions: do not simplify the room to a rectangle when the plan has angled walls, cutouts, curved edges, columns, stairs, service areas, or irregular boundaries. Return a tight outline polygon for each room in the same meter coordinate system: min outline x/y should be near 0, max outline x/y should be near canvas width/length, and curved walls should be approximated with multiple points. Interpret visible circles and small square blocks as tables unless they are explicitly labelled as another object. Return conventional fixed objects such as columns, bars, toilets, stairs, doors, counters, passages, booth/separe dividers, and interior partition lines as fixtures, not as large seating/service rectangles. Rectangles with a written label are the object named by the label: sank/šank/bar is a bar, wc/toilet/toalet is a toilet, ZID/zid/wall is a wall, and PROLAZ/prolaz is an open passage. A handwritten BAR or sank/šank label inside, touching, or just above a bottom rectangle is still a bar even if the label is faint, near the image edge, or partially cropped; do not discard it as an external label. If the sketch labels a fixed amenity, return it as a fixture: sank/šank/bar as bar, wc/toilet/toalet as toilet, biljar/pool table as feature, and tv/television/televizor as feature with label TV. If the sketch labels ulaz, glavni ulaz, entrance, or main entrance, return a door or passage fixture at that exact entry location with label Main entrance; this fixture is an icon marker and must not block the passage. Zones are only semantic metadata for broad areas and should be sparse. The drawn lines are the most important source data. Preserve every visible hand-drawn architectural line segment as a straight wall fixture with shape=line and type=wall, whether or not it is labelled as ZID, wall, pregrada, separe, booth, divider, or anything else. Do not decide that a line is only decorative, only a separe, only a partition, or unimportant; every visible room boundary, divider, booth/separe line, internal separator, and counter edge must be returned as a wall line fixture in the same approximate position, length, angle, count, spacing, and start/end alignment as drawn. Convert slightly wavy hand-drawn strokes into straight line fixtures that follow the stroke direction. Closed booth/separe boxes around a table must also be preserved as their visible wall line fixtures. Entrances, doors, and main passages must remain open; never invent a new closing line across an explicitly marked passage, but preserve the drawn wall lines around that passage exactly as shown. Croatian labels such as ulaz, glavni ulaz, main entrance, entrance, prolaz, PROLAZ, glavni prolaz, drugi dio, and arrows indicate access/continuation unless they are clearly labelled as walls. Every table must have a stable id. Use ids like room-a-table-1, room-a-table-2 in top-to-bottom then left-to-right visual order. Every table must have tableRole: CHIN_CHIN_TABLE for a plus-marked Chin-Chin table, otherwise ORDINARY_TABLE. Chin-Chin table photo image payloads are not sent to you, but JSON space data may include photos metadata with ids. Assign tablePhotoId only to plus-marked Chin-Chin tables, using available room photo ids in the same top-to-bottom/left-to-right table order; set tablePhotoStatus=APPROVED_WITH_PHOTO when a photo id is assigned. Ordinary tables must always have tablePhotoId='' and tablePhotoStatus=NOT_REQUIRED. Never reuse one uploaded table photo id for multiple tables. If a plus-marked table has no available photo id, keep tableRole=CHIN_CHIN_TABLE and set tablePhotoStatus=MISSING_PHOTO. If a table is marked with a plus sign (+) on or inside the table shape, keep that plus-sign interpretation as the Chin-Chin table marker and set chinChinCandidate=true for that table; the plus sign is source notation only and must not be returned as a fixture or table shape, and it must not be used as the table center if the visible table outline has a clearer center. Also accept other explicit Chin-Chin labels when they are directly attached to a table. Do not invent Chin-Chin tables. Tables must be separated from each other with visible clearance and must never overlap. Keep every table visually centered within its booth/separe cell or open seating area with clear distance from walls and partition lines; when a table is inside a separe/booth, center it inside that separe/booth cell. Never place a table center or table body on top of another table, a wall, room outline, partition, booth divider, column, bar, passage, or fixed fixture. If a table center is unclear, infer it as the center of the available free area around that table so spacing from nearby walls, dividers, and neighboring tables is balanced. If no Chin-Chin table markings are clear, set chinChinCandidate=false, tableRole=ORDINARY_TABLE, tablePhotoId='', and tablePhotoStatus=NOT_REQUIRED for every table and explain that in notes. Coordinates are in meters from the top-left of the tight usable room outline, not from the full uploaded image/page.",
+              text: "You are Chin-Chin's cafe floor-plan generator. Return only valid JSON matching the schema. A floorPlanFile/sketch/PDF is attached and it is the primary visual source for room geometry, walls, openings, fixed objects, table positions, and spatial relationships. Use JSON dimensions and requested table count as hard constraints. Ignore screenshot/page whitespace, title blocks, external labels, and annotation arrows when creating geometry. Preserve the floor plan proportions: do not simplify the room to a rectangle when the plan has angled walls, cutouts, curved edges, columns, stairs, service areas, or irregular boundaries. Return a tight outline polygon for each room in the same meter coordinate system: min outline x/y should be near 0, max outline x/y should be near canvas width/length, and curved walls should be approximated with multiple points. Interpret visible circles and small square blocks as tables unless they are explicitly labelled as another object. Return conventional fixed objects such as columns, bars, toilets, stairs, doors, counters, passages, booth/separe dividers, and interior partition lines as fixtures, not as large seating/service rectangles. Rectangles with a written label are the object named by the label: sank/šank/bar is a bar, wc/toilet/toalet is a toilet, stepenice/stube/stairs/staircase is stairs, stup/kolona/column/pillar is column, ZID/zid/wall is a wall, and PROLAZ/prolaz is an open passage. A handwritten BAR or sank/šank label inside, touching, or just above a bottom rectangle is still a bar even if the label is faint, near the image edge, or partially cropped; do not discard it as an external label. If the sketch labels a fixed amenity, return it as a fixture: sank/šank/bar as bar, wc/toilet/toalet as toilet, stepenice/stube/stairs/staircase as stairs, stup/kolona/column/pillar as column, biljar/pool table as feature, and tv/television/televizor as feature with label TV. If the sketch labels ulaz, glavni ulaz, entrance, or main entrance, return a door or passage fixture at that exact entry location with label Main entrance; this fixture is an icon marker and must not block the passage. Zones are only semantic metadata for broad areas and should be sparse. The drawn lines are the most important source data. Preserve every visible hand-drawn architectural line segment as a straight fixture. Solid structural lines should use shape=line and type=wall. Dashed or dotted lines labelled or visually used as pregrada/partition/divider should use shape=line and type=partition so the frontend can render them as dashed partitions. Do not decide that a line is decorative or unimportant; every visible room boundary, divider, booth/separe line, internal separator, partition/pregrada, and counter edge must be returned as a line fixture in the same approximate position, length, angle, count, spacing, and start/end alignment as drawn. Use type=partition for dashed/dotted pregrada or partition lines; use type=wall for solid wall/boundary lines. Convert slightly wavy hand-drawn strokes into straight line fixtures that follow the stroke direction. Closed booth/separe boxes around a table must also be preserved as their visible wall line fixtures. Entrances, doors, and main passages must remain open; never invent a new closing line across an explicitly marked passage, but preserve the drawn wall lines around that passage exactly as shown. Croatian labels such as ulaz, glavni ulaz, main entrance, entrance, prolaz, PROLAZ, glavni prolaz, drugi dio, and arrows indicate access/continuation unless they are clearly labelled as walls. Every table must have a stable id. Use ids like room-a-table-1, room-a-table-2 in top-to-bottom then left-to-right visual order. Every table must have tableRole: CHIN_CHIN_TABLE for a plus-marked Chin-Chin table, otherwise ORDINARY_TABLE. Chin-Chin table photo image payloads are not sent to you, but JSON space data may include photos metadata with ids. Assign tablePhotoId only to plus-marked Chin-Chin tables, using available room photo ids in the same top-to-bottom/left-to-right table order; set tablePhotoStatus=APPROVED_WITH_PHOTO when a photo id is assigned. Ordinary tables must always have tablePhotoId='' and tablePhotoStatus=NOT_REQUIRED. Never reuse one uploaded table photo id for multiple tables. If a plus-marked table has no available photo id, keep tableRole=CHIN_CHIN_TABLE and set tablePhotoStatus=MISSING_PHOTO. If a table is marked with a plus sign (+) on or inside the table shape, keep that plus-sign interpretation as the Chin-Chin table marker and set chinChinCandidate=true for that table; the plus sign is source notation only and must not be returned as a fixture or table shape, and it must not be used as the table center if the visible table outline has a clearer center. Also accept other explicit Chin-Chin labels when they are directly attached to a table. Do not invent Chin-Chin tables. Tables must be separated from each other with visible clearance and must never overlap. Keep every table visually centered within its booth/separe cell or open seating area with clear distance from walls and partition lines; when a table is inside a separe/booth, center it inside that separe/booth cell. Never place a table center or table body on top of another table, a wall, room outline, partition, booth divider, column, bar, passage, or fixed fixture. If a table center is unclear, infer it as the center of the available free area around that table so spacing from nearby walls, dividers, and neighboring tables is balanced. If no Chin-Chin table markings are clear, set chinChinCandidate=false, tableRole=ORDINARY_TABLE, tablePhotoId='', and tablePhotoStatus=NOT_REQUIRED for every table and explain that in notes. Coordinates are in meters from the top-left of the tight usable room outline, not from the full uploaded image/page.",
             },
           ],
         },
@@ -838,7 +1158,7 @@ export class SpaceLayoutsService {
             {
               type: "input_text",
               text:
-                "Inspect the attached floor plan/sketch/PDF before generating the layout. Generate exactly one practical, editable cafe floor-plan option. First crop mentally to the actual floor-plan walls and ignore empty page margins. Then extract the usable public room outline from the plan: include angled walls, major cutouts, entry/stair/service bands, and curved facade edges approximated with 10-18 outline points where needed. The outline must follow the visible outer wall/usable boundary, not the rectangular bounding box of the image. Keep any visible entry or marked main passage open. Croatian labels like ulaz, glavni ulaz, main entrance, entrance, prolaz, PROLAZ, glavni prolaz, drugi dio, and arrows mean access/continuation and must not be converted into blocking walls. Next extract conventional fixed objects into fixtures: columns/pillars as small square or circular fixtures, bar/counter as rectangle fixtures, stairs as stair fixtures, toilet/service rooms as fixtures, passages/doors as opening fixtures, and every visible drawn line as a wall line fixture. Add a visible non-blocking door or passage fixture for any label ulaz, glavni ulaz, entrance, or main entrance, with label Main entrance, so the frontend can draw the entrance icon. Strictly interpret simple sketch symbols: circles are tables, small square blocks are tables, and rectangles with text labels are the object written on them. A rectangle labelled sank, šank, or bar is the bar; a rectangle labelled wc, toilet, or toalet is the toilet/WC; a label ZID/zid/wall means wall; a label PROLAZ/prolaz means an open passage. Treat a faint or edge-adjacent handwritten BAR label at the bottom as belonging to the bottom rectangle; return that bottom rectangle as a bar fixture with label BAR, not as an unlabeled blocked/service area. If a hand-drawn sketch labels an amenity, add it as a fixture only when visible/labelled: sank/šank/bar as a bar fixture, wc/toilet/toalet as a toilet fixture, biljar/pool table as a feature fixture labelled biljar, and tv/television/televizor as a feature fixture labelled TV. Lines are the highest priority visual data. Preserve every visible architectural hand-drawn line segment as its own straight fixture with type=wall and shape=line, even when it is not labelled. Do not classify lines as separe, partition, booth, decoration, helper strokes, or optional separators; for this output, every drawn boundary/divider/separator line is a wall line. Copy the line geometry as drawn: same approximate count, position, length, horizontal/vertical/angled direction, spacing, and start/end alignment. Convert slightly wavy hand-drawn strokes into straight lines following their main direction. Closed or partial boxes should be decomposed into their visible straight wall line segments. Do not replace line drawings with vague zones, broad rectangles, or simplified decorative lines. Do not model separe dividers as broad zones. Do not create large opaque rectangles over table grids just to represent seating/service areas. Never invent a new wall across a labelled path such as entrance, ulaz, glavni ulaz, main entrance, prolaz, PROLAZ, glavni prolaz, or drugi dio, but preserve all wall lines that are actually drawn around those paths. Then detect visible tables and align the output with requestedTableCount unless there is a physical conflict; if you reduce the count, explain why in notes. Every table must have a stable id like room-a-table-1 in visual reading order and a tableRole. A plus sign (+) drawn on or inside a table is the primary Chin-Chin marker and this rule must stay active. For tables with a plus sign, set chinChinCandidate=true, tableRole=CHIN_CHIN_TABLE, and do not return the plus as a fixture; Flutter will render the usual crossed-glasses logo. For all other tables set tableRole=ORDINARY_TABLE, chinChinCandidate=false, tablePhotoId='', and tablePhotoStatus=NOT_REQUIRED. Use available room photos metadata only as photo id references: assign each plus-marked Chin-Chin table one unique tablePhotoId from the room photos list in the same visual order and set tablePhotoStatus=APPROVED_WITH_PHOTO. If no photo id is available for a plus-marked table, set tablePhotoId='' and tablePhotoStatus=MISSING_PHOTO. Use the visible round/rectangular table outline to determine the table center, not the plus marker or text label. In every area, place each table in the visual center of its own available free space/cell, with balanced clearance from all nearby walls, room outlines, columns, bars, fixed fixtures, booth dividers, partition lines, passages, and neighboring tables. Tables must be separated from one another and must never touch or overlap. If a table is inside a separe/booth cell, center the table inside that separe/booth cell. No table body may touch or overlap another table, a wall, partition, booth divider, column, bar, passage, or room outline. If the exact center is not visible on the sketch, infer a clean centered position from the surrounding free space and keep spacing consistent with neighboring tables. Also accept direct Chin-Chin labels attached to a table. Never mark more than one quarter of total tables as Chin-Chin; if the plan marks more, keep the clearest/best marked tables up to that limit and explain in notes. If the plan does not clearly mark Chin-Chin tables, set all chinChinCandidate=false, tableRole=ORDINARY_TABLE, tablePhotoId='', tablePhotoStatus=NOT_REQUIRED, and chinChinCandidateCount=0. Keep tables inside the outline, keep tables clear of fixtures, leave service paths clear, and write the label/strategy/summary as a cafe layout. JSON space data:\n" +
+                "Inspect the attached floor plan/sketch/PDF before generating the layout. Generate exactly one practical, editable cafe floor-plan option. First crop mentally to the actual floor-plan walls and ignore empty page margins. Then extract the usable public room outline from the plan: include angled walls, major cutouts, entry/stair/service bands, and curved facade edges approximated with 10-18 outline points where needed. The outline must follow the visible outer wall/usable boundary, not the rectangular bounding box of the image. Keep any visible entry or marked main passage open. Croatian labels like ulaz, glavni ulaz, main entrance, entrance, prolaz, PROLAZ, glavni prolaz, drugi dio, and arrows mean access/continuation and must not be converted into blocking walls. Next extract conventional fixed objects into fixtures: columns/pillars as small square or circular fixtures, bar/counter as rectangle fixtures, stairs as stair fixtures, toilet/service rooms as fixtures, passages/doors as opening fixtures, and every visible drawn line as a wall line fixture. Add a visible non-blocking door or passage fixture for any label ulaz, glavni ulaz, entrance, or main entrance, with label Main entrance, so the frontend can draw the entrance icon. Strictly interpret simple sketch symbols: circles are tables, small square blocks are tables, and rectangles with text labels are the object written on them. A rectangle labelled sank, šank, or bar is the bar; a rectangle labelled wc, toilet, or toalet is the toilet/WC; a rectangle or stair-like mark labelled stepenice, stube, stairs, or staircase is a stairs fixture; a small square/circle/filled block labelled stup, kolona, column, or pillar is a column fixture; a label ZID/zid/wall means wall; a label PROLAZ/prolaz means an open passage. Treat a faint or edge-adjacent handwritten BAR label at the bottom as belonging to the bottom rectangle; return that bottom rectangle as a bar fixture with label BAR, not as an unlabeled blocked/service area. If a hand-drawn sketch labels an amenity, add it as a fixture only when visible/labelled: sank/šank/bar as a bar fixture, wc/toilet/toalet as a toilet fixture, stepenice/stube/stairs/staircase as a stairs fixture, stup/kolona/column/pillar as a column fixture, biljar/pool table as a feature fixture labelled biljar, and tv/television/televizor as a feature fixture labelled TV. Lines are the highest priority visual data. Preserve every visible architectural hand-drawn line segment as its own straight fixture with shape=line, even when it is not labelled. Use type=wall for solid wall/boundary lines and type=partition for dashed/dotted pregrada, partition, or divider lines. Do not classify lines as decoration, helper strokes, or optional separators. Every drawn boundary/divider/separator line must be returned. Solid lines are wall fixtures; dashed/dotted pregrada/partition/divider lines are partition fixtures. Copy the line geometry as drawn: same approximate count, position, length, horizontal/vertical/angled direction, spacing, and start/end alignment. Convert slightly wavy hand-drawn strokes into straight lines following their main direction. Closed or partial boxes should be decomposed into their visible straight wall line segments. Do not replace line drawings with vague zones, broad rectangles, or simplified decorative lines. Do not model separe dividers as broad zones. Do not create large opaque rectangles over table grids just to represent seating/service areas. Never invent a new wall across a labelled path such as entrance, ulaz, glavni ulaz, main entrance, prolaz, PROLAZ, glavni prolaz, or drugi dio, but preserve all wall lines that are actually drawn around those paths. Then detect visible tables and align the output with requestedTableCount unless there is a physical conflict; if you reduce the count, explain why in notes. Every table must have a stable id like room-a-table-1 in visual reading order and a tableRole. A plus sign (+) drawn on or inside a table is the primary Chin-Chin marker and this rule must stay active. For tables with a plus sign, set chinChinCandidate=true, tableRole=CHIN_CHIN_TABLE, and do not return the plus as a fixture; Flutter will render the usual crossed-glasses logo. For all other tables set tableRole=ORDINARY_TABLE, chinChinCandidate=false, tablePhotoId='', and tablePhotoStatus=NOT_REQUIRED. Use available room photos metadata only as photo id references: assign each plus-marked Chin-Chin table one unique tablePhotoId from the room photos list in the same visual order and set tablePhotoStatus=APPROVED_WITH_PHOTO. If no photo id is available for a plus-marked table, set tablePhotoId='' and tablePhotoStatus=MISSING_PHOTO. Use the visible round/rectangular table outline to determine the table center, not the plus marker or text label. In every area, place each table in the visual center of its own available free space/cell, with balanced clearance from all nearby walls, room outlines, columns, bars, fixed fixtures, booth dividers, partition lines, passages, and neighboring tables. Tables must be separated from one another and must never touch or overlap. If a table is inside a separe/booth cell, center the table inside that separe/booth cell. No table body may touch or overlap another table, a wall, partition, booth divider, column, bar, passage, or room outline. If the exact center is not visible on the sketch, infer a clean centered position from the surrounding free space and keep spacing consistent with neighboring tables. Also accept direct Chin-Chin labels attached to a table. Never mark more than one quarter of total tables as Chin-Chin; if the plan marks more, keep the clearest/best marked tables up to that limit and explain in notes. If the plan does not clearly mark Chin-Chin tables, set all chinChinCandidate=false, tableRole=ORDINARY_TABLE, tablePhotoId='', tablePhotoStatus=NOT_REQUIRED, and chinChinCandidateCount=0. Keep tables inside the outline, keep tables clear of fixtures, leave service paths clear, and write the label/strategy/summary as a cafe layout. JSON space data:\n" +
                 JSON.stringify(promptSpaceJson),
             },
             ...floorPlanContent,
@@ -1512,6 +1832,55 @@ export class SpaceLayoutsService {
     return Math.round(value * 100) / 100;
   }
 
+  private createLifecycleSnapshot(project: {
+    status: SpaceLayoutStatus;
+    savedLayout: Prisma.JsonValue | null;
+    reviewSubmission: Prisma.JsonValue | null;
+    approvedAt: Date | null;
+    updatedAt: Date;
+  }) {
+    const savedLayout = this.asJsonObject(project.savedLayout);
+    const reviewSubmission = this.asJsonObject(project.reviewSubmission);
+    const review = this.asJsonObject(reviewSubmission?.review ?? null);
+
+    return {
+      status: project.status,
+      phase: this.lifecyclePhaseForStatus(project.status),
+      isDraft: project.status === SpaceLayoutStatus.DRAFT,
+      isPendingReview: project.status === SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW,
+      isApproved: project.status === SpaceLayoutStatus.APPROVED,
+      isChangeRequested:
+        project.status === SpaceLayoutStatus.CHIN_CHIN_CHANGES_REQUESTED,
+      latestApprovedAt: project.approvedAt?.toISOString() ?? null,
+      layoutVersion:
+        typeof savedLayout?.layoutVersion === "number"
+          ? savedLayout.layoutVersion
+          : null,
+      versionCount: Array.isArray(savedLayout?.versionHistory)
+        ? savedLayout.versionHistory.length
+        : 0,
+      reviewStatus: review?.status?.toString() ?? null,
+      updatedAt: project.updatedAt.toISOString(),
+    };
+  }
+
+  private lifecyclePhaseForStatus(status: SpaceLayoutStatus) {
+    switch (status) {
+      case SpaceLayoutStatus.DRAFT:
+      case SpaceLayoutStatus.AI_SUGGESTED:
+      case SpaceLayoutStatus.SAVED:
+        return "draft";
+      case SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW:
+        return "pending_review";
+      case SpaceLayoutStatus.APPROVED:
+        return "approved";
+      case SpaceLayoutStatus.CHIN_CHIN_CHANGES_REQUESTED:
+        return "change_requested";
+      default:
+        return "unknown";
+    }
+  }
+
   private serializeProject(project: {
     id: string;
     venueId: string;
@@ -1543,6 +1912,7 @@ export class SpaceLayoutsService {
       savedLayout: project.savedLayout,
       reviewSubmission: project.reviewSubmission,
       approvedAt: project.approvedAt,
+      lifecycle: this.createLifecycleSnapshot(project),
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     };
