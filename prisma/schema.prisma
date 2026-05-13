@@ -39,6 +39,25 @@ enum VenueDocumentStatus {
   APPROVED
 }
 
+enum ReservationStatus {
+  REQUESTED
+  CONFIRMED
+  CANCELLED
+  RESERVED
+  CHECK_IN_PENDING
+  CHECKED_IN
+  SEATED
+  CANCELLED_BY_USER
+  COMPLETED
+  NO_SHOW
+  RELEASED
+}
+
+enum ReservationType {
+  ADVANCE
+  LIVE
+}
+
 model User {
   id              String     @id @default(uuid())
   email           String     @unique
@@ -57,6 +76,7 @@ model User {
   refreshTokens           RefreshToken[]
   spaceLayoutProjects     SpaceLayoutProject[]
   venueDocumentRequests   VenueDocumentRequest[]
+  reservations            Reservation[]
 
   @@index([status])
   @@map("users")
@@ -70,12 +90,18 @@ model Venue {
   address   String?
   city      String?
   country   String   @default("HR")
+  latitude  Float?
+  longitude Float?
+  isLive    Boolean  @default(false)
+  liveStartedAt DateTime?
+  liveEndedAt   DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   owner                 User                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   spaceLayoutProjects   SpaceLayoutProject[]
   documentRequests      VenueDocumentRequest[]
+  reservations          Reservation[]
 
   @@index([ownerId])
   @@map("venues")
@@ -125,6 +151,52 @@ model VenueDocumentRequest {
   @@index([venueId])
   @@index([status])
   @@map("venue_document_requests")
+}
+
+model Reservation {
+  id            String            @id @default(uuid())
+  venueId       String
+  customerId    String?
+  tableId       String
+  tableLabel    String?
+  roomLabel     String?
+  type          ReservationType   @default(ADVANCE)
+  status        ReservationStatus @default(REQUESTED)
+  partySize     Int
+  timeSlotStart DateTime
+  timeSlotEnd   DateTime
+  checkInOpensAt DateTime?
+  checkInClosesAt DateTime?
+  arrivalDeadlineAt DateTime?
+  checkedInAt   DateTime?
+  seatedAt      DateTime?
+  cancelledAt   DateTime?
+  releasedAt    DateTime?
+  feeCents      Int               @default(0)
+  refundCents   Int               @default(0)
+  currency      String            @default("EUR")
+  userLatitude  Float?
+  userLongitude Float?
+  distanceMeters Float?
+  customerName  String?
+  customerEmail String?
+  customerPhone String?
+  notes         String?
+  source        String            @default("user-app")
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  venue    Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer User? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([venueId])
+  @@index([customerId])
+  @@index([tableId])
+  @@index([status])
+  @@index([timeSlotStart])
+  @@index([timeSlotEnd])
+  @@index([venueId, tableId, timeSlotStart, timeSlotEnd])
+  @@map("reservations")
 }
 
 model EmailVerificationToken {

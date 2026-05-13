@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
 import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
 import { RequestTableAdditionPreviewDto } from "./dto/request-table-addition-preview.dto";
+import { RequestSpaceChangePreviewDto } from "./dto/request-space-change-preview.dto";
 import { SubmitCompleteSpaceLayoutReviewDto } from "./dto/submit-complete-space-layout-review.dto";
 import { SpaceLayoutsService } from "./space-layouts.service";
 
@@ -40,6 +41,14 @@ export class SpaceLayoutsPreviewController {
     @Body() dto: RequestTableAdditionPreviewDto,
   ) {
     return this.spaceLayoutsService.requestTableAdditionPreview(venueId, dto);
+  }
+
+  @Post("preview/venues/:venueId/request-space-change")
+  requestSpaceChangePreview(
+    @Param("venueId") venueId: string,
+    @Body() dto: RequestSpaceChangePreviewDto,
+  ) {
+    return this.spaceLayoutsService.requestSpaceChangePreview(venueId, dto);
   }
 
   @Patch("preview/projects/:id/approve-adjusted-layout")

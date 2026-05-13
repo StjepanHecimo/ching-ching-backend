@@ -15,6 +15,7 @@ import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-previ
 import { LayoutPhotoDto } from "./dto/layout-photo.dto";
 import { LayoutReferenceFileDto } from "./dto/layout-reference-file.dto";
 import { RequestTableAdditionPreviewDto } from "./dto/request-table-addition-preview.dto";
+import { RequestSpaceChangePreviewDto } from "./dto/request-space-change-preview.dto";
 import { SaveSpaceLayoutDto } from "./dto/save-space-layout.dto";
 import { SpaceShapeDto } from "./dto/space-shape.dto";
 import { SubmitCompleteSpaceLayoutReviewDto } from "./dto/submit-complete-space-layout-review.dto";
@@ -205,6 +206,11 @@ export class SpaceLayoutsService {
     this.ensureUsableRenderedImage(dto);
 
     const now = new Date().toISOString();
+    console.log("[space-layouts] submitCompleteForReview", {
+      venueId: dto.venueId,
+      changeRequestType: dto.changeRequestType ?? null,
+      roomCount: Array.isArray(dto.layout?.rooms) ? dto.layout.rooms.length : null,
+    });
     const project = await this.prisma.spaceLayoutProject.create({
       data: {
         ownerId: userId,
@@ -227,6 +233,13 @@ export class SpaceLayoutsService {
       include: {
         venue: true,
       },
+    });
+
+    console.log("[space-layouts] created review project", {
+      projectId: project.id,
+      venueId: project.venueId,
+      status: project.status,
+      changeRequestType: dto.changeRequestType ?? null,
     });
 
     return {
@@ -276,7 +289,15 @@ export class SpaceLayoutsService {
       throw new NotFoundException("Approved space layout project was not found.");
     }
 
-    return this.serializeProject(project);
+    console.log("[space-layouts] latest-approved lookup", {
+      venueId,
+      projectId: project.id,
+      approvedAt: project.approvedAt?.toISOString(),
+    });
+
+    return this.serializeProject(
+      await this.withMergedAdditionalRoomFallback(project),
+    );
   }
 
   async listReviewQueuePreview() {
@@ -370,6 +391,98 @@ export class SpaceLayoutsService {
     };
   }
 
+  async requestSpaceChangePreview(
+    venueId: string,
+    dto: RequestSpaceChangePreviewDto,
+  ) {
+    const sourceProject = await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId, status: SpaceLayoutStatus.APPROVED },
+      orderBy: { approvedAt: "desc" },
+      include: { venue: true },
+    }) ?? await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId },
+      orderBy: { updatedAt: "desc" },
+      include: { venue: true },
+    });
+
+    if (!sourceProject) {
+      throw new NotFoundException("Space layout project was not found.");
+    }
+
+    const sourceSavedLayout = this.asJsonObject(sourceProject.savedLayout);
+    const sourceLayout = this.asJsonObject(sourceSavedLayout?.layout ?? null);
+    if (!sourceLayout) {
+      throw new BadRequestException("Approved layout is required before requesting a space change.");
+    }
+
+    this.ensureSpaceChangeTarget(sourceLayout, dto);
+
+    const now = new Date().toISOString();
+    const attachments = (dto.attachments ?? []).map((photo, index) =>
+      this.normalizePhoto(
+        photo,
+        `space-change-${dto.type.toLowerCase()}-${index + 1}`,
+      ),
+    );
+    const sourceSpace = this.asJsonObject(sourceProject.space) ?? {};
+    const originalFloorPlan =
+      this.asJsonObject(sourceSpace.floorPlanFile as Prisma.JsonValue | null) ??
+      this.asJsonObject(
+        (this.asJsonObject(sourceProject.reviewSubmission)?.floorPlanFile ??
+          null) as Prisma.JsonValue | null,
+      );
+
+    const project = await this.prisma.spaceLayoutProject.create({
+      data: {
+        ownerId: sourceProject.ownerId,
+        venueId: sourceProject.venueId,
+        name: `${sourceProject.name ?? sourceProject.venue.name} - ${dto.type.toLowerCase()} request`,
+        status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW,
+        photos: sourceProject.photos as Prisma.InputJsonValue,
+        space: {
+          ...sourceSpace,
+          originalFloorPlan,
+          changeAttachments: attachments,
+        } as Prisma.InputJsonValue,
+        aiSuggestion: sourceProject.aiSuggestion as Prisma.InputJsonValue,
+        savedLayout: {
+          ...(sourceSavedLayout ?? {}),
+          selectedLayoutOptionId:
+            sourceLayout.id?.toString() ??
+            sourceSavedLayout?.selectedLayoutOptionId?.toString(),
+          editedBy: "flutter-editor",
+          changeRequestType: dto.type,
+          requestedRoomLabel: dto.roomLabel?.trim(),
+          ownerNotes: dto.ownerNotes?.trim(),
+          remodelLevel: dto.remodelLevel?.trim(),
+          layout: sourceLayout,
+          sourceProjectId: sourceProject.id,
+          requestedAt: now,
+        } as Prisma.InputJsonValue,
+        reviewSubmission: {
+          submittedAt: now,
+          ownerNotes: dto.ownerNotes?.trim(),
+          review: { status: "pending" },
+          changeRequest: {
+            type: dto.type,
+            sourceProjectId: sourceProject.id,
+            roomLabel: dto.roomLabel?.trim(),
+            remodelLevel: dto.remodelLevel?.trim(),
+            attachments,
+            originalFloorPlan,
+            requestedAt: now,
+          },
+        } as Prisma.InputJsonValue,
+      },
+      include: { venue: true },
+    });
+
+    return {
+      ...this.serializeProject(project),
+      message: "Space change request submitted for Chin-Chin review.",
+    };
+  }
+
   async approveAdjustedLayoutPreview(
     id: string,
     dto: ApproveAdjustedLayoutPreviewDto,
@@ -394,9 +507,29 @@ export class SpaceLayoutsService {
     const changeRequest = this.asJsonObject(
       reviewSubmission.changeRequest as Prisma.JsonValue | null,
     );
+    const isAdditionalRoomRequest =
+      changeRequest?.type === "ADD_ROOM" ||
+      previousSavedLayout.changeRequestType === "ADD_ROOM";
+    const isDeleteRoomRequest =
+      changeRequest?.type === "DELETE_ROOM" ||
+      previousSavedLayout.changeRequestType === "DELETE_ROOM";
+    console.log("[space-layouts] approveAdjustedLayoutPreview", {
+      projectId: project.id,
+      venueId: project.venueId,
+      changeRequestType: changeRequest?.type ?? previousSavedLayout.changeRequestType ?? null,
+      isAdditionalRoomRequest,
+      isDeleteRoomRequest,
+      incomingRoomCount: Array.isArray(dto.layout?.rooms) ? dto.layout.rooms.length : null,
+    });
     const layoutForApproval =
-      changeRequest?.type === "ADD_ROOM"
-        ? await this.mergeAdditionalRoomLayout(project.venueId, dto.layout)
+      isAdditionalRoomRequest
+        ? await this.mergeAdditionalRoomLayout(project.venueId, project.id, dto.layout)
+        : isDeleteRoomRequest
+          ? this.removeRequestedRoomFromLayout(
+              dto.layout,
+              changeRequest?.roomLabel?.toString() ??
+                previousSavedLayout.requestedRoomLabel?.toString(),
+            )
         : dto.layout;
 
     const adjustedBy = dto.adjustedBy?.trim() || "chin-chin-admin-panel";
@@ -757,6 +890,59 @@ export class SpaceLayoutsService {
     return clonedLayout;
   }
 
+  private ensureSpaceChangeTarget(
+    layout: Record<string, unknown>,
+    dto: RequestSpaceChangePreviewDto,
+  ) {
+    if (dto.type !== "DELETE_ROOM") {
+      return;
+    }
+
+    const roomLabel = dto.roomLabel?.trim();
+    if (!roomLabel) {
+      throw new BadRequestException("Room label is required for room deletion requests.");
+    }
+
+    const rooms = Array.isArray(layout.rooms) ? layout.rooms : [];
+    const found = rooms.some((room) => {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        return false;
+      }
+      return (room as Record<string, unknown>).roomLabel?.toString().trim() === roomLabel;
+    });
+
+    if (!found) {
+      throw new BadRequestException("Room was not found in the approved layout.");
+    }
+  }
+
+  private removeRequestedRoomFromLayout(
+    layout: Record<string, unknown>,
+    roomLabel?: string,
+  ) {
+    const label = roomLabel?.trim();
+    if (!label) {
+      throw new BadRequestException("Room label is required for approving room deletion.");
+    }
+
+    const clonedLayout = JSON.parse(JSON.stringify(layout)) as Record<string, unknown>;
+    const rooms = Array.isArray(clonedLayout.rooms) ? clonedLayout.rooms : [];
+    const nextRooms = rooms.filter((room) => {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        return true;
+      }
+      return (room as Record<string, unknown>).roomLabel?.toString().trim() !== label;
+    });
+
+    if (nextRooms.length === rooms.length) {
+      return clonedLayout;
+    }
+
+    clonedLayout.rooms = nextRooms;
+    clonedLayout.summary = this.recalculateLayoutSummary(clonedLayout);
+    return clonedLayout;
+  }
+
   private createApprovedSavedLayoutVersion({
     previousSavedLayout,
     layout,
@@ -806,10 +992,15 @@ export class SpaceLayoutsService {
 
   private async mergeAdditionalRoomLayout(
     venueId: string,
+    currentProjectId: string,
     additionalLayout: Record<string, unknown>,
   ) {
     const approvedProject = await this.prisma.spaceLayoutProject.findFirst({
-      where: { venueId, status: SpaceLayoutStatus.APPROVED },
+      where: {
+        venueId,
+        status: SpaceLayoutStatus.APPROVED,
+        id: { not: currentProjectId },
+      },
       orderBy: { approvedAt: "desc" },
     });
     const approvedSavedLayout = this.asJsonObject(
@@ -820,6 +1011,10 @@ export class SpaceLayoutsService {
     );
 
     if (!approvedLayout) {
+      console.log("[space-layouts] mergeAdditionalRoomLayout no previous approved layout", {
+        venueId,
+        currentProjectId,
+      });
       return additionalLayout;
     }
 
@@ -853,8 +1048,21 @@ export class SpaceLayoutsService {
       return !!label && existingLabels.has(label);
     });
     if (duplicateRoom) {
+      console.log("[space-layouts] mergeAdditionalRoomLayout duplicate room label", {
+        venueId,
+        currentProjectId,
+      });
       throw new BadRequestException("Room name already exists in approved layout.");
     }
+
+    console.log("[space-layouts] mergeAdditionalRoomLayout", {
+      venueId,
+      currentProjectId,
+      previousApprovedProjectId: approvedProject?.id,
+      existingRoomCount: existingRooms.length,
+      incomingRoomCount: incomingRooms.length,
+      mergedRoomCount: existingRooms.length + incomingRooms.length,
+    });
 
     const mergedLayout = JSON.parse(JSON.stringify(approvedLayout)) as Record<string, unknown>;
     mergedLayout.rooms = [...existingRooms, ...incomingRooms];
@@ -867,6 +1075,64 @@ export class SpaceLayoutsService {
       .join(" ");
 
     return mergedLayout;
+  }
+
+  private async withMergedAdditionalRoomFallback(project: {
+    id: string;
+    venueId: string;
+    name: string | null;
+    status: SpaceLayoutStatus;
+    photos: Prisma.JsonValue;
+    space: Prisma.JsonValue;
+    aiSuggestion: Prisma.JsonValue | null;
+    savedLayout: Prisma.JsonValue | null;
+    reviewSubmission: Prisma.JsonValue | null;
+    approvedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    venue: {
+      id: string;
+      name: string;
+      slug: string;
+    };
+  }) {
+    const savedLayout = this.asJsonObject(project.savedLayout);
+    const layout = this.asJsonObject(savedLayout?.layout ?? null);
+    const reviewSubmission = this.asJsonObject(project.reviewSubmission);
+    const changeRequest = this.asJsonObject(
+      reviewSubmission?.changeRequest ?? null,
+    );
+    const isAdditionalRoomRequest =
+      changeRequest?.type === "ADD_ROOM" ||
+      savedLayout?.changeRequestType === "ADD_ROOM";
+    const roomCount = Array.isArray(layout?.rooms) ? layout.rooms.length : 0;
+
+    console.log("[space-layouts] latest-approved fallback check", {
+      projectId: project.id,
+      venueId: project.venueId,
+      changeRequestType: changeRequest?.type ?? savedLayout?.changeRequestType ?? null,
+      isAdditionalRoomRequest,
+      roomCount,
+      willMergeFallback: isAdditionalRoomRequest && !!layout && roomCount <= 1,
+    });
+
+    if (!isAdditionalRoomRequest || !layout || roomCount > 1) {
+      return project;
+    }
+
+    const mergedLayout = await this.mergeAdditionalRoomLayout(
+      project.venueId,
+      project.id,
+      layout,
+    );
+
+    return {
+      ...project,
+      savedLayout: {
+        ...(savedLayout ?? {}),
+        layout: mergedLayout,
+      } as Prisma.JsonValue,
+    };
   }
 
   private recalculateLayoutSummary(layout: Record<string, unknown>) {
@@ -937,6 +1203,10 @@ export class SpaceLayoutsService {
         status: "pending",
       },
     };
+
+    if ("floorPlanFile" in dto && dto.floorPlanFile) {
+      submission.floorPlanFile = this.normalizeReferenceFile(dto.floorPlanFile);
+    }
 
     if ("changeRequestType" in dto && dto.changeRequestType) {
       submission.changeRequest = {
