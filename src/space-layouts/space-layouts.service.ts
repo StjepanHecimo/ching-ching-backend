@@ -1172,31 +1172,7 @@ export class SpaceLayoutsService {
     dto: SubmitSpaceLayoutReviewDto | SubmitCompleteSpaceLayoutReviewDto,
     submittedAt = new Date().toISOString(),
   ) {
-    const topDrinks = dto.topDrinks
-      .map((drink) => drink.trim())
-      .filter(Boolean);
-    const themeTags = dto.themeTags
-      .map((tag) => tag.trim().replace(/^#/, "").toLowerCase())
-      .filter(Boolean);
-    const draftBeers =
-      "draftBeers" in dto
-        ? (dto.draftBeers ?? []).map((beer) => beer.trim()).filter(Boolean)
-        : [];
-
-    if (!topDrinks.length) {
-      throw new BadRequestException("Provide at least one top drink.");
-    }
-
-    if (!themeTags.length) {
-      throw new BadRequestException("Provide at least one theme hashtag.");
-    }
-
     const submission: Record<string, unknown> = {
-      topDrinks,
-      musicType: dto.musicType.trim(),
-      themeTags,
-      servesFood: dto.servesFood,
-      foodDescription: dto.foodDescription?.trim(),
       ownerNotes: dto.ownerNotes?.trim(),
       submittedAt,
       review: {
@@ -1213,23 +1189,6 @@ export class SpaceLayoutsService {
         type: dto.changeRequestType,
         requestedAt: submittedAt,
       };
-    }
-
-    if ("hasDraftBeer" in dto) {
-      submission.hasDraftBeer = dto.hasDraftBeer;
-      submission.draftBeers = draftBeers;
-    }
-
-    if ("hasWeekendEvents" in dto) {
-      submission.hasWeekendEvents = dto.hasWeekendEvents;
-    }
-
-    if ("weekendEventDescription" in dto && dto.weekendEventDescription) {
-      submission.weekendEventDescription = dto.weekendEventDescription.trim();
-    }
-
-    if ("cafeVibe" in dto) {
-      submission.cafeVibe = dto.cafeVibe.trim();
     }
 
     return submission as Prisma.InputJsonValue;

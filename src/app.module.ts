@@ -5,6 +5,7 @@ import { AuthModule } from "./auth/auth.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ReservationsModule } from "./reservations/reservations.module";
 import { SpaceLayoutsModule } from "./space-layouts/space-layouts.module";
+import { VenueChinChinPanelModule } from "./venue-chin-chin-panel/venue-chin-chin-panel.module";
 import { VenueDocumentsModule } from "./venue-documents/venue-documents.module";
 
 @Module({
@@ -17,6 +18,7 @@ import { VenueDocumentsModule } from "./venue-documents/venue-documents.module";
     SpaceLayoutsModule,
     VenueDocumentsModule,
     ReservationsModule,
+    VenueChinChinPanelModule,
   ],
   controllers: [AppController],
 })

@@ -102,6 +102,7 @@ model Venue {
   spaceLayoutProjects   SpaceLayoutProject[]
   documentRequests      VenueDocumentRequest[]
   reservations          Reservation[]
+  chinChinPanel         VenueChinChinPanel?
 
   @@index([ownerId])
   @@map("venues")
@@ -197,6 +198,28 @@ model Reservation {
   @@index([timeSlotEnd])
   @@index([venueId, tableId, timeSlotStart, timeSlotEnd])
   @@map("reservations")
+}
+
+model VenueChinChinPanel {
+  id                 String   @id @default(uuid())
+  venueId            String   @unique
+  promotionalDrinks  Json
+  hasDraftBeer       Boolean  @default(false)
+  draftBeers         Json
+  hasEvent           Boolean  @default(false)
+  eventDay           String?
+  eventStartsAt      String?
+  eventBand          String?
+  eventDescription   String?
+  updatedBy          String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@index([venueId])
+  @@index([hasEvent])
+  @@map("venue_chin_chin_panels")
 }
 
 model EmailVerificationToken {
