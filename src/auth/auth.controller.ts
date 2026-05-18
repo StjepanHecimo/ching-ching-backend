@@ -11,6 +11,7 @@ import { AuthenticatedRequest } from "./authenticated-request";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { RefreshTokenDto } from "./dto/refresh-token.dto";
+import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
@@ -23,6 +24,11 @@ export class AuthController {
   @Post("register")
   register(@Body() dto: RegisterVenueOwnerDto) {
     return this.authService.registerVenueOwner(dto);
+  }
+
+  @Post("register-customer")
+  registerCustomer(@Body() dto: RegisterCustomerDto) {
+    return this.authService.registerCustomer(dto);
   }
 
   @Get("verify-email")

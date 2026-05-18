@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { Prisma } from "../../generated/prisma/client";
 import { PrismaService } from "../prisma/prisma.service";
 import { UpsertVenueChinChinPanelDto } from "./dto/upsert-venue-chin-chin-panel.dto";
@@ -18,6 +22,52 @@ export class VenueChinChinPanelService {
     }
 
     return this.serializePanel(panel);
+  }
+
+  async listPublicVenues(city?: string) {
+    const normalizedCity = city?.trim();
+    if (!normalizedCity) {
+      throw new BadRequestException("City is required.");
+    }
+
+    const venues = await this.prisma.venue.findMany({
+      where: {
+        city: {
+          equals: normalizedCity,
+          mode: "insensitive",
+        },
+      },
+      include: {
+        chinChinPanel: true,
+      },
+      orderBy: {
+        name: "asc",
+      },
+    });
+
+    return {
+      city: normalizedCity,
+      count: venues.length,
+      venues: venues.map((venue) => ({
+        id: venue.id,
+        name: venue.name,
+        slug: venue.slug,
+        address: venue.address,
+        city: venue.city,
+        country: venue.country,
+        isLive: venue.isLive,
+        panel: venue.chinChinPanel
+          ? this.serializePanel({
+              ...venue.chinChinPanel,
+              venue: {
+                id: venue.id,
+                name: venue.name,
+                slug: venue.slug,
+              },
+            })
+          : null,
+      })),
+    };
   }
 
   async upsertForVenue(venueId: string, dto: UpsertVenueChinChinPanelDto) {

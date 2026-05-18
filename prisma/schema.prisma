@@ -13,6 +13,7 @@ datasource db {
 }
 
 enum UserRole {
+  CUSTOMER
   VENUE_OWNER
   STAFF
   ADMIN
@@ -22,6 +23,13 @@ enum UserStatus {
   PENDING_EMAIL_VERIFICATION
   ACTIVE
   DISABLED
+}
+
+enum UserGender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
 }
 
 enum SpaceLayoutStatus {
@@ -65,6 +73,8 @@ model User {
   firstName       String
   lastName        String
   phoneNumber     String?
+  age             Int?
+  gender          UserGender?
   role            UserRole   @default(VENUE_OWNER)
   status          UserStatus @default(PENDING_EMAIL_VERIFICATION)
   emailVerifiedAt DateTime?

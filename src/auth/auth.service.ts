@@ -8,10 +8,11 @@ import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcrypt";
 import { createHash, randomBytes } from "node:crypto";
-import { UserStatus } from "../../generated/prisma/enums";
+import { UserRole, UserStatus } from "../../generated/prisma/enums";
 import { PrismaService } from "../prisma/prisma.service";
 import { LoginDto } from "./dto/login.dto";
 import { RefreshTokenDto } from "./dto/refresh-token.dto";
+import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
@@ -91,6 +92,57 @@ export class AuthService {
       status: result.user.status,
       message: "Registration created. Email verification is required.",
       devVerificationToken: verificationToken,
+    };
+  }
+
+  async registerCustomer(dto: RegisterCustomerDto) {
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    if (existingUser) {
+      throw new ConflictException("Email is already registered.");
+    }
+
+    const verificationToken = this.createVerificationToken();
+    const tokenHash = this.hashToken(verificationToken);
+    const passwordHash = await bcrypt.hash(this.createVerificationToken(), 12);
+
+    const user = await this.prisma.$transaction(async (tx) => {
+      const createdUser = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          passwordHash,
+          firstName: dto.firstName.trim(),
+          lastName: dto.lastName.trim(),
+          phoneNumber: dto.phoneNumber.trim(),
+          age: dto.age,
+          gender: dto.gender,
+          role: UserRole.CUSTOMER,
+        },
+      });
+
+      await tx.emailVerificationToken.create({
+        data: {
+          userId: createdUser.id,
+          tokenHash,
+          expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+        },
+      });
+
+      return createdUser;
+    });
+
+    this.logVerificationEmail(user.email, verificationToken);
+
+    return {
+      userId: user.id,
+      email: user.email,
+      status: user.status,
+      message: "Customer registration created. Email verification is required.",
+      devVerificationToken: verificationToken,
+      user: this.serializeAuthUser(user),
     };
   }
 
@@ -240,6 +292,9 @@ export class AuthService {
         firstName: user.firstName,
         lastName: user.lastName,
         status: user.status,
+        role: user.role,
+        age: user.age,
+        gender: user.gender,
       },
       venue: user.venues[0]
         ? {
@@ -367,6 +422,8 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       phoneNumber: user.phoneNumber,
+      age: user.age,
+      gender: user.gender,
       role: user.role,
       status: user.status,
       emailVerifiedAt: user.emailVerifiedAt,
@@ -463,6 +520,30 @@ export class AuthService {
     console.log("To: " + email);
     console.log("Verification link: " + verificationLink);
     console.log("Verification token: " + token);
+  }
+
+  private serializeAuthUser(user: {
+    id: string;
+    email: string;
+    firstName: string;
+    lastName: string;
+    phoneNumber: string | null;
+    age: number | null;
+    gender: string | null;
+    role: string;
+    status: string;
+  }) {
+    return {
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      phoneNumber: user.phoneNumber,
+      age: user.age,
+      gender: user.gender,
+      role: user.role,
+      status: user.status,
+    };
   }
 
   private slugify(value: string) {
