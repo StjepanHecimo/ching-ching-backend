@@ -70,6 +70,11 @@ export class ReservationsController {
     return this.reservationsService.updateReservationStatus(id, dto);
   }
 
+  @Get("preview/:id")
+  getReservation(@Param("id") id: string) {
+    return this.reservationsService.getReservation(id);
+  }
+
   @Post("preview/:id/accept")
   acceptReservation(@Param("id") id: string) {
     return this.reservationsService.acceptReservation(id);
@@ -81,5 +86,13 @@ export class ReservationsController {
     @Body() dto: DeclineReservationDto,
   ) {
     return this.reservationsService.declineReservation(id, dto);
+  }
+
+  @Post("preview/:id/venue-cancel")
+  cancelReservationByVenue(
+    @Param("id") id: string,
+    @Body() dto: DeclineReservationDto,
+  ) {
+    return this.reservationsService.cancelReservationByVenue(id, dto);
   }
 }

@@ -39,6 +39,7 @@ type VenueReservationState = {
   isLive: boolean;
   latitude: number | null;
   longitude: number | null;
+  liveChinChinTableIds: string[];
 };
 
 const ADVANCE_BASE_PRICE_CENTS = 400;
@@ -68,7 +69,10 @@ export class ReservationsService {
       query.userLongitude,
     );
     await this.releaseExpiredReservationLocks(venueId);
-    const tables = await this.getApprovedChinChinTables(venueId);
+    const tables = this.filterTablesForVenueLiveState(
+      await this.getApprovedChinChinTables(venueId),
+      venue,
+    );
     const blockingReservations = await this.findBlockingReservations(
       venueId,
       slot.startAt,
@@ -117,7 +121,10 @@ export class ReservationsService {
       dto.userLongitude,
     );
     await this.releaseExpiredReservationLocks(venueId);
-    const tables = await this.getApprovedChinChinTables(venueId);
+    const tables = this.filterTablesForVenueLiveState(
+      await this.getApprovedChinChinTables(venueId),
+      venue,
+    );
     const table = tables.find((item) => item.tableId === dto.tableId);
 
     if (!table) {
@@ -217,6 +224,30 @@ export class ReservationsService {
     );
   }
 
+  async getReservation(id: string) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id },
+      include: { venue: true },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException("Reservation was not found.");
+    }
+
+    await this.releaseExpiredReservationLocks(reservation.venueId);
+
+    const refreshed = await this.prisma.reservation.findUnique({
+      where: { id },
+      include: { venue: true },
+    });
+
+    if (!refreshed) {
+      throw new NotFoundException("Reservation was not found.");
+    }
+
+    return this.serializeReservation(refreshed);
+  }
+
   async acceptReservation(id: string) {
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
@@ -308,6 +339,67 @@ export class ReservationsService {
     return this.serializeReservation(updated);
   }
 
+  async cancelReservationByVenue(id: string, dto?: DeclineReservationDto) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id },
+      include: { venue: true },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException("Reservation was not found.");
+    }
+
+    if (
+      reservation.status === ReservationStatus.CANCELLED ||
+      reservation.status === ReservationStatus.CANCELLED_BY_USER ||
+      reservation.status === ReservationStatus.COMPLETED ||
+      reservation.status === ReservationStatus.DECLINED ||
+      reservation.status === ReservationStatus.EXPIRED ||
+      reservation.status === ReservationStatus.NO_SHOW ||
+      reservation.status === ReservationStatus.RELEASED
+    ) {
+      throw new BadRequestException("Reservation is not active.");
+    }
+
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const cancelled = await tx.reservation.update({
+        where: { id },
+        data: {
+          status: ReservationStatus.CANCELLED,
+          cancelledAt: now,
+          releasedAt: now,
+          confirmationExpiresAt: null,
+          notes: dto?.notes?.trim() ?? reservation.notes,
+        },
+        include: { venue: true },
+      });
+
+      await tx.venueReservationPenalty.create({
+        data: {
+          venueId: reservation.venueId,
+          reservationId: reservation.id,
+          monthKey: this.monthKey(now),
+          reason: "VENUE_CANCELLED_RESERVATION",
+          notes:
+            dto?.notes?.trim() ??
+            "Reservation was cancelled by venue from dashboard.",
+        },
+      });
+
+      return cancelled;
+    });
+
+    return {
+      reservation: this.serializeReservation(updated),
+      penalty: {
+        monthKey: this.monthKey(now),
+        reason: "VENUE_CANCELLED_RESERVATION",
+        monthlyAllowedWithoutCharge: 5,
+      },
+    };
+  }
+
   async updateReservationStatus(id: string, dto: UpdateReservationStatusDto) {
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
@@ -344,12 +436,17 @@ export class ReservationsService {
       throw new NotFoundException("Venue was not found.");
     }
 
+    const liveChinChinTableIds = dto.isLive
+      ? this.uniqueNonEmptyStrings(dto.liveChinChinTableIds ?? [])
+      : [];
+
     const venue = await this.prisma.venue.update({
       where: { id: venueId },
       data: {
         isLive: dto.isLive,
         latitude: dto.latitude,
         longitude: dto.longitude,
+        liveChinChinTableIds,
         liveStartedAt: dto.isLive ? new Date() : undefined,
         liveEndedAt: dto.isLive ? null : new Date(),
       },
@@ -360,6 +457,7 @@ export class ReservationsService {
       isLive: venue.isLive,
       latitude: venue.latitude,
       longitude: venue.longitude,
+      liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
       liveStartedAt: venue.liveStartedAt,
       liveEndedAt: venue.liveEndedAt,
     };
@@ -415,6 +513,7 @@ export class ReservationsService {
         isLive: true,
         latitude: true,
         longitude: true,
+        liveChinChinTableIds: true,
       },
     });
 
@@ -422,7 +521,26 @@ export class ReservationsService {
       throw new NotFoundException("Venue was not found.");
     }
 
-    return venue;
+    return {
+      ...venue,
+      liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
+    };
+  }
+
+  private filterTablesForVenueLiveState(
+    tables: ReservableTable[],
+    venue: VenueReservationState,
+  ) {
+    if (!venue.isLive) {
+      return tables;
+    }
+
+    const activeTableIds = new Set(venue.liveChinChinTableIds);
+    if (!activeTableIds.size) {
+      return [];
+    }
+
+    return tables.filter((table) => activeTableIds.has(table.tableId));
   }
 
   private validateReservationRuleContext(
@@ -495,6 +613,7 @@ export class ReservationsService {
     }
 
     const tables: ReservableTable[] = [];
+    let totalTableCount = 0;
     for (let roomIndex = 0; roomIndex < rooms.length; roomIndex++) {
       const room = rooms[roomIndex];
       if (typeof room !== "object" || !room || Array.isArray(room)) {
@@ -505,6 +624,7 @@ export class ReservationsService {
       const roomLabel =
         roomMap.roomLabel?.toString().trim() || `Prostorija ${roomIndex + 1}`;
       const roomTables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+      totalTableCount += roomTables.length;
       for (const table of roomTables) {
         if (typeof table !== "object" || !table || Array.isArray(table)) {
           continue;
@@ -516,9 +636,7 @@ export class ReservationsService {
           continue;
         }
 
-        const isChinChinTable =
-          tableMap.tableRole === "CHIN_CHIN_TABLE" ||
-          tableMap.chinChinCandidate === true;
+        const isChinChinTable = tableMap.tableRole === "CHIN_CHIN_TABLE";
         if (!isChinChinTable) {
           continue;
         }
@@ -534,7 +652,8 @@ export class ReservationsService {
       }
     }
 
-    return tables;
+    const maxChinChinCount = Math.max(1, Math.floor(totalTableCount / 4));
+    return tables.slice(0, maxChinChinCount);
   }
 
   private findBlockingReservations(
@@ -773,6 +892,11 @@ export class ReservationsService {
     return (value * Math.PI) / 180;
   }
 
+  private monthKey(value: Date) {
+    const month = `${value.getUTCMonth() + 1}`.padStart(2, "0");
+    return `${value.getUTCFullYear()}-${month}`;
+  }
+
   private numberFrom(value: unknown, fallback: number) {
     return typeof value === "number" && Number.isFinite(value)
       ? value
@@ -785,6 +909,24 @@ export class ReservationsService {
     }
 
     return value as Record<string, unknown>;
+  }
+
+  private jsonStringArray(value: Prisma.JsonValue | null | undefined) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return this.uniqueNonEmptyStrings(value.map((item) => item?.toString()));
+  }
+
+  private uniqueNonEmptyStrings(values: Array<string | undefined | null>) {
+    return Array.from(
+      new Set(
+        values
+          .map((value) => value?.trim())
+          .filter((value): value is string => Boolean(value)),
+      ),
+    );
   }
 
   private serializeReservation(reservation: {

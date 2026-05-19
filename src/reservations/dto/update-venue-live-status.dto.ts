@@ -1,5 +1,13 @@
 import { Type } from "class-transformer";
-import { IsBoolean, IsNumber, IsOptional, Max, Min } from "class-validator";
+import {
+  IsArray,
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from "class-validator";
 
 export class UpdateVenueLiveStatusDto {
   @IsBoolean()
@@ -18,4 +26,9 @@ export class UpdateVenueLiveStatusDto {
   @Min(-180)
   @Max(180)
   longitude?: number;
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  liveChinChinTableIds?: string[];
 }

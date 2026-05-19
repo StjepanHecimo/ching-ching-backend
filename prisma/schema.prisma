@@ -113,26 +113,28 @@ model User {
 }
 
 model Venue {
-  id            String    @id @default(uuid())
-  ownerId       String
-  name          String
-  slug          String    @unique
-  address       String?
-  city          String?
-  country       String    @default("HR")
-  latitude      Float?
-  longitude     Float?
-  isLive        Boolean   @default(false)
-  liveStartedAt DateTime?
-  liveEndedAt   DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  id                   String    @id @default(uuid())
+  ownerId              String
+  name                 String
+  slug                 String    @unique
+  address              String?
+  city                 String?
+  country              String    @default("HR")
+  latitude             Float?
+  longitude            Float?
+  isLive               Boolean   @default(false)
+  liveChinChinTableIds Json      @default("[]")
+  liveStartedAt        DateTime?
+  liveEndedAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 
-  owner               User                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  spaceLayoutProjects SpaceLayoutProject[]
-  documentRequests    VenueDocumentRequest[]
-  reservations        Reservation[]
-  chinChinPanel       VenueChinChinPanel?
+  owner                User                      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  spaceLayoutProjects  SpaceLayoutProject[]
+  documentRequests     VenueDocumentRequest[]
+  reservations         Reservation[]
+  chinChinPanel        VenueChinChinPanel?
+  reservationPenalties VenueReservationPenalty[]
 
   @@index([ownerId])
   @@map("venues")
@@ -232,6 +234,23 @@ model Reservation {
   @@index([confirmationExpiresAt])
   @@index([venueId, tableId, timeSlotStart, timeSlotEnd])
   @@map("reservations")
+}
+
+model VenueReservationPenalty {
+  id            String   @id @default(uuid())
+  venueId       String
+  reservationId String?
+  monthKey      String
+  reason        String
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@index([venueId])
+  @@index([reservationId])
+  @@index([venueId, monthKey])
+  @@map("venue_reservation_penalties")
 }
 
 model VenueChinChinPanel {

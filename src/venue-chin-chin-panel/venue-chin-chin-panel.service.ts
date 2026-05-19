@@ -227,6 +227,7 @@ export class VenueChinChinPanelService {
         city: venue.city,
         country: venue.country,
         isLive: venue.isLive,
+        liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
         panel: venue.chinChinPanel
           ? this.serializePanel({
               ...venue.chinChinPanel,
@@ -844,5 +845,19 @@ export class VenueChinChinPanelService {
       .replace(/[\u0300-\u036f]/g, "")
       .replace(/[^a-z0-9]+/g, " ")
       .trim();
+  }
+
+  private jsonStringArray(value: Prisma.JsonValue | null | undefined) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return Array.from(
+      new Set(
+        value
+          .map((item) => item?.toString().trim())
+          .filter((item): item is string => Boolean(item)),
+      ),
+    );
   }
 }
