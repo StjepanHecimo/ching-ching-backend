@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { Prisma } from "../../generated/prisma/client";
 import {
   ReservationStatus,
@@ -7,6 +12,7 @@ import {
 } from "../../generated/prisma/enums";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
+import { DeclineReservationDto } from "./dto/decline-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
@@ -41,6 +47,7 @@ const LARGE_TABLE_SURCHARGE_CENTS = 100;
 const LARGE_TABLE_MIN_CAPACITY = 6;
 const LIVE_RADIUS_METERS = 1000;
 const ARRIVAL_GRACE_MINUTES = 15;
+const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 
@@ -60,7 +67,7 @@ export class ReservationsService {
       query.userLatitude,
       query.userLongitude,
     );
-    await this.releaseExpiredArrivalLocks(venueId);
+    await this.releaseExpiredReservationLocks(venueId);
     const tables = await this.getApprovedChinChinTables(venueId);
     const blockingReservations = await this.findBlockingReservations(
       venueId,
@@ -109,20 +116,27 @@ export class ReservationsService {
       dto.userLatitude,
       dto.userLongitude,
     );
-    await this.releaseExpiredArrivalLocks(venueId);
+    await this.releaseExpiredReservationLocks(venueId);
     const tables = await this.getApprovedChinChinTables(venueId);
     const table = tables.find((item) => item.tableId === dto.tableId);
 
     if (!table) {
-      throw new BadRequestException("Selected table is not an approved Chin-Chin table.");
+      throw new BadRequestException(
+        "Selected table is not an approved Chin-Chin table.",
+      );
     }
 
     if (!table.reservable) {
       throw new BadRequestException("Selected table is not reservable.");
     }
 
-    if (dto.partySize < table.minPartySize || dto.partySize > table.maxPartySize) {
-      throw new BadRequestException("Party size does not match table capacity.");
+    if (
+      dto.partySize < table.minPartySize ||
+      dto.partySize > table.maxPartySize
+    ) {
+      throw new BadRequestException(
+        "Party size does not match table capacity.",
+      );
     }
 
     const blockingReservations = await this.findBlockingReservations(
@@ -133,9 +147,14 @@ export class ReservationsService {
     );
 
     if (blockingReservations.length) {
-      throw new BadRequestException("Selected table is already reserved for this time slot.");
+      throw new ConflictException(
+        "Selected table is already reserved for this time slot.",
+      );
     }
 
+    const confirmationExpiresAt = new Date(
+      Date.now() + VENUE_CONFIRMATION_WINDOW_SECONDS * 1000,
+    );
     const reservation = await this.prisma.reservation.create({
       data: {
         venueId,
@@ -143,13 +162,14 @@ export class ReservationsService {
         tableLabel: table.tableLabel,
         roomLabel: table.roomLabel,
         type: dto.type as ReservationType,
-        status: ReservationStatus.RESERVED,
+        status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
         partySize: dto.partySize,
         timeSlotStart: slot.startAt,
         timeSlotEnd: slot.endAt,
         checkInOpensAt: dto.type === "ADVANCE" ? slot.checkInOpensAt : null,
         checkInClosesAt: dto.type === "ADVANCE" ? slot.checkInClosesAt : null,
         arrivalDeadlineAt: slot.arrivalDeadlineAt,
+        confirmationExpiresAt,
         feeCents: this.calculateFeeCents(dto.type, table),
         refundCents: 0,
         currency: "EUR",
@@ -168,7 +188,7 @@ export class ReservationsService {
   }
 
   async listVenueReservations(venueId: string) {
-    await this.releaseExpiredArrivalLocks(venueId);
+    await this.releaseExpiredReservationLocks(venueId);
     const reservations = await this.prisma.reservation.findMany({
       where: { venueId },
       orderBy: { timeSlotStart: "desc" },
@@ -176,7 +196,116 @@ export class ReservationsService {
       include: { venue: true },
     });
 
-    return reservations.map((reservation) => this.serializeReservation(reservation));
+    return reservations.map((reservation) =>
+      this.serializeReservation(reservation),
+    );
+  }
+
+  async listPendingVenueReservationRequests(venueId: string) {
+    await this.releaseExpiredReservationLocks(venueId);
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        venueId,
+        status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
+      },
+      orderBy: { createdAt: "asc" },
+      include: { venue: true },
+    });
+
+    return reservations.map((reservation) =>
+      this.serializeReservation(reservation),
+    );
+  }
+
+  async acceptReservation(id: string) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id },
+      include: { venue: true },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException("Reservation was not found.");
+    }
+
+    await this.releaseExpiredReservationLocks(reservation.venueId);
+
+    if (reservation.status !== ReservationStatus.PENDING_VENUE_CONFIRMATION) {
+      throw new BadRequestException(
+        "Only pending reservation requests can be accepted.",
+      );
+    }
+
+    if (
+      reservation.confirmationExpiresAt &&
+      reservation.confirmationExpiresAt.getTime() < Date.now()
+    ) {
+      const expired = await this.prisma.reservation.update({
+        where: { id },
+        data: {
+          status: ReservationStatus.EXPIRED,
+          releasedAt: new Date(),
+        },
+        include: { venue: true },
+      });
+      return this.serializeReservation(expired);
+    }
+
+    const blockers = await this.findBlockingReservations(
+      reservation.venueId,
+      reservation.timeSlotStart,
+      reservation.timeSlotEnd,
+      reservation.tableId,
+      reservation.id,
+    );
+
+    if (blockers.length) {
+      throw new ConflictException(
+        "Selected table is already reserved for this time slot.",
+      );
+    }
+
+    const updated = await this.prisma.reservation.update({
+      where: { id },
+      data: {
+        status: ReservationStatus.CONFIRMED,
+        confirmedAt: new Date(),
+        confirmationExpiresAt: null,
+      },
+      include: { venue: true },
+    });
+
+    return this.serializeReservation(updated);
+  }
+
+  async declineReservation(id: string, dto?: DeclineReservationDto) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id },
+      include: { venue: true },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException("Reservation was not found.");
+    }
+
+    if (reservation.status !== ReservationStatus.PENDING_VENUE_CONFIRMATION) {
+      throw new BadRequestException(
+        "Only pending reservation requests can be declined.",
+      );
+    }
+
+    const updated = await this.prisma.reservation.update({
+      where: { id },
+      data: {
+        status: ReservationStatus.DECLINED,
+        declinedAt: new Date(),
+        releasedAt: new Date(),
+        confirmationExpiresAt: null,
+        notes: dto?.notes?.trim() ?? reservation.notes,
+      },
+      include: { venue: true },
+    });
+
+    return this.serializeReservation(updated);
   }
 
   async updateReservationStatus(id: string, dto: UpdateReservationStatusDto) {
@@ -194,7 +323,10 @@ export class ReservationsService {
       data: {
         status: dto.status as ReservationStatus,
         notes: dto.notes?.trim() ?? reservation.notes,
-        ...this.statusTimestampsAndRefunds(reservation, dto.status as ReservationStatus),
+        ...this.statusTimestampsAndRefunds(
+          reservation,
+          dto.status as ReservationStatus,
+        ),
       },
       include: { venue: true },
     });
@@ -242,7 +374,9 @@ export class ReservationsService {
     }
 
     if (endAt.getTime() <= startAt.getTime()) {
-      throw new BadRequestException("Reservation end time must be after start time.");
+      throw new BadRequestException(
+        "Reservation end time must be after start time.",
+      );
     }
 
     const startMinutes = startAt.getHours() * 60 + startAt.getMinutes();
@@ -250,7 +384,9 @@ export class ReservationsService {
       startMinutes < RESERVATION_WINDOW_START_MINUTES ||
       startMinutes > RESERVATION_WINDOW_END_MINUTES
     ) {
-      throw new BadRequestException("Reservations are available from 18:00 to 22:00.");
+      throw new BadRequestException(
+        "Reservations are available from 18:00 to 22:00.",
+      );
     }
 
     const checkInOpensAt = new Date(startAt);
@@ -260,7 +396,13 @@ export class ReservationsService {
       startAt.getTime() + ARRIVAL_GRACE_MINUTES * 60 * 1000,
     );
 
-    return { startAt, endAt, checkInOpensAt, checkInClosesAt, arrivalDeadlineAt };
+    return {
+      startAt,
+      endAt,
+      checkInOpensAt,
+      checkInClosesAt,
+      arrivalDeadlineAt,
+    };
   }
 
   private async getVenueReservationState(
@@ -294,15 +436,21 @@ export class ReservationsService {
     }
 
     if (!venue.isLive) {
-      throw new BadRequestException("Live reservations are available only while the venue is live.");
+      throw new BadRequestException(
+        "Live reservations are available only while the venue is live.",
+      );
     }
 
     if (venue.latitude == null || venue.longitude == null) {
-      throw new BadRequestException("Venue location is required for live reservations.");
+      throw new BadRequestException(
+        "Venue location is required for live reservations.",
+      );
     }
 
     if (userLatitude == null || userLongitude == null) {
-      throw new BadRequestException("User location is required for live reservations.");
+      throw new BadRequestException(
+        "User location is required for live reservations.",
+      );
     }
 
     const distanceMeters = this.distanceMeters(
@@ -313,7 +461,9 @@ export class ReservationsService {
     );
 
     if (distanceMeters > LIVE_RADIUS_METERS) {
-      throw new BadRequestException("User is outside the live reservation radius.");
+      throw new BadRequestException(
+        "User is outside the live reservation radius.",
+      );
     }
 
     return Math.round(distanceMeters);
@@ -392,23 +542,57 @@ export class ReservationsService {
     startAt: Date,
     endAt: Date,
     tableId?: string,
+    excludeReservationId?: string,
   ) {
+    const now = new Date();
     return this.prisma.reservation.findMany({
       where: {
+        ...(excludeReservationId ? { id: { not: excludeReservationId } } : {}),
         venueId,
         ...(tableId ? { tableId } : {}),
-        status: {
-          in: [
-            ReservationStatus.REQUESTED,
-            ReservationStatus.CONFIRMED,
-            ReservationStatus.RESERVED,
-            ReservationStatus.CHECK_IN_PENDING,
-            ReservationStatus.CHECKED_IN,
-            ReservationStatus.SEATED,
-          ],
-        },
+        OR: [
+          {
+            status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
+            OR: [
+              { confirmationExpiresAt: null },
+              { confirmationExpiresAt: { gt: now } },
+            ],
+          },
+          {
+            status: {
+              in: [
+                ReservationStatus.REQUESTED,
+                ReservationStatus.CONFIRMED,
+                ReservationStatus.RESERVED,
+                ReservationStatus.CHECK_IN_PENDING,
+                ReservationStatus.CHECKED_IN,
+                ReservationStatus.SEATED,
+              ],
+            },
+          },
+        ],
         timeSlotStart: { lt: endAt },
         timeSlotEnd: { gt: startAt },
+      },
+    });
+  }
+
+  private async releaseExpiredReservationLocks(venueId: string) {
+    await this.releaseExpiredVenueConfirmationRequests(venueId);
+    await this.releaseExpiredArrivalLocks(venueId);
+  }
+
+  private async releaseExpiredVenueConfirmationRequests(venueId: string) {
+    const now = new Date();
+    await this.prisma.reservation.updateMany({
+      where: {
+        venueId,
+        status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
+        confirmationExpiresAt: { lt: now },
+      },
+      data: {
+        status: ReservationStatus.EXPIRED,
+        releasedAt: now,
       },
     });
   }
@@ -489,8 +673,27 @@ export class ReservationsService {
       seatedAt?: Date;
       cancelledAt?: Date;
       releasedAt?: Date;
+      confirmedAt?: Date;
+      declinedAt?: Date;
+      confirmationExpiresAt?: Date | null;
       refundCents?: number;
     } = {};
+
+    if (nextStatus === ReservationStatus.CONFIRMED) {
+      data.confirmedAt = now;
+      data.confirmationExpiresAt = null;
+    }
+
+    if (nextStatus === ReservationStatus.DECLINED) {
+      data.declinedAt = now;
+      data.releasedAt = now;
+      data.confirmationExpiresAt = null;
+    }
+
+    if (nextStatus === ReservationStatus.EXPIRED) {
+      data.releasedAt = now;
+      data.confirmationExpiresAt = null;
+    }
 
     if (nextStatus === ReservationStatus.CHECKED_IN) {
       data.checkedInAt = now;
@@ -571,7 +774,9 @@ export class ReservationsService {
   }
 
   private numberFrom(value: unknown, fallback: number) {
-    return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+    return typeof value === "number" && Number.isFinite(value)
+      ? value
+      : fallback;
   }
 
   private asJsonObject(value: Prisma.JsonValue | null | undefined) {
@@ -596,6 +801,9 @@ export class ReservationsService {
     checkInOpensAt: Date | null;
     checkInClosesAt: Date | null;
     arrivalDeadlineAt: Date | null;
+    confirmationExpiresAt: Date | null;
+    confirmedAt: Date | null;
+    declinedAt: Date | null;
     checkedInAt: Date | null;
     seatedAt: Date | null;
     cancelledAt: Date | null;
@@ -634,6 +842,9 @@ export class ReservationsService {
       checkInOpensAt: reservation.checkInOpensAt,
       checkInClosesAt: reservation.checkInClosesAt,
       arrivalDeadlineAt: reservation.arrivalDeadlineAt,
+      confirmationExpiresAt: reservation.confirmationExpiresAt,
+      confirmedAt: reservation.confirmedAt,
+      declinedAt: reservation.declinedAt,
       checkedInAt: reservation.checkedInAt,
       seatedAt: reservation.seatedAt,
       cancelledAt: reservation.cancelledAt,

@@ -49,7 +49,10 @@ enum VenueDocumentStatus {
 
 enum ReservationStatus {
   REQUESTED
+  PENDING_VENUE_CONFIRMATION
   CONFIRMED
+  DECLINED
+  EXPIRED
   CANCELLED
   RESERVED
   CHECK_IN_PENDING
@@ -66,20 +69,37 @@ enum ReservationType {
   LIVE
 }
 
+enum DrinkBrandType {
+  GIN
+  WHISKEY
+  DRAFT_BEER
+  BEER
+  COCKTAIL
+  WINE
+  OTHER
+}
+
+enum ChinChinContentType {
+  EVENT
+  TV_CONTENT
+  KARAOKE
+  OTHER
+}
+
 model User {
-  id              String     @id @default(uuid())
-  email           String     @unique
+  id              String      @id @default(uuid())
+  email           String      @unique
   passwordHash    String
   firstName       String
   lastName        String
   phoneNumber     String?
   age             Int?
   gender          UserGender?
-  role            UserRole   @default(VENUE_OWNER)
-  status          UserStatus @default(PENDING_EMAIL_VERIFICATION)
+  role            UserRole    @default(VENUE_OWNER)
+  status          UserStatus  @default(PENDING_EMAIL_VERIFICATION)
   emailVerifiedAt DateTime?
-  createdAt       DateTime   @default(now())
-  updatedAt       DateTime   @updatedAt
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   venues                  Venue[]
   emailVerificationTokens EmailVerificationToken[]
@@ -93,26 +113,26 @@ model User {
 }
 
 model Venue {
-  id        String   @id @default(uuid())
-  ownerId   String
-  name      String
-  slug      String   @unique
-  address   String?
-  city      String?
-  country   String   @default("HR")
-  latitude  Float?
-  longitude Float?
-  isLive    Boolean  @default(false)
+  id            String    @id @default(uuid())
+  ownerId       String
+  name          String
+  slug          String    @unique
+  address       String?
+  city          String?
+  country       String    @default("HR")
+  latitude      Float?
+  longitude     Float?
+  isLive        Boolean   @default(false)
   liveStartedAt DateTime?
   liveEndedAt   DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
-  owner                 User                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  spaceLayoutProjects   SpaceLayoutProject[]
-  documentRequests      VenueDocumentRequest[]
-  reservations          Reservation[]
-  chinChinPanel         VenueChinChinPanel?
+  owner               User                   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  spaceLayoutProjects SpaceLayoutProject[]
+  documentRequests    VenueDocumentRequest[]
+  reservations        Reservation[]
+  chinChinPanel       VenueChinChinPanel?
 
   @@index([ownerId])
   @@map("venues")
@@ -165,37 +185,40 @@ model VenueDocumentRequest {
 }
 
 model Reservation {
-  id            String            @id @default(uuid())
-  venueId       String
-  customerId    String?
-  tableId       String
-  tableLabel    String?
-  roomLabel     String?
-  type          ReservationType   @default(ADVANCE)
-  status        ReservationStatus @default(REQUESTED)
-  partySize     Int
-  timeSlotStart DateTime
-  timeSlotEnd   DateTime
-  checkInOpensAt DateTime?
-  checkInClosesAt DateTime?
-  arrivalDeadlineAt DateTime?
-  checkedInAt   DateTime?
-  seatedAt      DateTime?
-  cancelledAt   DateTime?
-  releasedAt    DateTime?
-  feeCents      Int               @default(0)
-  refundCents   Int               @default(0)
-  currency      String            @default("EUR")
-  userLatitude  Float?
-  userLongitude Float?
-  distanceMeters Float?
-  customerName  String?
-  customerEmail String?
-  customerPhone String?
-  notes         String?
-  source        String            @default("user-app")
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
+  id                    String            @id @default(uuid())
+  venueId               String
+  customerId            String?
+  tableId               String
+  tableLabel            String?
+  roomLabel             String?
+  type                  ReservationType   @default(ADVANCE)
+  status                ReservationStatus @default(REQUESTED)
+  partySize             Int
+  timeSlotStart         DateTime
+  timeSlotEnd           DateTime
+  checkInOpensAt        DateTime?
+  checkInClosesAt       DateTime?
+  arrivalDeadlineAt     DateTime?
+  confirmationExpiresAt DateTime?
+  confirmedAt           DateTime?
+  declinedAt            DateTime?
+  checkedInAt           DateTime?
+  seatedAt              DateTime?
+  cancelledAt           DateTime?
+  releasedAt            DateTime?
+  feeCents              Int               @default(0)
+  refundCents           Int               @default(0)
+  currency              String            @default("EUR")
+  userLatitude          Float?
+  userLongitude         Float?
+  distanceMeters        Float?
+  customerName          String?
+  customerEmail         String?
+  customerPhone         String?
+  notes                 String?
+  source                String            @default("user-app")
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
 
   venue    Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
   customer User? @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -206,30 +229,67 @@ model Reservation {
   @@index([status])
   @@index([timeSlotStart])
   @@index([timeSlotEnd])
+  @@index([confirmationExpiresAt])
   @@index([venueId, tableId, timeSlotStart, timeSlotEnd])
   @@map("reservations")
 }
 
 model VenueChinChinPanel {
-  id                 String   @id @default(uuid())
-  venueId            String   @unique
-  promotionalDrinks  Json
-  hasDraftBeer       Boolean  @default(false)
-  draftBeers         Json
-  hasEvent           Boolean  @default(false)
-  eventDay           String?
-  eventStartsAt      String?
-  eventBand          String?
-  eventDescription   String?
-  updatedBy          String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                String   @id @default(uuid())
+  venueId           String   @unique
+  promotionalDrinks Json
+  hasDraftBeer      Boolean  @default(false)
+  draftBeers        Json
+  hasEvent          Boolean  @default(false)
+  events            Json?
+  eventDay          String?
+  eventStartsAt     String?
+  eventBand         String?
+  eventContent      Json?
+  eventDescription  String?
+  updatedBy         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
 
   @@index([venueId])
   @@index([hasEvent])
   @@map("venue_chin_chin_panels")
+}
+
+model DrinkBrand {
+  id           String         @id @default(uuid())
+  name         String
+  brandKey     String         @unique
+  type         DrinkBrandType
+  aliases      Json
+  logoAssetKey String?
+  logoUrl      String?
+  isActive     Boolean        @default(true)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@index([type])
+  @@index([isActive])
+  @@map("drink_brands")
+}
+
+model ChinChinContentAsset {
+  id           String              @id @default(uuid())
+  name         String
+  contentKey   String              @unique
+  type         ChinChinContentType
+  aliases      Json
+  logoAssetKey String?
+  logoUrl      String?
+  isActive     Boolean             @default(true)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+
+  @@index([type])
+  @@index([isActive])
+  @@map("chin_chin_content_assets")
 }
 
 model EmailVerificationToken {

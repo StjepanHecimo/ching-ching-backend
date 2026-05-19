@@ -3,7 +3,10 @@ import { IsIn, IsOptional, IsString, Length } from "class-validator";
 export class UpdateReservationStatusDto {
   @IsIn([
     "REQUESTED",
+    "PENDING_VENUE_CONFIRMATION",
     "CONFIRMED",
+    "DECLINED",
+    "EXPIRED",
     "CANCELLED",
     "RESERVED",
     "CHECK_IN_PENDING",
@@ -16,7 +19,10 @@ export class UpdateReservationStatusDto {
   ])
   status!:
     | "REQUESTED"
+    | "PENDING_VENUE_CONFIRMATION"
     | "CONFIRMED"
+    | "DECLINED"
+    | "EXPIRED"
     | "CANCELLED"
     | "RESERVED"
     | "CHECK_IN_PENDING"

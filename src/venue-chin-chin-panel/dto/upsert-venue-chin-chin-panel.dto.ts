@@ -7,6 +7,28 @@ import {
   Length,
 } from "class-validator";
 
+export class VenueChinChinPanelEventDto {
+  @IsOptional()
+  @IsString()
+  @Length(2, 40)
+  day?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(2, 20)
+  startsAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(2, 120)
+  contentName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(2, 240)
+  description?: string;
+}
+
 export class UpsertVenueChinChinPanelDto {
   @IsArray()
   @ArrayMaxSize(3)
@@ -28,6 +50,11 @@ export class UpsertVenueChinChinPanelDto {
   hasEvent!: boolean;
 
   @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  events?: VenueChinChinPanelEventDto[];
+
+  @IsOptional()
   @IsString()
   @Length(2, 40)
   eventDay?: string;
@@ -41,6 +68,11 @@ export class UpsertVenueChinChinPanelDto {
   @IsString()
   @Length(2, 120)
   eventBand?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(2, 120)
+  eventContentName?: string;
 
   @IsOptional()
   @IsString()
