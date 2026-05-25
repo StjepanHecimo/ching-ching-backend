@@ -1,0 +1,3 @@
+ALTER TABLE "venues"
+ADD COLUMN "reservationWindowStartMinutes" INTEGER NOT NULL DEFAULT 1080,
+ADD COLUMN "reservationWindowEndMinutes" INTEGER NOT NULL DEFAULT 1320;

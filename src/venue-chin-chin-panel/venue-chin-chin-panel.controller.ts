@@ -18,6 +18,11 @@ export class VenueChinChinPanelController {
     return this.venueChinChinPanelService.listPublicVenues(city);
   }
 
+  @Get("events")
+  listPublicEventVenues(@Query("city") city?: string) {
+    return this.venueChinChinPanelService.listPublicEventVenues(city);
+  }
+
   @Get("drink-brands")
   listDrinkBrands() {
     return this.venueChinChinPanelService.listDrinkBrands();

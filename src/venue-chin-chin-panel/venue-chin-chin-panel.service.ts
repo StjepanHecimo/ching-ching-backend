@@ -226,8 +226,12 @@ export class VenueChinChinPanelService {
         address: venue.address,
         city: venue.city,
         country: venue.country,
+        latitude: venue.latitude,
+        longitude: venue.longitude,
         isLive: venue.isLive,
         liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
+        reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
+        reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
         panel: venue.chinChinPanel
           ? this.serializePanel({
               ...venue.chinChinPanel,
@@ -239,6 +243,90 @@ export class VenueChinChinPanelService {
             })
           : null,
       })),
+    };
+  }
+
+  async listPublicEventVenues(city?: string) {
+    const normalizedCity = city?.trim();
+    const venues = await this.prisma.venue.findMany({
+      where: {
+        ...(normalizedCity
+          ? {
+              city: {
+                equals: normalizedCity,
+                mode: "insensitive",
+              },
+            }
+          : {}),
+        chinChinPanel: {
+          is: {
+            hasEvent: true,
+          },
+        },
+      },
+      include: {
+        chinChinPanel: true,
+      },
+      orderBy: {
+        name: "asc",
+      },
+      take: 100,
+    });
+
+    const eventVenues = venues
+      .map((venue) => {
+        if (!venue.chinChinPanel) {
+          return null;
+        }
+
+        const panel = this.serializePanel({
+          ...venue.chinChinPanel,
+          venue: {
+            id: venue.id,
+            name: venue.name,
+            slug: venue.slug,
+          },
+        });
+
+        if (!panel.event) {
+          return null;
+        }
+
+        return {
+          id: venue.id,
+          name: venue.name,
+          slug: venue.slug,
+          address: venue.address,
+          city: venue.city,
+          country: venue.country,
+          latitude: venue.latitude,
+          longitude: venue.longitude,
+          isLive: venue.isLive,
+          liveChinChinTableIds: this.jsonStringArray(
+            venue.liveChinChinTableIds,
+          ),
+          reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
+          reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+          panel,
+        };
+      })
+      .filter((venue): venue is NonNullable<typeof venue> => venue !== null)
+      .sort((left, right) => {
+        const leftEvent = left.panel.event;
+        const rightEvent = right.panel.event;
+        if (!leftEvent || !rightEvent) {
+          return left.name.localeCompare(right.name);
+        }
+        return (
+          this.eventTimestamp(leftEvent) - this.eventTimestamp(rightEvent) ||
+          left.name.localeCompare(right.name)
+        );
+      });
+
+    return {
+      city: normalizedCity || null,
+      count: eventVenues.length,
+      venues: eventVenues,
     };
   }
 

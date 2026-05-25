@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -10,6 +11,7 @@ import {
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
+import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservation-settings.dto";
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
 import { DeclineReservationDto } from "./dto/decline-reservation.dto";
 import { ReservationsService } from "./reservations.service";
@@ -54,6 +56,66 @@ export class ReservationsController {
     );
   }
 
+  @Get("preview/customers/reservations")
+  listCustomerReservations(@Query("customerEmail") customerEmail?: string) {
+    return this.reservationsService.listCustomerReservations(customerEmail);
+  }
+
+  @Get("preview/admin/monitoring")
+  listReservationMonitoring(
+    @Query("status") status?: string,
+    @Query("venueId") venueId?: string,
+  ) {
+    return this.reservationsService.listReservationMonitoring({
+      status,
+      venueId,
+    });
+  }
+
+  @Post("preview/admin/:id/cancel")
+  adminCancelReservation(
+    @Param("id") id: string,
+    @Body() dto: DeclineReservationDto,
+  ) {
+    return this.reservationsService.adminCancelReservation(id, dto);
+  }
+
+  @Delete("preview/admin/:id")
+  adminDeleteReservation(@Param("id") id: string) {
+    return this.reservationsService.adminDeleteReservation(id);
+  }
+
+  @Post("preview/admin/:id/customer-check-in")
+  adminCustomerCheckInReservation(@Param("id") id: string) {
+    return this.reservationsService.adminCustomerCheckInReservation(id);
+  }
+
+  @Post("preview/admin/:id/venue-check-in")
+  adminVenueCheckInReservation(@Param("id") id: string) {
+    return this.reservationsService.adminVenueCheckInReservation(id);
+  }
+
+  @Get("preview/venues/:venueId/live-status")
+  getVenueLiveStatus(@Param("venueId") venueId: string) {
+    return this.reservationsService.getVenueLiveStatus(venueId);
+  }
+
+  @Get("preview/venues/:venueId/settings")
+  getVenueReservationSettings(@Param("venueId") venueId: string) {
+    return this.reservationsService.getVenueReservationSettings(venueId);
+  }
+
+  @Patch("preview/venues/:venueId/settings")
+  updateVenueReservationSettings(
+    @Param("venueId") venueId: string,
+    @Body() dto: UpdateVenueReservationSettingsDto,
+  ) {
+    return this.reservationsService.updateVenueReservationSettings(
+      venueId,
+      dto,
+    );
+  }
+
   @Patch("preview/venues/:venueId/live-status")
   updateVenueLiveStatus(
     @Param("venueId") venueId: string,
@@ -78,6 +140,24 @@ export class ReservationsController {
   @Post("preview/:id/accept")
   acceptReservation(@Param("id") id: string) {
     return this.reservationsService.acceptReservation(id);
+  }
+
+  @Post("preview/:id/check-in")
+  checkInReservation(@Param("id") id: string) {
+    return this.reservationsService.checkInReservation(id);
+  }
+
+  @Post("preview/:id/customer-check-in")
+  customerCheckInReservation(@Param("id") id: string) {
+    return this.reservationsService.customerCheckInReservation(id);
+  }
+
+  @Post("preview/:id/customer-cancel")
+  cancelReservationByCustomer(
+    @Param("id") id: string,
+    @Body() dto: DeclineReservationDto,
+  ) {
+    return this.reservationsService.cancelReservationByCustomer(id, dto);
   }
 
   @Post("preview/:id/decline")

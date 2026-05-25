@@ -113,21 +113,23 @@ model User {
 }
 
 model Venue {
-  id                   String    @id @default(uuid())
-  ownerId              String
-  name                 String
-  slug                 String    @unique
-  address              String?
-  city                 String?
-  country              String    @default("HR")
-  latitude             Float?
-  longitude            Float?
-  isLive               Boolean   @default(false)
-  liveChinChinTableIds Json      @default("[]")
-  liveStartedAt        DateTime?
-  liveEndedAt          DateTime?
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  id                            String    @id @default(uuid())
+  ownerId                       String
+  name                          String
+  slug                          String    @unique
+  address                       String?
+  city                          String?
+  country                       String    @default("HR")
+  latitude                      Float?
+  longitude                     Float?
+  isLive                        Boolean   @default(false)
+  liveChinChinTableIds          Json      @default("[]")
+  liveStartedAt                 DateTime?
+  liveEndedAt                   DateTime?
+  reservationWindowStartMinutes Int       @default(1080)
+  reservationWindowEndMinutes   Int       @default(1320)
+  createdAt                     DateTime  @default(now())
+  updatedAt                     DateTime  @updatedAt
 
   owner                User                      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   spaceLayoutProjects  SpaceLayoutProject[]
@@ -204,6 +206,7 @@ model Reservation {
   confirmationExpiresAt DateTime?
   confirmedAt           DateTime?
   declinedAt            DateTime?
+  customerCheckedInAt   DateTime?
   checkedInAt           DateTime?
   seatedAt              DateTime?
   cancelledAt           DateTime?
