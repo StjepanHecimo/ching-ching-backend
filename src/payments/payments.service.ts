@@ -13,6 +13,7 @@ import {
   ReservationPaymentStatus,
   ReservationStatus,
 } from "../../generated/prisma/enums";
+import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
@@ -28,6 +29,7 @@ export class PaymentsService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly worldlineProvider: WorldlinePaymentProvider,
+    private readonly deviceTokensService: DeviceTokensService,
   ) {}
 
   async createReservationCheckout(
@@ -726,7 +728,7 @@ export class PaymentsService {
       Date.now() + VENUE_CONFIRMATION_WINDOW_SECONDS * 1000,
     );
 
-    return this.prisma.$transaction(async (tx) => {
+    const updatedPayment = await this.prisma.$transaction(async (tx) => {
       const updatedPayment = await tx.reservationPayment.update({
         where: { id: payment.id },
         data: {
@@ -748,6 +750,9 @@ export class PaymentsService {
 
       return updatedPayment;
     });
+
+    await this.notifyVenueAboutReservationRequest(payment.reservationId);
+    return updatedPayment;
   }
 
   private async markPaymentAuthorizationFailed(input: {
@@ -783,6 +788,28 @@ export class PaymentsService {
       });
 
       return updatedPayment;
+    });
+  }
+
+  private async notifyVenueAboutReservationRequest(reservationId: string) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: { venue: { select: { id: true, name: true, ownerId: true } } },
+    });
+
+    if (!reservation?.venue.ownerId) {
+      return;
+    }
+
+    await this.deviceTokensService.sendToUser({
+      userId: reservation.venue.ownerId,
+      title: "Novi zahtjev za rezervaciju",
+      body: `${reservation.customerName ?? "Chin-Chin korisnik"} zeli rezervirati ${reservation.tableLabel ?? "Chin-Chin stol"}.`,
+      data: {
+        type: "reservation_request",
+        reservationId,
+        venueId: reservation.venue.id,
+      },
     });
   }
 

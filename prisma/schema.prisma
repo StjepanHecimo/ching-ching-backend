@@ -136,6 +136,28 @@ enum ChinChinContentType {
   OTHER
 }
 
+enum DevicePushPlatform {
+  IOS
+  ANDROID
+  WEB
+  MACOS
+  WINDOWS
+  LINUX
+  UNKNOWN
+}
+
+enum DevicePushApp {
+  CUSTOMER
+  VENUE_OWNER
+}
+
+enum PushNotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
 model User {
   id              String      @id @default(uuid())
   email           String      @unique
@@ -159,9 +181,56 @@ model User {
   reservations            Reservation[]
   reservationPayments     ReservationPayment[]
   ledgerEntries           LedgerEntry[]
+  devicePushTokens        DevicePushToken[]
+  pushNotificationLogs    PushNotificationLog[]
 
   @@index([status])
   @@map("users")
+}
+
+model DevicePushToken {
+  id          String             @id @default(uuid())
+  userId      String
+  token       String             @unique
+  provider    String             @default("FCM")
+  platform    DevicePushPlatform @default(UNKNOWN)
+  app         DevicePushApp
+  deviceId    String?
+  appVersion  String?
+  lastSeenAt  DateTime           @default(now())
+  disabledAt  DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  logs PushNotificationLog[]
+
+  @@index([userId])
+  @@index([app])
+  @@index([platform])
+  @@index([disabledAt])
+  @@map("device_push_tokens")
+}
+
+model PushNotificationLog {
+  id            String                 @id @default(uuid())
+  userId        String
+  deviceTokenId String?
+  title         String
+  body          String
+  data          Json?
+  status        PushNotificationStatus @default(PENDING)
+  error         String?
+  sentAt        DateTime?
+  createdAt     DateTime               @default(now())
+
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deviceToken DevicePushToken? @relation(fields: [deviceTokenId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([deviceTokenId])
+  @@index([status])
+  @@map("push_notification_logs")
 }
 
 model Venue {

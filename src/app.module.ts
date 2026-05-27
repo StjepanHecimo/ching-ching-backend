@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { AppController } from "./app.controller";
 import { AuthModule } from "./auth/auth.module";
+import { DeviceTokensModule } from "./device-tokens/device-tokens.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ReservationsModule } from "./reservations/reservations.module";
@@ -16,6 +17,7 @@ import { VenueDocumentsModule } from "./venue-documents/venue-documents.module";
     }),
     PrismaModule,
     AuthModule,
+    DeviceTokensModule,
     PaymentsModule,
     SpaceLayoutsModule,
     VenueDocumentsModule,

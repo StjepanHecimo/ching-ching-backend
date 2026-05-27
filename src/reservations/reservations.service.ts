@@ -11,6 +11,7 @@ import {
   SpaceLayoutStatus,
   UserRole,
 } from "../../generated/prisma/enums";
+import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { PaymentsService } from "../payments/payments.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
@@ -66,6 +67,7 @@ export class ReservationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly paymentsService: PaymentsService,
+    private readonly deviceTokensService: DeviceTokensService,
   ) {}
 
   async getVenueAvailability(
@@ -231,7 +233,9 @@ export class ReservationsService {
       throw new BadRequestException("Customer account was not found.");
     }
     if (customer.role !== UserRole.CUSTOMER) {
-      throw new BadRequestException("Only customer accounts can reserve tables.");
+      throw new BadRequestException(
+        "Only customer accounts can reserve tables.",
+      );
     }
 
     return this.createReservation(
@@ -322,7 +326,9 @@ export class ReservationsService {
       throw new BadRequestException("Customer account was not found.");
     }
     if (customer.role !== UserRole.CUSTOMER) {
-      throw new BadRequestException("Only customer accounts can list customer reservations.");
+      throw new BadRequestException(
+        "Only customer accounts can list customer reservations.",
+      );
     }
 
     return this.listCustomerReservations(customer.email);
@@ -405,6 +411,12 @@ export class ReservationsService {
       include: { venue: true },
     });
 
+    await this.notifyCustomer(updated, {
+      title: "Rezervacija prihvacena",
+      body: `${updated.venue.name} je prihvatio rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "reservation_accepted",
+    });
+
     return this.serializeReservation(updated);
   }
 
@@ -469,6 +481,12 @@ export class ReservationsService {
       include: { venue: true },
     });
 
+    await this.notifyCustomer(checkedIn, {
+      title: "Dolazak potvrden",
+      body: `${checkedIn.venue.name} je potvrdio da si u lokalu.`,
+      type: "venue_check_in_confirmed",
+    });
+
     return this.serializeReservation(checkedIn);
   }
 
@@ -507,6 +525,12 @@ export class ReservationsService {
         confirmationExpiresAt: null,
       },
       include: { venue: true },
+    });
+
+    await this.notifyVenueOwner(checkedIn, {
+      title: "Gost je potvrdio dolazak",
+      body: `${checkedIn.customerName ?? "Chin-Chin korisnik"} je potvrdio dolazak za ${checkedIn.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "customer_check_in_confirmed",
     });
 
     return this.serializeReservation(checkedIn);
@@ -759,6 +783,12 @@ export class ReservationsService {
       "Reservation request was declined by venue.",
     );
 
+    await this.notifyCustomer(updated, {
+      title: "Rezervacija odbijena",
+      body: `${updated.venue.name} nije prihvatio zahtjev za rezervaciju.`,
+      type: "reservation_declined",
+    });
+
     return this.serializeReservation(updated);
   }
 
@@ -810,6 +840,12 @@ export class ReservationsService {
       reservation.id,
       "Reservation was cancelled by customer before capture.",
     );
+
+    await this.notifyVenueOwner(updated, {
+      title: "Gost je otkazao rezervaciju",
+      body: `${updated.customerName ?? "Chin-Chin korisnik"} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "reservation_cancelled_by_customer",
+    });
 
     return this.serializeReservation(updated);
   }
@@ -875,6 +911,12 @@ export class ReservationsService {
       reservation.id,
       "Reservation was cancelled by venue before capture.",
     );
+
+    await this.notifyCustomer(updated, {
+      title: "Rezervacija otkazana",
+      body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "reservation_cancelled_by_venue",
+    });
 
     return {
       reservation: this.serializeReservation(updated),
@@ -1830,6 +1872,53 @@ export class ReservationsService {
           .filter((value): value is string => Boolean(value)),
       ),
     );
+  }
+
+  private async notifyCustomer(
+    reservation: {
+      id: string;
+      customerId: string | null;
+      tableLabel: string | null;
+      venue: { id: string; name: string };
+    },
+    notification: { title: string; body: string; type: string },
+  ) {
+    if (!reservation.customerId) {
+      return;
+    }
+
+    await this.deviceTokensService.sendToUser({
+      userId: reservation.customerId,
+      title: notification.title,
+      body: notification.body,
+      data: {
+        type: notification.type,
+        reservationId: reservation.id,
+        venueId: reservation.venue.id,
+      },
+    });
+  }
+
+  private async notifyVenueOwner(
+    reservation: {
+      id: string;
+      venueId: string;
+      tableLabel: string | null;
+      customerName: string | null;
+      venue: { id: string; name: string; ownerId: string };
+    },
+    notification: { title: string; body: string; type: string },
+  ) {
+    await this.deviceTokensService.sendToUser({
+      userId: reservation.venue.ownerId,
+      title: notification.title,
+      body: notification.body,
+      data: {
+        type: notification.type,
+        reservationId: reservation.id,
+        venueId: reservation.venueId,
+      },
+    });
   }
 
   private serializeReservation(reservation: {
