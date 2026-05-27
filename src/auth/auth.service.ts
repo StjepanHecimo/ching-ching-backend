@@ -27,6 +27,8 @@ type TokenPair = {
   refreshToken: string;
 };
 
+const DEFAULT_REFRESH_TOKEN_DAYS = 365;
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -182,14 +184,36 @@ export class AuthService {
           status: UserStatus.ACTIVE,
           emailVerifiedAt: new Date(),
         },
+        include: {
+          venues: true,
+        },
       });
     });
 
+    const tokens = await this.issueTokenPair({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    });
+    await this.storeRefreshToken(user.id, tokens.refreshToken);
+
     return {
+      ...tokens,
       userId: user.id,
       email: user.email,
       status: user.status,
       message: "Email verified.",
+      user: this.serializeAuthUser(user),
+      venue: user.venues[0]
+        ? {
+            id: user.venues[0].id,
+            name: user.venues[0].name,
+            slug: user.venues[0].slug,
+            address: user.venues[0].address,
+            city: user.venues[0].city,
+            country: user.venues[0].country,
+          }
+        : null,
     };
   }
 
@@ -462,7 +486,7 @@ export class AuthService {
       },
       {
         secret: this.configService.getOrThrow<string>("JWT_REFRESH_SECRET"),
-        expiresIn: "30d",
+        expiresIn: `${this.refreshTokenTtlDays()}d`,
       },
     );
 
@@ -499,7 +523,19 @@ export class AuthService {
   }
 
   private createRefreshTokenExpiryDate() {
-    return new Date(Date.now() + 1000 * 60 * 60 * 24 * 30);
+    return new Date(
+      Date.now() + 1000 * 60 * 60 * 24 * this.refreshTokenTtlDays(),
+    );
+  }
+
+  private refreshTokenTtlDays() {
+    const configuredDays = Number(
+      this.configService.get<string>("JWT_REFRESH_TOKEN_DAYS"),
+    );
+    if (Number.isFinite(configuredDays) && configuredDays >= 30) {
+      return Math.floor(configuredDays);
+    }
+    return DEFAULT_REFRESH_TOKEN_DAYS;
   }
 
   private createVerificationToken() {

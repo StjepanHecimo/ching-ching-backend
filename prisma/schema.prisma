@@ -69,6 +69,56 @@ enum ReservationType {
   LIVE
 }
 
+enum PaymentProvider {
+  WORLDLINE
+  MOCK
+}
+
+enum ReservationPaymentStatus {
+  AUTH_PENDING
+  AUTHORIZED
+  AUTH_FAILED
+  CAPTURE_PENDING
+  CAPTURED
+  CAPTURE_FAILED
+  VOID_PENDING
+  VOIDED
+  REFUND_PENDING
+  PARTIALLY_REFUNDED
+  REFUNDED
+  REFUND_FAILED
+  FAILED
+}
+
+enum PaymentWebhookStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum LedgerEntryType {
+  CUSTOMER_CAPTURE
+  CHIN_CHIN_FEE
+  VENUE_SHARE
+  CUSTOMER_REFUND
+  PAYMENT_VOID
+  VENUE_PAYOUT_ADJUSTMENT
+  CHARGEBACK
+}
+
+enum LedgerEntryDirection {
+  CREDIT
+  DEBIT
+}
+
+enum VenuePayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  CANCELLED
+}
+
 enum DrinkBrandType {
   GIN
   WHISKEY
@@ -107,6 +157,8 @@ model User {
   spaceLayoutProjects     SpaceLayoutProject[]
   venueDocumentRequests   VenueDocumentRequest[]
   reservations            Reservation[]
+  reservationPayments     ReservationPayment[]
+  ledgerEntries           LedgerEntry[]
 
   @@index([status])
   @@map("users")
@@ -137,6 +189,9 @@ model Venue {
   reservations         Reservation[]
   chinChinPanel        VenueChinChinPanel?
   reservationPenalties VenueReservationPenalty[]
+  reservationPayments  ReservationPayment[]
+  ledgerEntries        LedgerEntry[]
+  payoutBatches        VenuePayoutBatch[]
 
   @@index([ownerId])
   @@map("venues")
@@ -225,8 +280,10 @@ model Reservation {
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
 
-  venue    Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  customer User? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  venue         Venue                @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer      User?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  payments      ReservationPayment[]
+  ledgerEntries LedgerEntry[]
 
   @@index([venueId])
   @@index([customerId])
@@ -237,6 +294,114 @@ model Reservation {
   @@index([confirmationExpiresAt])
   @@index([venueId, tableId, timeSlotStart, timeSlotEnd])
   @@map("reservations")
+}
+
+model ReservationPayment {
+  id                        String                   @id @default(uuid())
+  reservationId             String
+  venueId                   String
+  customerId                String?
+  provider                  PaymentProvider          @default(WORLDLINE)
+  status                    ReservationPaymentStatus @default(AUTH_PENDING)
+  amountCents               Int
+  capturedCents             Int                      @default(0)
+  refundedCents             Int                      @default(0)
+  currency                  String                   @default("EUR")
+  providerPaymentId         String?
+  providerCheckoutId        String?
+  providerMerchantReference String?                  @unique
+  checkoutUrl               String?
+  checkoutExpiresAt         DateTime?
+  authorizedAt              DateTime?
+  capturedAt                DateTime?
+  voidedAt                  DateTime?
+  failedAt                  DateTime?
+  rawProviderData           Json?
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+
+  reservation   Reservation   @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  venue         Venue         @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer      User?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  ledgerEntries LedgerEntry[]
+
+  @@index([reservationId])
+  @@index([venueId])
+  @@index([customerId])
+  @@index([status])
+  @@index([providerPaymentId])
+  @@map("reservation_payments")
+}
+
+model LedgerEntry {
+  id            String               @id @default(uuid())
+  reservationId String?
+  paymentId     String?
+  venueId       String?
+  customerId    String?
+  payoutBatchId String?
+  type          LedgerEntryType
+  direction     LedgerEntryDirection
+  amountCents   Int
+  currency      String               @default("EUR")
+  description   String?
+  metadata      Json?
+  createdAt     DateTime             @default(now())
+
+  reservation Reservation?        @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  payment     ReservationPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  venue       Venue?              @relation(fields: [venueId], references: [id], onDelete: SetNull)
+  customer    User?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  payoutBatch VenuePayoutBatch?   @relation(fields: [payoutBatchId], references: [id], onDelete: SetNull)
+
+  @@index([reservationId])
+  @@index([paymentId])
+  @@index([venueId])
+  @@index([customerId])
+  @@index([payoutBatchId])
+  @@index([type])
+  @@map("ledger_entries")
+}
+
+model PaymentWebhookEvent {
+  id              String               @id @default(uuid())
+  provider        PaymentProvider      @default(WORLDLINE)
+  providerEventId String?
+  eventType       String?
+  status          PaymentWebhookStatus @default(RECEIVED)
+  payload         Json
+  processedAt     DateTime?
+  error           String?
+  createdAt       DateTime             @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([provider])
+  @@index([status])
+  @@map("payment_webhook_events")
+}
+
+model VenuePayoutBatch {
+  id               String            @id @default(uuid())
+  venueId          String
+  status           VenuePayoutStatus @default(PENDING)
+  periodStart      DateTime
+  periodEnd        DateTime
+  grossCents       Int               @default(0)
+  chinChinFeeCents Int               @default(0)
+  venueShareCents  Int               @default(0)
+  currency         String            @default("EUR")
+  notes            String?
+  paidAt           DateTime?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  venue   Venue         @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  entries LedgerEntry[]
+
+  @@index([venueId])
+  @@index([status])
+  @@index([periodStart, periodEnd])
+  @@map("venue_payout_batches")
 }
 
 model VenueReservationPenalty {

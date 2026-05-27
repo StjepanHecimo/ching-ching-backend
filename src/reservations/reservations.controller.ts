@@ -7,7 +7,11 @@ import {
   Patch,
   Post,
   Query,
+  Req,
+  UseGuards,
 } from "@nestjs/common";
+import { AuthenticatedRequest } from "../auth/authenticated-request";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
@@ -44,6 +48,20 @@ export class ReservationsController {
     return this.reservationsService.createReservation(venueId, dto);
   }
 
+  @Post("customers/venues/:venueId/request")
+  @UseGuards(JwtAuthGuard)
+  requestCustomerReservation(
+    @Param("venueId") venueId: string,
+    @Body() dto: CreateReservationDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.reservationsService.createCustomerReservation(
+      request.user.userId,
+      venueId,
+      dto,
+    );
+  }
+
   @Get("preview/venues/:venueId")
   listVenueReservations(@Param("venueId") venueId: string) {
     return this.reservationsService.listVenueReservations(venueId);
@@ -59,6 +77,14 @@ export class ReservationsController {
   @Get("preview/customers/reservations")
   listCustomerReservations(@Query("customerEmail") customerEmail?: string) {
     return this.reservationsService.listCustomerReservations(customerEmail);
+  }
+
+  @Get("customers/me/reservations")
+  @UseGuards(JwtAuthGuard)
+  listCurrentCustomerReservations(@Req() request: AuthenticatedRequest) {
+    return this.reservationsService.listCustomerReservationsForUser(
+      request.user.userId,
+    );
   }
 
   @Get("preview/admin/monitoring")

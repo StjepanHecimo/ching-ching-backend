@@ -9,7 +9,9 @@ import {
   ReservationStatus,
   ReservationType,
   SpaceLayoutStatus,
+  UserRole,
 } from "../../generated/prisma/enums";
+import { PaymentsService } from "../payments/payments.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { DeclineReservationDto } from "./dto/decline-reservation.dto";
@@ -61,7 +63,10 @@ const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 
 @Injectable()
 export class ReservationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly paymentsService: PaymentsService,
+  ) {}
 
   async getVenueAvailability(
     venueId: string,
@@ -118,7 +123,11 @@ export class ReservationsService {
     };
   }
 
-  async createReservation(venueId: string, dto: CreateReservationDto) {
+  async createReservation(
+    venueId: string,
+    dto: CreateReservationDto,
+    options?: { customerId?: string },
+  ) {
     const venue = await this.getVenueReservationState(venueId);
     const slot = this.parseSlot(dto.startAt, dto.endAt, venue);
     const liveDistanceMeters = this.validateReservationRuleContext(
@@ -166,24 +175,24 @@ export class ReservationsService {
       );
     }
 
-    const confirmationExpiresAt = new Date(
-      Date.now() + VENUE_CONFIRMATION_WINDOW_SECONDS * 1000,
-    );
+    await this.assertSingleActiveCustomerReservationPerDay(dto, slot.startAt);
+
     const reservation = await this.prisma.reservation.create({
       data: {
         venueId,
+        customerId: options?.customerId,
         tableId: table.tableId,
         tableLabel: table.tableLabel,
         roomLabel: table.roomLabel,
         type: dto.type as ReservationType,
-        status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
+        status: ReservationStatus.REQUESTED,
         partySize: dto.partySize,
         timeSlotStart: slot.startAt,
         timeSlotEnd: slot.endAt,
         checkInOpensAt: slot.checkInOpensAt,
         checkInClosesAt: slot.checkInClosesAt,
         arrivalDeadlineAt: slot.arrivalDeadlineAt,
-        confirmationExpiresAt,
+        confirmationExpiresAt: null,
         feeCents: this.calculateFeeCents(dto.type, table),
         refundCents: 0,
         currency: "EUR",
@@ -199,6 +208,42 @@ export class ReservationsService {
     });
 
     return this.serializeReservation(reservation);
+  }
+
+  async createCustomerReservation(
+    customerId: string,
+    venueId: string,
+    dto: CreateReservationDto,
+  ) {
+    const customer = await this.prisma.user.findUnique({
+      where: { id: customerId },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        phoneNumber: true,
+        role: true,
+      },
+    });
+
+    if (!customer) {
+      throw new BadRequestException("Customer account was not found.");
+    }
+    if (customer.role !== UserRole.CUSTOMER) {
+      throw new BadRequestException("Only customer accounts can reserve tables.");
+    }
+
+    return this.createReservation(
+      venueId,
+      {
+        ...dto,
+        customerName: `${customer.firstName} ${customer.lastName}`.trim(),
+        customerEmail: customer.email,
+        customerPhone: customer.phoneNumber ?? dto.customerPhone,
+      },
+      { customerId },
+    );
   }
 
   async listVenueReservations(venueId: string) {
@@ -265,6 +310,22 @@ export class ReservationsService {
         this.serializeReservation(reservation),
       ),
     };
+  }
+
+  async listCustomerReservationsForUser(customerId: string) {
+    const customer = await this.prisma.user.findUnique({
+      where: { id: customerId },
+      select: { id: true, email: true, role: true },
+    });
+
+    if (!customer) {
+      throw new BadRequestException("Customer account was not found.");
+    }
+    if (customer.role !== UserRole.CUSTOMER) {
+      throw new BadRequestException("Only customer accounts can list customer reservations.");
+    }
+
+    return this.listCustomerReservations(customer.email);
   }
 
   async listReservationMonitoring(filters?: {
@@ -505,6 +566,10 @@ export class ReservationsService {
         },
         include: { venue: true },
       });
+      await this.paymentsService.voidForInactiveReservation(
+        reservation.id,
+        "Venue confirmation window expired.",
+      );
       return this.serializeReservation(expired);
     }
 
@@ -527,6 +592,7 @@ export class ReservationsService {
       now.getTime() + LIVE_CUSTOMER_CHECK_IN_WINDOW_MINUTES * 60 * 1000,
     );
     const isLiveReservation = reservation.type === ReservationType.LIVE;
+    await this.paymentsService.captureForAcceptedReservation(reservation.id);
 
     const updated = await this.prisma.reservation.update({
       where: { id },
@@ -688,6 +754,11 @@ export class ReservationsService {
       include: { venue: true },
     });
 
+    await this.paymentsService.voidForInactiveReservation(
+      reservation.id,
+      "Reservation request was declined by venue.",
+    );
+
     return this.serializeReservation(updated);
   }
 
@@ -730,6 +801,16 @@ export class ReservationsService {
       include: { venue: true },
     });
 
+    await this.paymentsService.refundCapturedReservation(
+      reservation.id,
+      refundCents,
+      "Reservation was cancelled by customer.",
+    );
+    await this.paymentsService.voidForInactiveReservation(
+      reservation.id,
+      "Reservation was cancelled by customer before capture.",
+    );
+
     return this.serializeReservation(updated);
   }
 
@@ -763,6 +844,7 @@ export class ReservationsService {
           status: ReservationStatus.CANCELLED,
           cancelledAt: now,
           releasedAt: now,
+          refundCents: reservation.feeCents,
           confirmationExpiresAt: null,
           notes: dto?.notes?.trim() ?? reservation.notes,
         },
@@ -783,6 +865,16 @@ export class ReservationsService {
 
       return cancelled;
     });
+
+    await this.paymentsService.refundCapturedReservation(
+      reservation.id,
+      reservation.feeCents,
+      "Reservation was cancelled by venue.",
+    );
+    await this.paymentsService.voidForInactiveReservation(
+      reservation.id,
+      "Reservation was cancelled by venue before capture.",
+    );
 
     return {
       reservation: this.serializeReservation(updated),
@@ -1150,7 +1242,6 @@ export class ReservationsService {
                 {
                   status: {
                     in: [
-                      ReservationStatus.REQUESTED,
                       ReservationStatus.CONFIRMED,
                       ReservationStatus.RESERVED,
                       ReservationStatus.CHECK_IN_PENDING,
@@ -1184,6 +1275,52 @@ export class ReservationsService {
           return blockEnd.getTime() > startAt.getTime();
         }),
       );
+  }
+
+  private async assertSingleActiveCustomerReservationPerDay(
+    dto: CreateReservationDto,
+    startAt: Date,
+  ) {
+    const normalizedEmail = dto.customerEmail?.trim().toLowerCase();
+    const normalizedPhone = dto.customerPhone?.trim();
+
+    if (!normalizedEmail && !normalizedPhone) {
+      return;
+    }
+
+    const dayStart = this.startOfLocalCalendarDay(startAt);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+
+    const existing = await this.prisma.reservation.findFirst({
+      where: {
+        OR: [
+          ...(normalizedEmail ? [{ customerEmail: normalizedEmail }] : []),
+          ...(normalizedPhone ? [{ customerPhone: normalizedPhone }] : []),
+        ],
+        timeSlotStart: {
+          gte: dayStart,
+          lt: dayEnd,
+        },
+        status: {
+          in: [
+            ReservationStatus.PENDING_VENUE_CONFIRMATION,
+            ReservationStatus.CONFIRMED,
+            ReservationStatus.RESERVED,
+            ReservationStatus.CHECK_IN_PENDING,
+            ReservationStatus.CHECKED_IN,
+            ReservationStatus.SEATED,
+          ],
+        },
+      },
+      select: { id: true },
+    });
+
+    if (existing) {
+      throw new ConflictException(
+        "Customer already has an active reservation for this day.",
+      );
+    }
   }
 
   private effectiveReservationBlockEnd(reservation: {
@@ -1315,7 +1452,7 @@ export class ReservationsService {
 
   private async releaseExpiredVenueConfirmationRequests(venueId: string) {
     const now = new Date();
-    await this.prisma.reservation.updateMany({
+    const expiredReservations = await this.prisma.reservation.findMany({
       where: {
         venueId,
         status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
@@ -1327,11 +1464,31 @@ export class ReservationsService {
           },
         ],
       },
+      select: { id: true },
+    });
+
+    if (!expiredReservations.length) {
+      return;
+    }
+
+    await this.prisma.reservation.updateMany({
+      where: {
+        id: { in: expiredReservations.map((reservation) => reservation.id) },
+      },
       data: {
         status: ReservationStatus.EXPIRED,
         releasedAt: now,
       },
     });
+
+    await Promise.all(
+      expiredReservations.map((reservation) =>
+        this.paymentsService.voidForInactiveReservation(
+          reservation.id,
+          "Venue confirmation window expired.",
+        ),
+      ),
+    );
   }
 
   private async releaseExpiredArrivalLocks(venueId: string) {
@@ -1348,7 +1505,6 @@ export class ReservationsService {
         ],
         status: {
           in: [
-            ReservationStatus.REQUESTED,
             ReservationStatus.CONFIRMED,
             ReservationStatus.RESERVED,
             ReservationStatus.CHECK_IN_PENDING,
@@ -1379,6 +1535,18 @@ export class ReservationsService {
                 : 0,
           },
         }),
+      ),
+    );
+
+    await Promise.all(
+      expiredReservations.map((reservation) =>
+        this.paymentsService.refundCapturedReservation(
+          reservation.id,
+          reservation.type === ReservationType.ADVANCE
+            ? Math.floor(reservation.feeCents * 0.5)
+            : 0,
+          "Reservation was released as no-show.",
+        ),
       ),
     );
   }
@@ -1596,6 +1764,10 @@ export class ReservationsService {
       left.getMonth() === right.getMonth() &&
       left.getDate() === right.getDate()
     );
+  }
+
+  private startOfLocalCalendarDay(value: Date) {
+    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
   }
 
   private distanceMeters(
