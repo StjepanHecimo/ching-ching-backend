@@ -1,4 +1,10 @@
-import { IsObject, IsOptional, IsString, Length } from "class-validator";
+import {
+  IsBoolean,
+  IsObject,
+  IsOptional,
+  IsString,
+  Length,
+} from "class-validator";
 
 export class ApproveAdjustedLayoutPreviewDto {
   @IsObject()
@@ -13,4 +19,8 @@ export class ApproveAdjustedLayoutPreviewDto {
   @IsString()
   @Length(2, 500)
   reviewNotes?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  forceApprove?: boolean;
 }

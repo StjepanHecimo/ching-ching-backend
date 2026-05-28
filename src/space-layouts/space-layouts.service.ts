@@ -98,6 +98,50 @@ export class SpaceLayoutsService {
     return projects.map((project) => this.serializeProject(project));
   }
 
+  async listAdminVenuesPreview() {
+    const venues = await this.prisma.venue.findMany({
+      orderBy: [{ updatedAt: "desc" }, { name: "asc" }],
+      include: {
+        owner: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phoneNumber: true,
+          },
+        },
+        spaceLayoutProjects: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            updatedAt: true,
+            approvedAt: true,
+          },
+        },
+      },
+    });
+
+    return venues.map((venue) => {
+      const latestProject = venue.spaceLayoutProjects[0] ?? null;
+      return {
+        id: venue.id,
+        name: venue.name,
+        slug: venue.slug,
+        address: venue.address,
+        city: venue.city,
+        country: venue.country,
+        isLive: venue.isLive,
+        owner: venue.owner,
+        latestProject,
+        updatedAt: venue.updatedAt,
+        createdAt: venue.createdAt,
+      };
+    });
+  }
+
   async get(userId: string, id: string) {
     const project = await this.findOwnedProject(userId, id);
 
@@ -346,20 +390,24 @@ export class SpaceLayoutsService {
       );
     }
 
-    const photo = this.normalizePhoto(
-      dto.photo,
-      `change-request-${dto.tableId}-photo`,
-    );
+    const photo = dto.photo
+      ? this.normalizePhoto(dto.photo, `change-request-${dto.tableId}-photo`)
+      : null;
     const updatedLayout = this.markTableAsChinChinCandidate(
       sourceLayout,
       dto.tableId,
-      photo.id,
-      dto.chinChinTier ?? "STANDARD",
+      photo?.id ?? null,
+      dto.chinChinTier ?? (dto.seats && dto.seats > 4 ? "LARGE" : "STANDARD"),
+      dto.seats,
     );
     const now = new Date().toISOString();
     const photos = Array.isArray(sourceProject.photos)
-      ? [...sourceProject.photos, photo]
-      : [photo];
+      ? photo
+        ? [...sourceProject.photos, photo]
+        : [...sourceProject.photos]
+      : photo
+        ? [photo]
+        : [];
 
     const project = await this.prisma.spaceLayoutProject.create({
       data: {
@@ -378,8 +426,11 @@ export class SpaceLayoutsService {
           editedBy: "flutter-editor",
           changeRequestType: "ADD_CHIN_CHIN_TABLE",
           requestedTableId: dto.tableId,
-          requestedTablePhotoId: photo.id,
-          requestedChinChinTier: dto.chinChinTier ?? "STANDARD",
+          requestedTablePhotoId: photo?.id,
+          requestedChinChinTier:
+            dto.chinChinTier ??
+            (dto.seats && dto.seats > 4 ? "LARGE" : "STANDARD"),
+          requestedSeats: dto.seats,
           ownerNotes: dto.ownerNotes?.trim(),
           layout: updatedLayout,
           sourceProjectId: sourceProject.id,
@@ -393,8 +444,11 @@ export class SpaceLayoutsService {
             type: "ADD_CHIN_CHIN_TABLE",
             sourceProjectId: sourceProject.id,
             tableId: dto.tableId,
-            tablePhotoId: photo.id,
-            chinChinTier: dto.chinChinTier ?? "STANDARD",
+            tablePhotoId: photo?.id,
+            chinChinTier:
+              dto.chinChinTier ??
+              (dto.seats && dto.seats > 4 ? "LARGE" : "STANDARD"),
+            seats: dto.seats,
             requestedAt: now,
           },
         } as Prisma.InputJsonValue,
@@ -544,19 +598,21 @@ export class SpaceLayoutsService {
         ? dto.layout.rooms.length
         : null,
     });
-    const layoutForApproval = isAdditionalRoomRequest
-      ? await this.mergeAdditionalRoomLayout(
-          project.venueId,
-          project.id,
-          dto.layout,
-        )
-      : isDeleteRoomRequest
-        ? this.removeRequestedRoomFromLayout(
+    const layoutForApproval = dto.forceApprove
+      ? dto.layout
+      : isAdditionalRoomRequest
+        ? await this.mergeAdditionalRoomLayout(
+            project.venueId,
+            project.id,
             dto.layout,
-            changeRequest?.roomLabel?.toString() ??
-              previousSavedLayout.requestedRoomLabel?.toString(),
           )
-        : dto.layout;
+        : isDeleteRoomRequest
+          ? this.removeRequestedRoomFromLayout(
+              dto.layout,
+              changeRequest?.roomLabel?.toString() ??
+                previousSavedLayout.requestedRoomLabel?.toString(),
+            )
+          : dto.layout;
 
     const adjustedBy = dto.adjustedBy?.trim() || "chin-chin-admin-panel";
     const versionedSavedLayout = this.createApprovedSavedLayoutVersion({
@@ -581,7 +637,10 @@ export class SpaceLayoutsService {
             reviewedByUserId: "admin-preview",
             reviewNotes:
               dto.reviewNotes?.trim() ||
-              "Approved from Chin-Chin admin panel preview endpoint.",
+              (dto.forceApprove
+                ? "Force approved from Chin-Chin admin panel preview endpoint."
+                : "Approved from Chin-Chin admin panel preview endpoint."),
+            forceApproved: dto.forceApprove === true,
             reviewedAt: now,
           },
         } as Prisma.InputJsonValue,
@@ -856,8 +915,9 @@ export class SpaceLayoutsService {
   private markTableAsChinChinCandidate(
     layout: Record<string, unknown>,
     tableId: string,
-    photoId: string,
+    photoId: string | null,
     chinChinTier: "STANDARD" | "LARGE",
+    requestedSeats?: number,
   ) {
     const clonedLayout = JSON.parse(JSON.stringify(layout)) as Record<
       string,
@@ -886,21 +946,35 @@ export class SpaceLayoutsService {
         tableMap.tableRole = "CHIN_CHIN_TABLE";
         tableMap.chinChinTier = chinChinTier;
         tableMap.chinChinCandidate = true;
-        tableMap.tablePhotoId = photoId;
-        tableMap.tablePhotoStatus = "APPROVED_WITH_PHOTO";
+        if (photoId) {
+          tableMap.tablePhotoId = photoId;
+          tableMap.tablePhotoStatus = "APPROVED_WITH_PHOTO";
+        }
+        if (requestedSeats) {
+          tableMap.seats = requestedSeats;
+          tableMap.maxPartySize = requestedSeats;
+          tableMap.minPartySize = requestedSeats <= 4 ? 2 : 4;
+        }
         if (chinChinTier === "LARGE") {
-          tableMap.seats = Math.max(this.numberFrom(tableMap.seats, 6), 6);
+          tableMap.seats = Math.max(
+            this.numberFrom(tableMap.seats, requestedSeats ?? 6),
+            requestedSeats ?? 6,
+            6,
+          );
           tableMap.maxPartySize = Math.max(
-            this.numberFrom(tableMap.maxPartySize, 6),
+            this.numberFrom(tableMap.maxPartySize, requestedSeats ?? 6),
+            requestedSeats ?? 6,
             6,
           );
           tableMap.minPartySize = Math.min(
             this.numberFrom(tableMap.minPartySize, 2),
-            2,
+            requestedSeats && requestedSeats > 4 ? 4 : 2,
           );
         } else {
+          tableMap.seats =
+            requestedSeats ?? Math.min(this.numberFrom(tableMap.seats, 4), 4);
           tableMap.maxPartySize = Math.min(
-            this.numberFrom(tableMap.maxPartySize, 4),
+            this.numberFrom(tableMap.maxPartySize, requestedSeats ?? 4),
             4,
           );
           tableMap.minPartySize = Math.min(

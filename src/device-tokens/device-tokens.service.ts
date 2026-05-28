@@ -12,6 +12,7 @@ import { UpsertDeviceTokenDto } from "./dto/upsert-device-token.dto";
 
 type PushPayload = {
   userId: string;
+  app?: DevicePushApp;
   title: string;
   body: string;
   data?: Record<string, string>;
@@ -69,6 +70,7 @@ export class DeviceTokensService {
     const tokens = await this.prisma.devicePushToken.findMany({
       where: {
         userId: payload.userId,
+        ...(payload.app ? { app: payload.app } : {}),
         disabledAt: null,
       },
       orderBy: { lastSeenAt: "desc" },
@@ -172,6 +174,10 @@ export class DeviceTokensService {
                 },
                 payload: {
                   aps: {
+                    alert: {
+                      title: payload.title,
+                      body: payload.body,
+                    },
                     sound: "default",
                   },
                 },

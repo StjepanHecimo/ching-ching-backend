@@ -1,11 +1,13 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
 import {
+  DevicePushApp,
   LedgerEntryDirection,
   LedgerEntryType,
   PaymentProvider,
@@ -25,6 +27,8 @@ const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 
 @Injectable()
 export class PaymentsService {
+  private readonly logger = new Logger(PaymentsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
@@ -801,16 +805,25 @@ export class PaymentsService {
       return;
     }
 
-    await this.deviceTokensService.sendToUser({
-      userId: reservation.venue.ownerId,
-      title: "Novi zahtjev za rezervaciju",
-      body: `${reservation.customerName ?? "Chin-Chin korisnik"} zeli rezervirati ${reservation.tableLabel ?? "Chin-Chin stol"}.`,
-      data: {
-        type: "reservation_request",
-        reservationId,
-        venueId: reservation.venue.id,
-      },
-    });
+    try {
+      await this.deviceTokensService.sendToUser({
+        userId: reservation.venue.ownerId,
+        app: DevicePushApp.VENUE_OWNER,
+        title: "Novi zahtjev za rezervaciju",
+        body: `${reservation.customerName ?? "Chin-Chin korisnik"} zeli rezervirati ${reservation.tableLabel ?? "Chin-Chin stol"}.`,
+        data: {
+          type: "reservation_request",
+          reservationId,
+          venueId: reservation.venue.id,
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${reservationId} was authorized, but venue push notification failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private findProviderPayment(input: {

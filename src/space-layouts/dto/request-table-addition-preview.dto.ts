@@ -1,10 +1,12 @@
 import { Type } from "class-transformer";
 import {
-  IsDefined,
   IsIn,
+  IsInt,
   IsOptional,
   IsString,
   Length,
+  Max,
+  Min,
   ValidateNested,
 } from "class-validator";
 import { LayoutPhotoDto } from "./layout-photo.dto";
@@ -14,10 +16,16 @@ export class RequestTableAdditionPreviewDto {
   @Length(2, 120)
   tableId!: string;
 
-  @IsDefined()
+  @IsOptional()
   @ValidateNested()
   @Type(() => LayoutPhotoDto)
-  photo!: LayoutPhotoDto;
+  photo?: LayoutPhotoDto;
+
+  @IsOptional()
+  @IsInt()
+  @Min(2)
+  @Max(12)
+  seats?: number;
 
   @IsOptional()
   @IsIn(["STANDARD", "LARGE"])

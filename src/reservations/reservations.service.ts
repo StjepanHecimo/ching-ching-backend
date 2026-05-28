@@ -2,10 +2,12 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { Prisma } from "../../generated/prisma/client";
 import {
+  DevicePushApp,
   ReservationStatus,
   ReservationType,
   SpaceLayoutStatus,
@@ -64,6 +66,8 @@ const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 
 @Injectable()
 export class ReservationsService {
+  private readonly logger = new Logger(ReservationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly paymentsService: PaymentsService,
@@ -412,9 +416,9 @@ export class ReservationsService {
     });
 
     await this.notifyCustomer(updated, {
-      title: "Rezervacija prihvacena",
-      body: `${updated.venue.name} je prihvatio rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
-      type: "reservation_accepted",
+      title: "Rezervacija otkazana",
+      body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "reservation_cancelled_by_admin",
     });
 
     return this.serializeReservation(updated);
@@ -1019,9 +1023,10 @@ export class ReservationsService {
       throw new NotFoundException("Venue was not found.");
     }
 
-    const liveChinChinTableIds = dto.isLive
-      ? this.uniqueNonEmptyStrings(dto.liveChinChinTableIds ?? [])
-      : [];
+    const liveChinChinTableIds =
+      dto.isLive || dto.liveChinChinTableIds !== undefined
+        ? this.uniqueNonEmptyStrings(dto.liveChinChinTableIds ?? [])
+        : undefined;
 
     const venue = await this.prisma.venue.update({
       where: { id: venueId },
@@ -1029,7 +1034,8 @@ export class ReservationsService {
         isLive: dto.isLive,
         latitude: dto.latitude,
         longitude: dto.longitude,
-        liveChinChinTableIds,
+        liveChinChinTableIds:
+          liveChinChinTableIds === undefined ? undefined : liveChinChinTableIds,
         liveStartedAt: dto.isLive ? new Date() : undefined,
         liveEndedAt: dto.isLive ? null : new Date(),
       },
@@ -1878,25 +1884,47 @@ export class ReservationsService {
     reservation: {
       id: string;
       customerId: string | null;
+      customerEmail?: string | null;
       tableLabel: string | null;
       venue: { id: string; name: string };
     },
     notification: { title: string; body: string; type: string },
   ) {
-    if (!reservation.customerId) {
+    let customerId = reservation.customerId;
+    if (!customerId && reservation.customerEmail) {
+      const customer = await this.prisma.user.findUnique({
+        where: { email: reservation.customerEmail.trim().toLowerCase() },
+        select: { id: true },
+      });
+      customerId = customer?.id ?? null;
+    }
+
+    if (!customerId) {
+      this.logger.warn(
+        `Reservation ${reservation.id} customer notification skipped: no customer id.`,
+      );
       return;
     }
 
-    await this.deviceTokensService.sendToUser({
-      userId: reservation.customerId,
-      title: notification.title,
-      body: notification.body,
-      data: {
-        type: notification.type,
-        reservationId: reservation.id,
-        venueId: reservation.venue.id,
-      },
-    });
+    try {
+      await this.deviceTokensService.sendToUser({
+        userId: customerId,
+        app: DevicePushApp.CUSTOMER,
+        title: notification.title,
+        body: notification.body,
+        data: {
+          type: notification.type,
+          reservationId: reservation.id,
+          venueId: reservation.venue.id,
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${reservation.id} customer notification failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private async notifyVenueOwner(
@@ -1909,16 +1937,25 @@ export class ReservationsService {
     },
     notification: { title: string; body: string; type: string },
   ) {
-    await this.deviceTokensService.sendToUser({
-      userId: reservation.venue.ownerId,
-      title: notification.title,
-      body: notification.body,
-      data: {
-        type: notification.type,
-        reservationId: reservation.id,
-        venueId: reservation.venueId,
-      },
-    });
+    try {
+      await this.deviceTokensService.sendToUser({
+        userId: reservation.venue.ownerId,
+        app: DevicePushApp.VENUE_OWNER,
+        title: notification.title,
+        body: notification.body,
+        data: {
+          type: notification.type,
+          reservationId: reservation.id,
+          venueId: reservation.venueId,
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${reservation.id} venue notification failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private serializeReservation(reservation: {

@@ -27,12 +27,19 @@ export class SpaceLayoutsPreviewController {
 
   @Get("preview/venues/:venueId/latest-approved")
   latestApprovedVenueProjectPreview(@Param("venueId") venueId: string) {
-    return this.spaceLayoutsService.getLatestApprovedVenueProjectPreview(venueId);
+    return this.spaceLayoutsService.getLatestApprovedVenueProjectPreview(
+      venueId,
+    );
   }
 
   @Get("preview/review-queue")
   reviewQueuePreview() {
     return this.spaceLayoutsService.listReviewQueuePreview();
+  }
+
+  @Get("preview/admin/venues")
+  adminVenuesPreview() {
+    return this.spaceLayoutsService.listAdminVenuesPreview();
   }
 
   @Post("preview/venues/:venueId/request-table-addition")
