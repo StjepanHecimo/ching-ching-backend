@@ -9,6 +9,7 @@ import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcrypt";
 import { createHash, randomBytes } from "node:crypto";
 import { UserRole, UserStatus } from "../../generated/prisma/enums";
+import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { LoginDto } from "./dto/login.dto";
 import { RefreshTokenDto } from "./dto/refresh-token.dto";
@@ -35,6 +36,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly emailService: EmailService,
   ) {}
 
   async registerVenueOwner(dto: RegisterVenueOwnerDto) {
@@ -85,7 +87,11 @@ export class AuthService {
       return { user, venue };
     });
 
-    this.logVerificationEmail(result.user.email, verificationToken);
+    await this.sendVerificationEmail(
+      result.user.email,
+      verificationToken,
+      result.user.role,
+    );
 
     return {
       userId: result.user.id,
@@ -136,7 +142,7 @@ export class AuthService {
       return createdUser;
     });
 
-    this.logVerificationEmail(user.email, verificationToken);
+    await this.sendVerificationEmail(user.email, verificationToken, user.role);
 
     return {
       userId: user.id,
@@ -256,7 +262,7 @@ export class AuthService {
       });
     });
 
-    this.logVerificationEmail(user.email, verificationToken);
+    await this.sendVerificationEmail(user.email, verificationToken, user.role);
 
     return {
       message:
@@ -304,7 +310,7 @@ export class AuthService {
       });
     });
 
-    this.logVerificationEmail(user.email, verificationToken);
+    await this.sendVerificationEmail(user.email, verificationToken, user.role);
 
     return {
       message:
@@ -546,16 +552,25 @@ export class AuthService {
     return createHash("sha256").update(token).digest("hex");
   }
 
-  private logVerificationEmail(email: string, token: string) {
+  private async sendVerificationEmail(
+    email: string,
+    token: string,
+    role: UserRole | string,
+  ) {
     const verificationLink =
       this.configService.getOrThrow<string>("APP_WEB_URL") +
       "/api/auth/verify-email?token=" +
       token;
+    const appScheme =
+      role === UserRole.CUSTOMER ? "chinchincustomer" : "chinchinvenue";
+    const appVerificationLink = `${appScheme}://verify-email?token=${token}`;
 
-    console.log("Chin-Chin verification email");
-    console.log("To: " + email);
-    console.log("Verification link: " + verificationLink);
-    console.log("Verification token: " + token);
+    await this.emailService.sendVerificationEmail({
+      to: email,
+      verificationLink,
+      appVerificationLink,
+      token,
+    });
   }
 
   private serializeAuthUser(user: {

@@ -4,6 +4,9 @@ generated/
 .env
 .env.*
 !.env.example
+*firebase-adminsdk*.json
+firebase-service-account*.json
+google-service-account*.json
 npm-debug.log*
 coverage/
 

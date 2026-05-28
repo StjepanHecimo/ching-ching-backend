@@ -1,4 +1,6 @@
 import { Module } from "@nestjs/common";
+import { JwtModule } from "@nestjs/jwt";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { DeviceTokensModule } from "../device-tokens/device-tokens.module";
 import { PaymentsModule } from "../payments/payments.module";
 import { PrismaModule } from "../prisma/prisma.module";
@@ -6,8 +8,8 @@ import { ReservationsController } from "./reservations.controller";
 import { ReservationsService } from "./reservations.service";
 
 @Module({
-  imports: [PrismaModule, PaymentsModule, DeviceTokensModule],
+  imports: [JwtModule.register({}), PrismaModule, PaymentsModule, DeviceTokensModule],
   controllers: [ReservationsController],
-  providers: [ReservationsService],
+  providers: [ReservationsService, JwtAuthGuard],
 })
 export class ReservationsModule {}
