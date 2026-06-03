@@ -7,6 +7,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
 import {
+  CustomerPaymentMethodStatus,
   DevicePushApp,
   LedgerEntryDirection,
   LedgerEntryType,
@@ -23,6 +24,7 @@ import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 
 const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 3000;
+const DEFAULT_FIRST_RESERVATION_COMMISSION_BPS = 1000;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 
 @Injectable()
@@ -39,6 +41,7 @@ export class PaymentsService {
   async createReservationCheckout(
     reservationId: string,
     dto: CreateReservationCheckoutDto,
+    customerUserId?: string,
   ) {
     const reservation = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
@@ -67,11 +70,71 @@ export class PaymentsService {
       orderBy: { createdAt: "desc" },
     });
 
-    if (existingPayment?.checkoutUrl) {
+    if (existingPayment) {
       return this.serializePayment(existingPayment);
     }
 
+    const savedPaymentMethod = await this.resolveCustomerPaymentMethod({
+      customerUserId,
+      reservationCustomerId: reservation.customerId,
+      paymentMethodId: dto.paymentMethodId,
+      useDefaultPaymentMethod: dto.useDefaultPaymentMethod,
+    });
+
     const merchantReference = `cc_${reservation.id}_${Date.now()}`;
+
+    if (savedPaymentMethod) {
+      const authorization =
+        await this.worldlineProvider.authorizeWithPaymentMethod({
+          providerPaymentMethodId: savedPaymentMethod.providerPaymentMethodId,
+          merchantReference,
+          amountCents: reservation.feeCents,
+          currency: reservation.currency,
+        });
+
+      const payment = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.reservationPayment.create({
+          data: {
+            reservationId: reservation.id,
+            venueId: reservation.venueId,
+            customerId: reservation.customerId,
+            paymentMethodId: savedPaymentMethod.id,
+            provider: PaymentProvider.WORLDLINE,
+            status: ReservationPaymentStatus.AUTH_PENDING,
+            amountCents: reservation.feeCents,
+            currency: reservation.currency,
+            providerPaymentId: authorization.providerPaymentId,
+            providerMerchantReference: merchantReference,
+            rawProviderData:
+              authorization.rawProviderData as Prisma.InputJsonValue,
+          },
+        });
+
+        await tx.reservation.update({
+          where: { id: reservation.id },
+          data: {
+            status: ReservationStatus.REQUESTED,
+            confirmationExpiresAt: null,
+          },
+        });
+
+        await tx.customerPaymentMethod.update({
+          where: { id: savedPaymentMethod.id },
+          data: { lastUsedAt: new Date() },
+        });
+
+        return created;
+      });
+
+      return this.serializePayment(
+        await this.markPaymentAuthorized({
+          providerPaymentId: payment.providerPaymentId ?? undefined,
+          merchantReference,
+          rawProviderData: authorization.rawProviderData,
+        }),
+      );
+    }
+
     const checkout = await this.worldlineProvider.createAuthorizationCheckout({
       reservationId: reservation.id,
       merchantReference,
@@ -86,6 +149,7 @@ export class PaymentsService {
           reservationId: reservation.id,
           venueId: reservation.venueId,
           customerId: reservation.customerId,
+          paymentMethodId: null,
           provider: PaymentProvider.WORLDLINE,
           status: ReservationPaymentStatus.AUTH_PENDING,
           amountCents: reservation.feeCents,
@@ -126,6 +190,106 @@ export class PaymentsService {
     };
   }
 
+  async listCustomerPaymentMethods(customerUserId: string) {
+    const methods = await this.prisma.customerPaymentMethod.findMany({
+      where: {
+        customerId: customerUserId,
+        status: CustomerPaymentMethodStatus.ACTIVE,
+      },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+    });
+
+    return {
+      items: methods.map((method) => this.serializePaymentMethod(method)),
+    };
+  }
+
+  async disableCustomerPaymentMethod(
+    customerUserId: string,
+    paymentMethodId: string,
+  ) {
+    const method = await this.prisma.customerPaymentMethod.findFirst({
+      where: {
+        id: paymentMethodId,
+        customerId: customerUserId,
+        status: CustomerPaymentMethodStatus.ACTIVE,
+      },
+    });
+
+    if (!method) {
+      throw new NotFoundException("Payment method was not found.");
+    }
+
+    const disabled = await this.prisma.customerPaymentMethod.update({
+      where: { id: method.id },
+      data: {
+        status: CustomerPaymentMethodStatus.DISABLED,
+        isDefault: false,
+        disabledAt: new Date(),
+      },
+    });
+
+    return this.serializePaymentMethod(disabled);
+  }
+
+  async setDefaultCustomerPaymentMethod(
+    customerUserId: string,
+    paymentMethodId: string,
+  ) {
+    const method = await this.prisma.customerPaymentMethod.findFirst({
+      where: {
+        id: paymentMethodId,
+        customerId: customerUserId,
+        status: CustomerPaymentMethodStatus.ACTIVE,
+      },
+    });
+
+    if (!method) {
+      throw new NotFoundException("Payment method was not found.");
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.customerPaymentMethod.updateMany({
+        where: { customerId: customerUserId },
+        data: { isDefault: false },
+      }),
+      this.prisma.customerPaymentMethod.update({
+        where: { id: method.id },
+        data: { isDefault: true },
+      }),
+    ]);
+
+    const updated = await this.prisma.customerPaymentMethod.findUniqueOrThrow({
+      where: { id: method.id },
+    });
+
+    return this.serializePaymentMethod(updated);
+  }
+
+  async previewReservationAllocation(reservation: {
+    id: string;
+    customerId: string | null;
+    customerEmail: string | null;
+    customerPhone: string | null;
+    feeCents: number;
+  }) {
+    const isNewCustomerReservation =
+      await this.isBeforeFirstCompletedCustomerVisit(reservation);
+    const commissionBps = isNewCustomerReservation
+      ? this.firstReservationCommissionBps()
+      : this.commissionBps();
+    const allocation = this.calculateAllocation(
+      reservation.feeCents,
+      commissionBps,
+    );
+
+    return {
+      ...allocation,
+      commissionBps,
+      isNewCustomerReservation,
+    };
+  }
+
   async getVenueEarnings(venueId: string) {
     const venue = await this.prisma.venue.findUnique({
       where: { id: venueId },
@@ -141,11 +305,17 @@ export class PaymentsService {
     const todayEnd = this.addDays(todayStart, 1);
     const currentWeekStart = this.startOfLocalWeek(now);
     const weekWindowStart = this.addDays(currentWeekStart, -28);
+    const weekWindowEnd = this.addDays(currentWeekStart, 35);
 
     const payments = await this.prisma.reservationPayment.findMany({
       where: {
         venueId,
-        capturedAt: { gte: weekWindowStart },
+        reservation: {
+          timeSlotStart: {
+            gte: weekWindowStart,
+            lt: weekWindowEnd,
+          },
+        },
         status: {
           in: [
             ReservationPaymentStatus.CAPTURED,
@@ -156,7 +326,7 @@ export class PaymentsService {
           ],
         },
       },
-      orderBy: { capturedAt: "desc" },
+      orderBy: { reservation: { timeSlotStart: "desc" } },
       include: {
         reservation: {
           select: {
@@ -168,14 +338,19 @@ export class PaymentsService {
             status: true,
           },
         },
+        ledgerEntries: {
+          select: {
+            type: true,
+            direction: true,
+            amountCents: true,
+          },
+        },
       },
     });
 
     const todayRows = payments.filter((payment) => {
-      const capturedAt = payment.capturedAt;
-      return (
-        capturedAt != null && capturedAt >= todayStart && capturedAt < todayEnd
-      );
+      const reservationStartAt = payment.reservation.timeSlotStart;
+      return reservationStartAt >= todayStart && reservationStartAt < todayEnd;
     });
 
     const weekBuckets = new Map<
@@ -193,11 +368,9 @@ export class PaymentsService {
     >();
 
     for (const payment of payments) {
-      if (!payment.capturedAt) {
-        continue;
-      }
-
-      const periodStart = this.startOfLocalWeek(payment.capturedAt);
+      const periodStart = this.startOfLocalWeek(
+        payment.reservation.timeSlotStart,
+      );
       const key = periodStart.toISOString();
       const bucket = weekBuckets.get(key) ?? {
         periodStart,
@@ -230,9 +403,8 @@ export class PaymentsService {
       generatedAt: now,
       today: this.serializeEarningsPeriod(todayStart, todayEnd, todayRows),
       weeks: [...weekBuckets.values()]
-        .sort(
-          (left, right) =>
-            right.periodStart.getTime() - left.periodStart.getTime(),
+        .sort((left, right) =>
+          this.compareEarningsWeeks(left.periodStart, right.periodStart, now),
         )
         .map((bucket) => ({
           periodStart: bucket.periodStart,
@@ -527,10 +699,17 @@ export class PaymentsService {
       throw new NotFoundException("Reservation payment was not found.");
     }
 
+    const existingRawProviderData = this.recordFromJson(
+      payment.rawProviderData,
+    );
     return this.markPaymentAuthorized({
       providerPaymentId: payment.providerPaymentId ?? payment.id,
       merchantReference: payment.providerMerchantReference ?? undefined,
-      rawProviderData: { mode: "mock", action: "AUTHORIZE_WEBHOOK" },
+      rawProviderData: {
+        ...existingRawProviderData,
+        mode: "mock",
+        action: "AUTHORIZE_WEBHOOK",
+      },
     });
   }
 
@@ -559,6 +738,14 @@ export class PaymentsService {
       payment.currency,
     );
 
+    const allocation = await this.previewReservationAllocation({
+      id: payment.reservation.id,
+      customerId: payment.reservation.customerId,
+      customerEmail: payment.reservation.customerEmail,
+      customerPhone: payment.reservation.customerPhone,
+      feeCents: payment.amountCents,
+    });
+
     const captured = await this.prisma.$transaction(async (tx) => {
       const updatedPayment = await tx.reservationPayment.update({
         where: { id: payment.id },
@@ -571,7 +758,7 @@ export class PaymentsService {
         },
       });
 
-      await this.createCaptureLedgerEntries(tx, updatedPayment);
+      await this.createCaptureLedgerEntries(tx, updatedPayment, allocation);
 
       return updatedPayment;
     });
@@ -733,6 +920,11 @@ export class PaymentsService {
     );
 
     const updatedPayment = await this.prisma.$transaction(async (tx) => {
+      const paymentMethod = await this.upsertSavedPaymentMethodFromProviderData(
+        tx,
+        payment.customerId,
+        input.rawProviderData,
+      );
       const updatedPayment = await tx.reservationPayment.update({
         where: { id: payment.id },
         data: {
@@ -740,6 +932,7 @@ export class PaymentsService {
           authorizedAt: payment.authorizedAt ?? new Date(),
           providerPaymentId:
             input.providerPaymentId ?? payment.providerPaymentId,
+          paymentMethodId: payment.paymentMethodId ?? paymentMethod?.id,
           rawProviderData: input.rawProviderData as Prisma.InputJsonValue,
         },
       });
@@ -793,6 +986,145 @@ export class PaymentsService {
 
       return updatedPayment;
     });
+  }
+
+  private async resolveCustomerPaymentMethod(input: {
+    customerUserId?: string;
+    reservationCustomerId: string | null;
+    paymentMethodId?: string;
+    useDefaultPaymentMethod?: boolean;
+  }) {
+    if (!input.paymentMethodId && !input.useDefaultPaymentMethod) {
+      return null;
+    }
+
+    if (
+      !input.customerUserId ||
+      input.customerUserId !== input.reservationCustomerId
+    ) {
+      throw new BadRequestException(
+        "Saved payment methods can be used only by the reservation customer.",
+      );
+    }
+
+    const method = input.paymentMethodId
+      ? await this.prisma.customerPaymentMethod.findFirst({
+          where: {
+            id: input.paymentMethodId,
+            customerId: input.customerUserId,
+            status: CustomerPaymentMethodStatus.ACTIVE,
+          },
+        })
+      : await this.prisma.customerPaymentMethod.findFirst({
+          where: {
+            customerId: input.customerUserId,
+            status: CustomerPaymentMethodStatus.ACTIVE,
+            isDefault: true,
+          },
+          orderBy: { createdAt: "desc" },
+        });
+
+    if (!method) {
+      throw new NotFoundException("Saved payment method was not found.");
+    }
+
+    return method;
+  }
+
+  private async upsertSavedPaymentMethodFromProviderData(
+    tx: Prisma.TransactionClient,
+    customerId: string | null,
+    rawProviderData: Record<string, unknown>,
+  ) {
+    if (!customerId) {
+      return null;
+    }
+
+    const providerMethod = this.paymentMethodFromProviderData(rawProviderData);
+    if (!providerMethod) {
+      return null;
+    }
+
+    const existing = await tx.customerPaymentMethod.findUnique({
+      where: {
+        providerPaymentMethodId: providerMethod.providerPaymentMethodId,
+      },
+    });
+
+    if (existing && existing.customerId !== customerId) {
+      throw new BadRequestException(
+        "Saved payment method belongs to another customer.",
+      );
+    }
+
+    if (existing) {
+      return tx.customerPaymentMethod.update({
+        where: { id: existing.id },
+        data: {
+          status: CustomerPaymentMethodStatus.ACTIVE,
+          brand: providerMethod.brand ?? existing.brand,
+          last4: providerMethod.last4 ?? existing.last4,
+          expiryMonth: providerMethod.expiryMonth ?? existing.expiryMonth,
+          expiryYear: providerMethod.expiryYear ?? existing.expiryYear,
+          holderName: providerMethod.holderName ?? existing.holderName,
+          rawProviderData: rawProviderData as Prisma.InputJsonValue,
+          lastUsedAt: new Date(),
+          disabledAt: null,
+        },
+      });
+    }
+
+    const defaultMethod = await tx.customerPaymentMethod.findFirst({
+      where: {
+        customerId,
+        status: CustomerPaymentMethodStatus.ACTIVE,
+        isDefault: true,
+      },
+      select: { id: true },
+    });
+
+    return tx.customerPaymentMethod.create({
+      data: {
+        customerId,
+        provider: PaymentProvider.WORLDLINE,
+        status: CustomerPaymentMethodStatus.ACTIVE,
+        providerPaymentMethodId: providerMethod.providerPaymentMethodId,
+        brand: providerMethod.brand,
+        last4: providerMethod.last4,
+        expiryMonth: providerMethod.expiryMonth,
+        expiryYear: providerMethod.expiryYear,
+        holderName: providerMethod.holderName,
+        isDefault: !defaultMethod,
+        rawProviderData: rawProviderData as Prisma.InputJsonValue,
+        lastUsedAt: new Date(),
+      },
+    });
+  }
+
+  private paymentMethodFromProviderData(
+    rawProviderData: Record<string, unknown>,
+  ) {
+    const raw = this.recordFromJson(rawProviderData);
+    const source = this.recordFromJson(
+      raw.mockSavedPaymentMethod ?? raw.savedPaymentMethod ?? raw.paymentMethod,
+    );
+    const providerPaymentMethodId =
+      this.stringFrom(source.providerPaymentMethodId) ??
+      this.stringFrom(source.token) ??
+      this.stringFrom(source.id);
+
+    if (!providerPaymentMethodId) {
+      return null;
+    }
+
+    return {
+      providerPaymentMethodId,
+      brand: this.stringFrom(source.brand),
+      last4: this.stringFrom(source.last4),
+      expiryMonth: this.integerFrom(source.expiryMonth),
+      expiryYear: this.integerFrom(source.expiryYear),
+      holderName: this.stringFrom(source.holderName),
+    };
   }
 
   private async notifyVenueAboutReservationRequest(reservationId: string) {
@@ -855,8 +1187,17 @@ export class PaymentsService {
       amountCents: number;
       currency: string;
     },
+    allocation: {
+      chinChinFeeCents: number;
+      venueShareCents: number;
+      commissionBps: number;
+      isNewCustomerReservation: boolean;
+    },
   ) {
-    const allocation = this.calculateAllocation(payment.amountCents);
+    const allocationMetadata = {
+      commissionBps: allocation.commissionBps,
+      isNewCustomerReservation: allocation.isNewCustomerReservation,
+    };
     await tx.ledgerEntry.createMany({
       data: [
         {
@@ -880,6 +1221,7 @@ export class PaymentsService {
           amountCents: allocation.chinChinFeeCents,
           currency: payment.currency,
           description: "Chin-Chin platform fee allocation.",
+          metadata: allocationMetadata as Prisma.InputJsonValue,
         },
         {
           reservationId: payment.reservationId,
@@ -891,6 +1233,7 @@ export class PaymentsService {
           amountCents: allocation.venueShareCents,
           currency: payment.currency,
           description: "Venue payout allocation.",
+          metadata: allocationMetadata as Prisma.InputJsonValue,
         },
       ],
     });
@@ -922,10 +1265,11 @@ export class PaymentsService {
     });
   }
 
-  private calculateAllocation(amountCents: number) {
-    const chinChinFeeCents = Math.floor(
-      (amountCents * this.commissionBps()) / 10000,
-    );
+  private calculateAllocation(
+    amountCents: number,
+    commissionBps = this.commissionBps(),
+  ) {
+    const chinChinFeeCents = Math.floor((amountCents * commissionBps) / 10000);
     return {
       chinChinFeeCents,
       venueShareCents: amountCents - chinChinFeeCents,
@@ -935,12 +1279,64 @@ export class PaymentsService {
   private paymentNetAllocation(payment: {
     capturedCents: number;
     refundedCents: number;
+    ledgerEntries?: Array<{
+      type: LedgerEntryType;
+      direction: LedgerEntryDirection;
+      amountCents: number;
+    }>;
   }) {
     const netCents = Math.max(0, payment.capturedCents - payment.refundedCents);
+    const ledgerAllocation = this.captureAllocationFromLedger(
+      payment.ledgerEntries,
+    );
+    if (ledgerAllocation && payment.capturedCents > 0) {
+      const chinChinFeeCents = Math.floor(
+        (ledgerAllocation.chinChinFeeCents * netCents) / payment.capturedCents,
+      );
+      return {
+        netCents,
+        chinChinFeeCents,
+        venueShareCents: Math.max(0, netCents - chinChinFeeCents),
+      };
+    }
+
     return {
       netCents,
       ...this.calculateAllocation(netCents),
     };
+  }
+
+  private captureAllocationFromLedger(
+    ledgerEntries?: Array<{
+      type: LedgerEntryType;
+      direction: LedgerEntryDirection;
+      amountCents: number;
+    }>,
+  ) {
+    if (!ledgerEntries?.length) {
+      return null;
+    }
+
+    const chinChinFeeCents = ledgerEntries
+      .filter(
+        (entry) =>
+          entry.type === LedgerEntryType.CHIN_CHIN_FEE &&
+          entry.direction === LedgerEntryDirection.CREDIT,
+      )
+      .reduce((sum, entry) => sum + entry.amountCents, 0);
+    const venueShareCents = ledgerEntries
+      .filter(
+        (entry) =>
+          entry.type === LedgerEntryType.VENUE_SHARE &&
+          entry.direction === LedgerEntryDirection.CREDIT,
+      )
+      .reduce((sum, entry) => sum + entry.amountCents, 0);
+
+    if (chinChinFeeCents <= 0 && venueShareCents <= 0) {
+      return null;
+    }
+
+    return { chinChinFeeCents, venueShareCents };
   }
 
   private serializeEarningsPeriod(
@@ -988,6 +1384,33 @@ export class PaymentsService {
     };
   }
 
+  private compareEarningsWeeks(left: Date, right: Date, now: Date) {
+    const currentWeekStart = this.startOfLocalWeek(now).getTime();
+    const leftTime = left.getTime();
+    const rightTime = right.getTime();
+
+    if (leftTime === currentWeekStart) {
+      return -1;
+    }
+    if (rightTime === currentWeekStart) {
+      return 1;
+    }
+
+    const leftIsFuture = leftTime > currentWeekStart;
+    const rightIsFuture = rightTime > currentWeekStart;
+    if (leftIsFuture && rightIsFuture) {
+      return leftTime - rightTime;
+    }
+    if (leftIsFuture) {
+      return -1;
+    }
+    if (rightIsFuture) {
+      return 1;
+    }
+
+    return rightTime - leftTime;
+  }
+
   private startOfLocalDay(date: Date) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate());
   }
@@ -1014,6 +1437,64 @@ export class PaymentsService {
       return DEFAULT_CHIN_CHIN_COMMISSION_BPS;
     }
     return Math.max(0, Math.min(10000, Math.round(raw)));
+  }
+
+  private firstReservationCommissionBps() {
+    const raw = Number(
+      this.configService.get<string>(
+        "CHIN_CHIN_FIRST_RESERVATION_COMMISSION_BPS",
+      ) ?? DEFAULT_FIRST_RESERVATION_COMMISSION_BPS,
+    );
+    if (!Number.isFinite(raw)) {
+      return DEFAULT_FIRST_RESERVATION_COMMISSION_BPS;
+    }
+    return Math.max(0, Math.min(10000, Math.round(raw)));
+  }
+
+  private async isBeforeFirstCompletedCustomerVisit(reservation: {
+    id: string;
+    customerId: string | null;
+    customerEmail: string | null;
+    customerPhone: string | null;
+  }) {
+    const identityFilters = [
+      ...(reservation.customerId
+        ? [{ customerId: reservation.customerId }]
+        : []),
+      ...(reservation.customerEmail
+        ? [{ customerEmail: reservation.customerEmail.trim().toLowerCase() }]
+        : []),
+      ...(reservation.customerPhone
+        ? [{ customerPhone: reservation.customerPhone.trim() }]
+        : []),
+    ];
+
+    if (!identityFilters.length) {
+      return false;
+    }
+
+    const completedVisit = await this.prisma.reservation.findFirst({
+      where: {
+        id: { not: reservation.id },
+        AND: [
+          { OR: identityFilters },
+          {
+            OR: [
+              { checkedInAt: { not: null } },
+              { seatedAt: { not: null } },
+              {
+                status: {
+                  in: [ReservationStatus.CHECKED_IN, ReservationStatus.SEATED],
+                },
+              },
+            ],
+          },
+        ],
+      },
+      select: { id: true },
+    });
+
+    return !completedVisit;
   }
 
   private normalizedProviderStatus(
@@ -1056,10 +1537,25 @@ export class PaymentsService {
     return value as Record<string, unknown>;
   }
 
+  private recordFromJson(value: unknown) {
+    return this.toJsonObject(value);
+  }
+
   private stringFrom(value: unknown) {
     return typeof value === "string" && value.trim().length > 0
       ? value.trim()
       : undefined;
+  }
+
+  private integerFrom(value: unknown) {
+    if (typeof value === "number" && Number.isInteger(value)) {
+      return value;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number.parseInt(value, 10);
+      return Number.isInteger(parsed) ? parsed : undefined;
+    }
+    return undefined;
   }
 
   private nestedString(
@@ -1101,6 +1597,7 @@ export class PaymentsService {
     reservationId: string;
     venueId: string;
     customerId: string | null;
+    paymentMethodId: string | null;
     provider: PaymentProvider;
     status: ReservationPaymentStatus;
     amountCents: number;
@@ -1125,6 +1622,7 @@ export class PaymentsService {
       reservationId: payment.reservationId,
       venueId: payment.venueId,
       customerId: payment.customerId,
+      paymentMethodId: payment.paymentMethodId,
       provider: payment.provider,
       status: payment.status,
       amountCents: payment.amountCents,
@@ -1145,6 +1643,37 @@ export class PaymentsService {
       commissionBps: this.commissionBps(),
       createdAt: payment.createdAt,
       updatedAt: payment.updatedAt,
+    };
+  }
+
+  private serializePaymentMethod(method: {
+    id: string;
+    provider: PaymentProvider;
+    status: CustomerPaymentMethodStatus;
+    brand: string | null;
+    last4: string | null;
+    expiryMonth: number | null;
+    expiryYear: number | null;
+    holderName: string | null;
+    isDefault: boolean;
+    lastUsedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id: method.id,
+      provider: method.provider,
+      status: method.status,
+      brand: method.brand,
+      last4: method.last4,
+      expiryMonth: method.expiryMonth,
+      expiryYear: method.expiryYear,
+      holderName: method.holderName,
+      isDefault: method.isDefault,
+      label: `${method.brand ?? "Kartica"} •••• ${method.last4 ?? "----"}`,
+      lastUsedAt: method.lastUsedAt,
+      createdAt: method.createdAt,
+      updatedAt: method.updatedAt,
     };
   }
 }

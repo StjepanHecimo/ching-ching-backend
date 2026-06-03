@@ -74,6 +74,12 @@ enum PaymentProvider {
   MOCK
 }
 
+enum CustomerPaymentMethodStatus {
+  ACTIVE
+  DISABLED
+  EXPIRED
+}
+
 enum ReservationPaymentStatus {
   AUTH_PENDING
   AUTHORIZED
@@ -180,6 +186,7 @@ model User {
   venueDocumentRequests   VenueDocumentRequest[]
   reservations            Reservation[]
   reservationPayments     ReservationPayment[]
+  paymentMethods          CustomerPaymentMethod[]
   ledgerEntries           LedgerEntry[]
   devicePushTokens        DevicePushToken[]
   pushNotificationLogs    PushNotificationLog[]
@@ -370,6 +377,7 @@ model ReservationPayment {
   reservationId             String
   venueId                   String
   customerId                String?
+  paymentMethodId           String?
   provider                  PaymentProvider          @default(WORLDLINE)
   status                    ReservationPaymentStatus @default(AUTH_PENDING)
   amountCents               Int
@@ -389,17 +397,46 @@ model ReservationPayment {
   createdAt                 DateTime                 @default(now())
   updatedAt                 DateTime                 @updatedAt
 
-  reservation   Reservation   @relation(fields: [reservationId], references: [id], onDelete: Cascade)
-  venue         Venue         @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  customer      User?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  reservation   Reservation            @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  venue         Venue                  @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer      User?                  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  paymentMethod CustomerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
   ledgerEntries LedgerEntry[]
 
   @@index([reservationId])
   @@index([venueId])
   @@index([customerId])
+  @@index([paymentMethodId])
   @@index([status])
   @@index([providerPaymentId])
   @@map("reservation_payments")
+}
+
+model CustomerPaymentMethod {
+  id                      String                      @id @default(uuid())
+  customerId              String
+  provider                PaymentProvider             @default(WORLDLINE)
+  status                  CustomerPaymentMethodStatus @default(ACTIVE)
+  providerPaymentMethodId String                      @unique
+  brand                   String?
+  last4                   String?
+  expiryMonth             Int?
+  expiryYear              Int?
+  holderName              String?
+  isDefault               Boolean                     @default(false)
+  rawProviderData         Json?
+  lastUsedAt              DateTime?
+  disabledAt              DateTime?
+  createdAt               DateTime                    @default(now())
+  updatedAt               DateTime                    @updatedAt
+
+  customer User                 @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  payments ReservationPayment[]
+
+  @@index([customerId])
+  @@index([provider])
+  @@index([status])
+  @@map("customer_payment_methods")
 }
 
 model LedgerEntry {

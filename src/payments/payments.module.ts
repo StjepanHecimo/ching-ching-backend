@@ -1,4 +1,6 @@
 import { Module } from "@nestjs/common";
+import { JwtModule } from "@nestjs/jwt";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { DeviceTokensModule } from "../device-tokens/device-tokens.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PaymentsController } from "./payments.controller";
@@ -6,9 +8,9 @@ import { PaymentsService } from "./payments.service";
 import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 
 @Module({
-  imports: [PrismaModule, DeviceTokensModule],
+  imports: [JwtModule.register({}), PrismaModule, DeviceTokensModule],
   controllers: [PaymentsController],
-  providers: [PaymentsService, WorldlinePaymentProvider],
+  providers: [PaymentsService, WorldlinePaymentProvider, JwtAuthGuard],
   exports: [PaymentsService],
 })
 export class PaymentsModule {}

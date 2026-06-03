@@ -9,6 +9,13 @@ type CreateAuthorizationCheckoutInput = {
   saveCard?: boolean;
 };
 
+type AuthorizeWithPaymentMethodInput = {
+  providerPaymentMethodId: string;
+  merchantReference: string;
+  amountCents: number;
+  currency: string;
+};
+
 type ProviderPaymentResult = {
   providerPaymentId: string;
   rawProviderData: Record<string, unknown>;
@@ -31,6 +38,16 @@ export class WorldlinePaymentProvider {
           amountCents: input.amountCents,
           currency: input.currency,
           saveCard: input.saveCard === true,
+          mockSavedPaymentMethod: input.saveCard
+            ? {
+                providerPaymentMethodId: `mock_pm_${input.merchantReference}`,
+                brand: "Visa",
+                last4: "4242",
+                expiryMonth: 12,
+                expiryYear: 2030,
+                holderName: "Chin-Chin korisnik",
+              }
+            : null,
         },
       };
     }
@@ -39,6 +56,28 @@ export class WorldlinePaymentProvider {
     // state changes outside this adapter so provider replacement stays small.
     throw new Error(
       "Worldline production provider is not configured. Set WORLDLINE_MODE=mock for local development.",
+    );
+  }
+
+  async authorizeWithPaymentMethod(
+    input: AuthorizeWithPaymentMethodInput,
+  ): Promise<ProviderPaymentResult> {
+    if (this.useMockProvider()) {
+      return {
+        providerPaymentId: `mock_payment_${input.merchantReference}`,
+        rawProviderData: {
+          mode: "mock",
+          action: "AUTHORIZE_WITH_PAYMENT_METHOD",
+          providerPaymentMethodId: input.providerPaymentMethodId,
+          amountCents: input.amountCents,
+          currency: input.currency,
+          authorizedAt: new Date().toISOString(),
+        },
+      };
+    }
+
+    throw new Error(
+      "Worldline production card-on-file authorization is not configured.",
     );
   }
 

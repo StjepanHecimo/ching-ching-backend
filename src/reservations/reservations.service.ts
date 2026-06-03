@@ -59,10 +59,12 @@ const LIVE_RADIUS_METERS = 1000;
 const ARRIVAL_GRACE_MINUTES = 15;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const LIVE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 10;
-const RESERVATION_WINDOW_MIN_START_MINUTES = 18 * 60;
-const RESERVATION_WINDOW_MAX_END_MINUTES = 23 * 60 + 30;
+const RESERVATION_WINDOW_MIN_START_MINUTES = 12 * 60;
+const RESERVATION_WINDOW_MAX_END_MINUTES = 23 * 60;
 const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
+const LAST_RESERVATION_REQUEST_BUFFER_MINUTES = 15;
+const LIVE_PROMOTIONAL_PRICE_START_MINUTES = 18 * 60;
 
 @Injectable()
 export class ReservationsService {
@@ -87,17 +89,20 @@ export class ReservationsService {
       query.userLongitude,
     );
     await this.releaseExpiredReservationLocks(venueId);
-    const tables = this.filterTablesForVenueLiveState(
+    const tables = this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
       venue,
+      query.type,
     );
     const blockingReservations = await this.findBlockingReservations(
       venueId,
       slot.startAt,
       slot.endAt,
     );
-    const blockedTableIds = new Set(
-      blockingReservations.map((reservation) => reservation.tableId),
+    const blockedTableKeys = new Set(
+      blockingReservations.flatMap((reservation) =>
+        this.tableIdentityKeys(reservation.tableId, reservation.tableLabel),
+      ),
     );
 
     return {
@@ -111,21 +116,24 @@ export class ReservationsService {
       partySize: query.partySize,
       liveRadiusMeters: query.type === "LIVE" ? LIVE_RADIUS_METERS : null,
       distanceMeters: liveDistanceMeters,
-      tables: tables.map((table) => ({
-        ...table,
-        priceCents: this.calculateFeeCents(query.type, table),
-        currency: "EUR",
-        available:
-          table.reservable &&
-          query.partySize >= table.minPartySize &&
-          query.partySize <= table.maxPartySize &&
-          !blockedTableIds.has(table.tableId),
-        unavailableReason: this.unavailableReason(
-          table,
-          query.partySize,
-          blockedTableIds,
-        ),
-      })),
+      tables: tables.map((table) => {
+        const reserved = this.isTableReservedByKeys(table, blockedTableKeys);
+        return {
+          ...table,
+          priceCents: this.calculateFeeCents(query.type, table, slot.startAt),
+          currency: "EUR",
+          available:
+            table.reservable &&
+            query.partySize >= table.minPartySize &&
+            query.partySize <= table.maxPartySize &&
+            !reserved,
+          unavailableReason: this.unavailableReason(
+            table,
+            query.partySize,
+            reserved,
+          ),
+        };
+      }),
     };
   }
 
@@ -143,9 +151,10 @@ export class ReservationsService {
       dto.userLongitude,
     );
     await this.releaseExpiredReservationLocks(venueId);
-    const tables = this.filterTablesForVenueLiveState(
+    const tables = this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
       venue,
+      dto.type,
     );
     const table = tables.find((item) => item.tableId === dto.tableId);
 
@@ -172,7 +181,7 @@ export class ReservationsService {
       venueId,
       slot.startAt,
       slot.endAt,
-      dto.tableId,
+      { tableId: dto.tableId, tableLabel: table.tableLabel },
     );
 
     if (blockingReservations.length) {
@@ -199,7 +208,7 @@ export class ReservationsService {
         checkInClosesAt: slot.checkInClosesAt,
         arrivalDeadlineAt: slot.arrivalDeadlineAt,
         confirmationExpiresAt: null,
-        feeCents: this.calculateFeeCents(dto.type, table),
+        feeCents: this.calculateFeeCents(dto.type, table, slot.startAt),
         refundCents: 0,
         currency: "EUR",
         userLatitude: dto.userLatitude,
@@ -263,8 +272,10 @@ export class ReservationsService {
       include: { venue: true },
     });
 
-    return reservations.map((reservation) =>
-      this.serializeReservation(reservation),
+    return Promise.all(
+      reservations.map((reservation) =>
+        this.serializeVenueReservationRequest(reservation),
+      ),
     );
   }
 
@@ -605,7 +616,10 @@ export class ReservationsService {
       reservation.venueId,
       reservation.timeSlotStart,
       reservation.timeSlotEnd,
-      reservation.tableId,
+      {
+        tableId: reservation.tableId,
+        tableLabel: reservation.tableLabel,
+      },
       reservation.id,
     );
 
@@ -1071,14 +1085,17 @@ export class ReservationsService {
     }
 
     const startMinutes = startAt.getHours() * 60 + startAt.getMinutes();
+    const latestReservationStartMinutes =
+      venue.reservationWindowEndMinutes -
+      LAST_RESERVATION_REQUEST_BUFFER_MINUTES;
     if (
       startMinutes < venue.reservationWindowStartMinutes ||
-      startMinutes > venue.reservationWindowEndMinutes
+      startMinutes > latestReservationStartMinutes
     ) {
       throw new BadRequestException(
         `Reservations are available from ${this.formatMinutes(
           venue.reservationWindowStartMinutes,
-        )} to ${this.formatMinutes(venue.reservationWindowEndMinutes)}.`,
+        )} to ${this.formatMinutes(latestReservationStartMinutes)}.`,
       );
     }
 
@@ -1129,11 +1146,12 @@ export class ReservationsService {
     };
   }
 
-  private filterTablesForVenueLiveState(
+  private filterTablesForReservationType(
     tables: ReservableTable[],
     venue: VenueReservationState,
+    type: "ADVANCE" | "LIVE",
   ) {
-    if (!venue.isLive) {
+    if (type !== "LIVE") {
       return tables;
     }
 
@@ -1158,6 +1176,12 @@ export class ReservationsService {
     if (!venue.isLive) {
       throw new BadRequestException(
         "Live reservations are available only while the venue is live.",
+      );
+    }
+
+    if (!venue.liveChinChinTableIds.length) {
+      throw new BadRequestException(
+        "Live reservations require active live Chin-Chin tables.",
       );
     }
 
@@ -1189,9 +1213,17 @@ export class ReservationsService {
     return Math.round(distanceMeters);
   }
 
-  private calculateFeeCents(type: "ADVANCE" | "LIVE", table: ReservableTable) {
-    const basePrice =
-      type === "LIVE" ? LIVE_BASE_PRICE_CENTS : ADVANCE_BASE_PRICE_CENTS;
+  private calculateFeeCents(
+    type: "ADVANCE" | "LIVE",
+    table: ReservableTable,
+    startAt: Date,
+  ) {
+    const startMinutes = startAt.getHours() * 60 + startAt.getMinutes();
+    const usesLivePromotionalPrice =
+      type === "LIVE" && startMinutes >= LIVE_PROMOTIONAL_PRICE_START_MINUTES;
+    const basePrice = usesLivePromotionalPrice
+      ? LIVE_BASE_PRICE_CENTS
+      : ADVANCE_BASE_PRICE_CENTS;
     const surcharge =
       table.chinChinTier === "LARGE" ||
       table.maxPartySize >= LARGE_TABLE_MIN_CAPACITY
@@ -1265,10 +1297,22 @@ export class ReservationsService {
     venueId: string,
     startAt: Date,
     endAt: Date,
-    tableId?: string,
+    tableIdentity?: { tableId?: string | null; tableLabel?: string | null },
     excludeReservationId?: string,
   ) {
     const now = new Date();
+    const dayStart = this.startOfLocalCalendarDay(startAt);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const tableKeys = tableIdentity
+      ? new Set(
+          this.tableIdentityKeys(
+            tableIdentity.tableId,
+            tableIdentity.tableLabel,
+          ),
+        )
+      : null;
+
     return this.prisma.reservation
       .findMany({
         where: {
@@ -1276,7 +1320,6 @@ export class ReservationsService {
             ? { id: { not: excludeReservationId } }
             : {}),
           venueId,
-          ...(tableId ? { tableId } : {}),
           AND: [
             {
               OR: [
@@ -1302,7 +1345,12 @@ export class ReservationsService {
             },
             {
               OR: [
-                { timeSlotEnd: { gt: startAt } },
+                {
+                  timeSlotStart: {
+                    gte: dayStart,
+                    lt: dayEnd,
+                  },
+                },
                 {
                   status: {
                     in: [
@@ -1314,14 +1362,29 @@ export class ReservationsService {
               ],
             },
           ],
-          timeSlotStart: { lt: endAt },
         },
       })
       .then((reservations) =>
-        reservations.filter((reservation) => {
-          const blockEnd = this.effectiveReservationBlockEnd(reservation);
-          return blockEnd.getTime() > startAt.getTime();
-        }),
+        reservations
+          .filter((reservation) => {
+            const blockEnd = this.effectiveReservationBlockEnd(reservation);
+            return (
+              this.isSameLocalCalendarDay(reservation.timeSlotStart, startAt) ||
+              blockEnd.getTime() > startAt.getTime()
+            );
+          })
+          .filter((reservation) => {
+            if (!tableKeys) {
+              return true;
+            }
+            return this.hasSharedTableIdentity(
+              tableKeys,
+              this.tableIdentityKeys(
+                reservation.tableId,
+                reservation.tableLabel,
+              ),
+            );
+          }),
       );
   }
 
@@ -1361,13 +1424,27 @@ export class ReservationsService {
           ],
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        venueId: true,
+        timeSlotStart: true,
+        venue: {
+          select: {
+            name: true,
+          },
+        },
+      },
     });
 
     if (existing) {
-      throw new ConflictException(
-        "Customer already has an active reservation for this day.",
-      );
+      throw new ConflictException({
+        code: "CUSTOMER_ACTIVE_RESERVATION_FOR_DAY",
+        message: "Customer already has an active reservation for this day.",
+        reservationId: existing.id,
+        venueId: existing.venueId,
+        venueName: existing.venue.name,
+        reservationDate: existing.timeSlotStart,
+      });
     }
   }
 
@@ -1449,7 +1526,7 @@ export class ReservationsService {
       endMinutes < startMinutes
     ) {
       throw new BadRequestException(
-        "Reservation window must be between 18:00 and 23:30.",
+        "Reservation window must be between 12:00 and 23:00.",
       );
     }
   }
@@ -1638,18 +1715,58 @@ export class ReservationsService {
   private unavailableReason(
     table: ReservableTable,
     partySize: number,
-    blockedTableIds: Set<string>,
+    reserved: boolean,
   ) {
+    if (reserved) {
+      return "RESERVED";
+    }
     if (!table.reservable) {
       return "NOT_RESERVABLE";
     }
     if (partySize < table.minPartySize || partySize > table.maxPartySize) {
       return "CAPACITY_MISMATCH";
     }
-    if (blockedTableIds.has(table.tableId)) {
-      return "RESERVED";
-    }
     return null;
+  }
+
+  private isTableReservedByKeys(
+    table: ReservableTable,
+    reservedTableKeys: Set<string>,
+  ) {
+    return this.hasSharedTableIdentity(
+      reservedTableKeys,
+      this.tableIdentityKeys(table.tableId, table.tableLabel),
+    );
+  }
+
+  private hasSharedTableIdentity(left: Set<string>, right: string[]) {
+    return right.some((key) => left.has(key));
+  }
+
+  private tableIdentityKeys(
+    tableId?: string | null,
+    tableLabel?: string | null,
+  ) {
+    const keys = new Set<string>();
+    for (const value of [tableId, tableLabel]) {
+      const text = value?.trim();
+      if (!text) {
+        continue;
+      }
+      keys.add(this.normalizeTableIdentity(text));
+      const numbers = text.match(/\d+/g);
+      if (numbers?.length) {
+        keys.add(`number:${numbers[numbers.length - 1]}`);
+      }
+    }
+    return [...keys];
+  }
+
+  private normalizeTableIdentity(value: string) {
+    return value
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_-]+/g, "");
   }
 
   private isTerminalReservationStatus(status: ReservationStatus) {
@@ -1961,6 +2078,7 @@ export class ReservationsService {
   private serializeReservation(reservation: {
     id: string;
     venueId: string;
+    customerId: string | null;
     tableId: string;
     tableLabel: string | null;
     roomLabel: string | null;
@@ -2046,6 +2164,65 @@ export class ReservationsService {
       source: reservation.source,
       createdAt: reservation.createdAt,
       updatedAt: reservation.updatedAt,
+    };
+  }
+
+  private async serializeVenueReservationRequest(reservation: {
+    id: string;
+    venueId: string;
+    customerId: string | null;
+    tableId: string;
+    tableLabel: string | null;
+    roomLabel: string | null;
+    type: ReservationType;
+    status: ReservationStatus;
+    partySize: number;
+    timeSlotStart: Date;
+    timeSlotEnd: Date;
+    checkInOpensAt: Date | null;
+    checkInClosesAt: Date | null;
+    arrivalDeadlineAt: Date | null;
+    confirmationExpiresAt: Date | null;
+    confirmedAt: Date | null;
+    declinedAt: Date | null;
+    customerCheckedInAt: Date | null;
+    checkedInAt: Date | null;
+    seatedAt: Date | null;
+    cancelledAt: Date | null;
+    releasedAt: Date | null;
+    feeCents: number;
+    refundCents: number;
+    currency: string;
+    userLatitude: number | null;
+    userLongitude: number | null;
+    distanceMeters: number | null;
+    customerName: string | null;
+    customerEmail: string | null;
+    customerPhone: string | null;
+    notes: string | null;
+    source: string;
+    createdAt: Date;
+    updatedAt: Date;
+    venue: {
+      id: string;
+      name: string;
+      slug: string;
+    };
+  }) {
+    const allocation = await this.paymentsService.previewReservationAllocation({
+      id: reservation.id,
+      customerId: reservation.customerId,
+      customerEmail: reservation.customerEmail,
+      customerPhone: reservation.customerPhone,
+      feeCents: reservation.feeCents,
+    });
+
+    return {
+      ...this.serializeReservation(reservation),
+      chinChinFeeCents: allocation.chinChinFeeCents,
+      venueShareCents: allocation.venueShareCents,
+      commissionBps: allocation.commissionBps,
+      isNewCustomerReservation: allocation.isNewCustomerReservation,
     };
   }
 }

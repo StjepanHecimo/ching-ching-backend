@@ -1,5 +1,13 @@
 import { Type } from "class-transformer";
-import { IsDateString, IsIn, IsInt, IsNumber, IsOptional, Max, Min } from "class-validator";
+import {
+  IsDateString,
+  IsIn,
+  IsInt,
+  IsNumber,
+  IsOptional,
+  Max,
+  Min,
+} from "class-validator";
 
 export class ReservationAvailabilityQueryDto {
   @IsIn(["ADVANCE", "LIVE"])
@@ -14,7 +22,7 @@ export class ReservationAvailabilityQueryDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(20)
+  @Max(6)
   partySize!: number;
 
   @IsOptional()

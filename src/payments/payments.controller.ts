@@ -1,4 +1,17 @@
-import { Body, Controller, Get, Headers, Param, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Headers,
+  Param,
+  Patch,
+  Post,
+  Req,
+  UseGuards,
+} from "@nestjs/common";
+import { AuthenticatedRequest } from "../auth/authenticated-request";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
@@ -14,6 +27,50 @@ export class PaymentsController {
     @Body() dto: CreateReservationCheckoutDto,
   ) {
     return this.paymentsService.createReservationCheckout(reservationId, dto);
+  }
+
+  @Post("customers/me/reservations/:reservationId/checkout")
+  @UseGuards(JwtAuthGuard)
+  createCustomerReservationCheckout(
+    @Param("reservationId") reservationId: string,
+    @Body() dto: CreateReservationCheckoutDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentsService.createReservationCheckout(
+      reservationId,
+      dto,
+      request.user.userId,
+    );
+  }
+
+  @Get("customers/me/payment-methods")
+  @UseGuards(JwtAuthGuard)
+  listCustomerPaymentMethods(@Req() request: AuthenticatedRequest) {
+    return this.paymentsService.listCustomerPaymentMethods(request.user.userId);
+  }
+
+  @Patch("customers/me/payment-methods/:paymentMethodId/default")
+  @UseGuards(JwtAuthGuard)
+  setDefaultCustomerPaymentMethod(
+    @Param("paymentMethodId") paymentMethodId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentsService.setDefaultCustomerPaymentMethod(
+      request.user.userId,
+      paymentMethodId,
+    );
+  }
+
+  @Delete("customers/me/payment-methods/:paymentMethodId")
+  @UseGuards(JwtAuthGuard)
+  disableCustomerPaymentMethod(
+    @Param("paymentMethodId") paymentMethodId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentsService.disableCustomerPaymentMethod(
+      request.user.userId,
+      paymentMethodId,
+    );
   }
 
   @Get("preview/reservations/:reservationId")

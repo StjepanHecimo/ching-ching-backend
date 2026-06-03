@@ -29,7 +29,7 @@ export class CreateReservationDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(20)
+  @Max(6)
   partySize!: number;
 
   @IsOptional()

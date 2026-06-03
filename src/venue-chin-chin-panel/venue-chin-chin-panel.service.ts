@@ -197,17 +197,16 @@ export class VenueChinChinPanelService {
 
   async listPublicVenues(city?: string) {
     const normalizedCity = city?.trim();
-    if (!normalizedCity) {
-      throw new BadRequestException("City is required.");
-    }
 
     const venues = await this.prisma.venue.findMany({
-      where: {
-        city: {
-          equals: normalizedCity,
-          mode: "insensitive",
-        },
-      },
+      where: normalizedCity
+        ? {
+            city: {
+              equals: normalizedCity,
+              mode: "insensitive",
+            },
+          }
+        : undefined,
       include: {
         chinChinPanel: true,
       },
@@ -217,32 +216,44 @@ export class VenueChinChinPanelService {
     });
 
     return {
-      city: normalizedCity,
+      city: normalizedCity || null,
       count: venues.length,
-      venues: venues.map((venue) => ({
-        id: venue.id,
-        name: venue.name,
-        slug: venue.slug,
-        address: venue.address,
-        city: venue.city,
-        country: venue.country,
-        latitude: venue.latitude,
-        longitude: venue.longitude,
-        isLive: venue.isLive,
-        liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
-        reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
-        reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
-        panel: venue.chinChinPanel
-          ? this.serializePanel({
-              ...venue.chinChinPanel,
-              venue: {
-                id: venue.id,
-                name: venue.name,
-                slug: venue.slug,
-              },
-            })
-          : null,
-      })),
+      venues: venues.map((venue) => {
+        const liveChinChinTableIds = this.jsonStringArray(
+          venue.liveChinChinTableIds,
+        );
+        const isLive = this.isVenueEffectivelyLive(
+          venue.isLive,
+          liveChinChinTableIds,
+          venue.liveStartedAt,
+          venue.liveEndedAt,
+        );
+
+        return {
+          id: venue.id,
+          name: venue.name,
+          slug: venue.slug,
+          address: venue.address,
+          city: venue.city,
+          country: venue.country,
+          latitude: venue.latitude,
+          longitude: venue.longitude,
+          isLive,
+          liveChinChinTableIds: isLive ? liveChinChinTableIds : [],
+          reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
+          reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+          panel: venue.chinChinPanel
+            ? this.serializePanel({
+                ...venue.chinChinPanel,
+                venue: {
+                  id: venue.id,
+                  name: venue.name,
+                  slug: venue.slug,
+                },
+              })
+            : null,
+        };
+      }),
     };
   }
 
@@ -292,6 +303,16 @@ export class VenueChinChinPanelService {
           return null;
         }
 
+        const liveChinChinTableIds = this.jsonStringArray(
+          venue.liveChinChinTableIds,
+        );
+        const isLive = this.isVenueEffectivelyLive(
+          venue.isLive,
+          liveChinChinTableIds,
+          venue.liveStartedAt,
+          venue.liveEndedAt,
+        );
+
         return {
           id: venue.id,
           name: venue.name,
@@ -301,10 +322,8 @@ export class VenueChinChinPanelService {
           country: venue.country,
           latitude: venue.latitude,
           longitude: venue.longitude,
-          isLive: venue.isLive,
-          liveChinChinTableIds: this.jsonStringArray(
-            venue.liveChinChinTableIds,
-          ),
+          isLive,
+          liveChinChinTableIds: isLive ? liveChinChinTableIds : [],
           reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
           reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
           panel,
@@ -486,6 +505,31 @@ export class VenueChinChinPanelService {
       createdAt: panel.createdAt,
       updatedAt: panel.updatedAt,
     };
+  }
+
+  private isVenueEffectivelyLive(
+    isLive: boolean,
+    liveChinChinTableIds: string[],
+    liveStartedAt: Date | null,
+    liveEndedAt: Date | null,
+  ) {
+    if (!isLive || liveChinChinTableIds.length === 0 || !liveStartedAt) {
+      return false;
+    }
+
+    return (
+      !liveEndedAt &&
+      this.zagrebDateKey(liveStartedAt) === this.zagrebDateKey(new Date())
+    );
+  }
+
+  private zagrebDateKey(date: Date) {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/Zagreb",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(date);
   }
 
   private serializeDrinkList(value: Prisma.JsonValue): NormalizedDrink[] {
