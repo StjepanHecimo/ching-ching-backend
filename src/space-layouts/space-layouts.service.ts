@@ -1429,11 +1429,13 @@ export class SpaceLayoutsService {
       body: JSON.stringify(requestBody),
     });
 
-    const responseJson = (await response.json()) as Record<string, unknown>;
+    const responseText = await response.text();
+    const responseJson = this.parseOpenAiResponseJson(responseText);
 
     if (!response.ok) {
       const message =
         this.readOpenAiErrorMessage(responseJson) ??
+        this.summarizeOpenAiTextError(responseText) ??
         "OpenAI layout generation failed.";
       this.logger.error(`OpenAI layout request failed: ${message}`);
       throw new InternalServerErrorException(message);
@@ -2001,6 +2003,30 @@ export class SpaceLayoutsService {
         "OpenAI returned invalid layout JSON.",
       );
     }
+  }
+
+  private parseOpenAiResponseJson(responseText: string) {
+    try {
+      return JSON.parse(responseText) as Record<string, unknown>;
+    } catch {
+      const message =
+        this.summarizeOpenAiTextError(responseText) ??
+        "OpenAI returned a non-JSON response.";
+      this.logger.error(`OpenAI layout request returned non-JSON: ${message}`);
+      throw new InternalServerErrorException(message);
+    }
+  }
+
+  private summarizeOpenAiTextError(responseText: string) {
+    const normalized = responseText.trim().replace(/\s+/g, " ");
+
+    if (!normalized) {
+      return null;
+    }
+
+    return normalized.length > 220
+      ? `${normalized.slice(0, 220)}...`
+      : normalized;
   }
 
   private readOpenAiErrorMessage(responseJson: Record<string, unknown>) {
