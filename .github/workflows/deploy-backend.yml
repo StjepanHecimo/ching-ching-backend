@@ -33,9 +33,9 @@ jobs:
       - name: Normalize deployment settings
         run: |
           {
-            echo "DEPLOY_HOST=$(printf '%s' \"$DEPLOY_HOST\" | tr -d '[:space:]')"
-            echo "DEPLOY_USER=$(printf '%s' \"$DEPLOY_USER\" | tr -d '[:space:]')"
-            echo "DEPLOY_PORT=$(printf '%s' \"$DEPLOY_PORT\" | tr -d '[:space:]')"
+            echo "DEPLOY_HOST=$(printf '%s' \"$DEPLOY_HOST\" | tr -d '[:space:]\"\047')"
+            echo "DEPLOY_USER=$(printf '%s' \"$DEPLOY_USER\" | tr -d '[:space:]\"\047')"
+            echo "DEPLOY_PORT=$(printf '%s' \"$DEPLOY_PORT\" | tr -d '[:space:]\"\047')"
           } >> "$GITHUB_ENV"
 
       - name: Configure SSH
