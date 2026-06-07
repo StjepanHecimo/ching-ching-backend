@@ -519,7 +519,8 @@ export class PaymentsService {
           0,
           payment.capturedCents - payment.refundedCents,
         );
-        const allocation = this.calculateAllocation(netCents);
+        const ledgerSummary = this.paymentLedgerSummary(payment.ledgerEntries);
+        const allocation = this.paymentNetAllocation(payment);
         return {
           id: payment.id,
           reservationId: payment.reservationId,
@@ -534,6 +535,8 @@ export class PaymentsService {
           amountCents: payment.amountCents,
           capturedCents: payment.capturedCents,
           refundedCents: payment.refundedCents,
+          customerCaptureCents: ledgerSummary.customerCaptureCents,
+          customerRefundCents: ledgerSummary.customerRefundCents,
           refundableCents: Math.max(
             0,
             payment.capturedCents - payment.refundedCents,
@@ -560,6 +563,7 @@ export class PaymentsService {
             amountCents: entry.amountCents,
             currency: entry.currency,
             description: entry.description,
+            metadata: entry.metadata,
             createdAt: entry.createdAt,
           })),
         };
@@ -621,6 +625,12 @@ export class PaymentsService {
         amountCents,
         `Admin customer refund: ${reason}`,
       );
+      await this.notifyVenueAboutAdminPaymentAction(payment, {
+        title: "Rezervacija je refundirana",
+        body: `${this.customerDisplayName(payment)} · ${this.formatCents(amountCents, payment.currency)} refundirano za ${payment.reservation.tableLabel ?? "Chin-Chin stol"}.`,
+        type: "reservation_refunded_by_admin",
+        amountCents,
+      });
       return {
         target: dto.target,
         amountCents,
@@ -641,6 +651,13 @@ export class PaymentsService {
         currency: payment.currency,
         description: `Admin venue adjustment: ${reason}`,
       },
+    });
+
+    await this.notifyVenueAboutAdminPaymentAction(payment, {
+      title: "Korekcija isplate",
+      body: `${this.formatCents(amountCents, payment.currency)} dodano je kao korekcija ugostiteljske isplate za ${payment.reservation.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "venue_payout_adjusted_by_admin",
+      amountCents,
     });
 
     return {
@@ -959,6 +976,17 @@ export class PaymentsService {
         },
       });
 
+      await this.createRefundAllocationLedgerEntries(
+        tx,
+        updatedPayment,
+        reason,
+      );
+
+      await tx.reservation.update({
+        where: { id: payment.reservationId },
+        data: { refundCents: refundedCents },
+      });
+
       return updatedPayment;
     });
 
@@ -968,7 +996,13 @@ export class PaymentsService {
   async backfillCapturedPaymentLedger() {
     const payments = await this.prisma.reservationPayment.findMany({
       where: {
-        status: ReservationPaymentStatus.CAPTURED,
+        status: {
+          in: [
+            ReservationPaymentStatus.CAPTURED,
+            ReservationPaymentStatus.PARTIALLY_REFUNDED,
+            ReservationPaymentStatus.REFUNDED,
+          ],
+        },
         capturedCents: { gt: 0 },
       },
       include: {
@@ -990,7 +1024,7 @@ export class PaymentsService {
         payment.ledgerEntries.map((entry) => entry.type),
       );
       const missingTypes = this.missingCaptureLedgerTypes(existingTypes);
-      if (!missingTypes.length) {
+      if (!missingTypes.length && payment.refundedCents <= 0) {
         continue;
       }
 
@@ -1002,9 +1036,22 @@ export class PaymentsService {
         feeCents: payment.capturedCents,
       });
 
-      const created = await this.prisma.$transaction((tx) =>
-        this.createCaptureLedgerEntries(tx, payment, allocation),
-      );
+      const created = await this.prisma.$transaction(async (tx) => {
+        const captureEntries = await this.createCaptureLedgerEntries(
+          tx,
+          payment,
+          allocation,
+        );
+        const refundAdjustmentEntries =
+          payment.refundedCents > 0
+            ? await this.createRefundAllocationLedgerEntries(
+                tx,
+                payment,
+                "Backfilled refund allocation.",
+              )
+            : 0;
+        return captureEntries + refundAdjustmentEntries;
+      });
 
       if (created > 0) {
         repaired += 1;
@@ -1289,6 +1336,54 @@ export class PaymentsService {
     }
   }
 
+  private async notifyVenueAboutAdminPaymentAction(
+    payment: {
+      id: string;
+      reservationId: string;
+      venueId: string;
+      currency: string;
+      reservation: {
+        tableLabel: string | null;
+        customerName: string | null;
+        customerEmail: string | null;
+        customerPhone: string | null;
+        venue: { id: string; name: string; ownerId: string };
+      };
+    },
+    notification: {
+      title: string;
+      body: string;
+      type: string;
+      amountCents: number;
+    },
+  ) {
+    if (!payment.reservation.venue.ownerId) {
+      return;
+    }
+
+    try {
+      await this.deviceTokensService.sendToUser({
+        userId: payment.reservation.venue.ownerId,
+        app: DevicePushApp.VENUE_OWNER,
+        title: notification.title,
+        body: notification.body,
+        data: {
+          type: notification.type,
+          reservationId: payment.reservationId,
+          paymentId: payment.id,
+          venueId: payment.venueId,
+          amountCents: notification.amountCents,
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Payment ${payment.id} venue notification failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   private findProviderPayment(input: {
     providerPaymentId?: string;
     merchantReference?: string;
@@ -1432,6 +1527,75 @@ export class PaymentsService {
     });
   }
 
+  private async createRefundAllocationLedgerEntries(
+    tx: Prisma.TransactionClient,
+    payment: {
+      id: string;
+      reservationId: string;
+      venueId: string;
+      customerId: string | null;
+      capturedCents: number;
+      refundedCents: number;
+      currency: string;
+    },
+    reason: string,
+  ) {
+    const targetAllocation = this.refundAdjustedAllocation(payment);
+    const currentAllocation = await this.currentLedgerAllocation(
+      tx,
+      payment.id,
+    );
+    const adjustments = [
+      {
+        type: LedgerEntryType.CHIN_CHIN_FEE,
+        currentCents: currentAllocation.chinChinFeeCents,
+        targetCents: targetAllocation.chinChinFeeCents,
+        description: "Chin-Chin fee allocation adjusted after refund.",
+      },
+      {
+        type: LedgerEntryType.VENUE_SHARE,
+        currentCents: currentAllocation.venueShareCents,
+        targetCents: targetAllocation.venueShareCents,
+        description: "Venue payout allocation adjusted after refund.",
+      },
+    ]
+      .map((entry) => ({
+        ...entry,
+        deltaCents: entry.targetCents - entry.currentCents,
+      }))
+      .filter((entry) => entry.deltaCents !== 0);
+
+    if (!adjustments.length) {
+      return 0;
+    }
+
+    await tx.ledgerEntry.createMany({
+      data: adjustments.map((entry) => ({
+        reservationId: payment.reservationId,
+        paymentId: payment.id,
+        venueId: payment.venueId,
+        customerId: payment.customerId,
+        type: entry.type,
+        direction:
+          entry.deltaCents > 0
+            ? LedgerEntryDirection.CREDIT
+            : LedgerEntryDirection.DEBIT,
+        amountCents: Math.abs(entry.deltaCents),
+        currency: payment.currency,
+        description: entry.description,
+        metadata: {
+          reason,
+          policy: targetAllocation.policy,
+          capturedCents: payment.capturedCents,
+          refundedCents: payment.refundedCents,
+          retainedCents: targetAllocation.retainedCents,
+        } as Prisma.InputJsonValue,
+      })),
+    });
+
+    return adjustments.length;
+  }
+
   private calculateAllocation(
     amountCents: number,
     commissionBps = this.commissionBps(),
@@ -1441,6 +1605,66 @@ export class PaymentsService {
       chinChinFeeCents,
       venueShareCents: amountCents - chinChinFeeCents,
     };
+  }
+
+  private refundAdjustedAllocation(payment: {
+    capturedCents: number;
+    refundedCents: number;
+  }) {
+    const retainedCents = Math.max(
+      0,
+      payment.capturedCents - payment.refundedCents,
+    );
+
+    if (retainedCents <= 0) {
+      return {
+        retainedCents,
+        chinChinFeeCents: 0,
+        venueShareCents: 0,
+        policy: "FULL_CUSTOMER_REFUND",
+      };
+    }
+
+    if (payment.refundedCents > 0) {
+      return {
+        retainedCents,
+        chinChinFeeCents: 0,
+        venueShareCents: retainedCents,
+        policy: "PARTIAL_CUSTOMER_REFUND_VENUE_RETAINS",
+      };
+    }
+
+    return {
+      retainedCents,
+      ...this.calculateAllocation(retainedCents),
+      policy: "NO_CUSTOMER_REFUND_STANDARD_SPLIT",
+    };
+  }
+
+  private async currentLedgerAllocation(
+    tx: Prisma.TransactionClient,
+    paymentId: string,
+  ) {
+    const entries = await tx.ledgerEntry.findMany({
+      where: {
+        paymentId,
+        type: {
+          in: [LedgerEntryType.CHIN_CHIN_FEE, LedgerEntryType.VENUE_SHARE],
+        },
+      },
+      select: {
+        type: true,
+        direction: true,
+        amountCents: true,
+      },
+    });
+
+    return (
+      this.captureAllocationFromLedger(entries) ?? {
+        chinChinFeeCents: 0,
+        venueShareCents: 0,
+      }
+    );
   }
 
   private paymentNetAllocation(payment: {
@@ -1456,14 +1680,11 @@ export class PaymentsService {
     const ledgerAllocation = this.captureAllocationFromLedger(
       payment.ledgerEntries,
     );
-    if (ledgerAllocation && payment.capturedCents > 0) {
-      const chinChinFeeCents = Math.floor(
-        (ledgerAllocation.chinChinFeeCents * netCents) / payment.capturedCents,
-      );
+    if (ledgerAllocation) {
       return {
         netCents,
-        chinChinFeeCents,
-        venueShareCents: Math.max(0, netCents - chinChinFeeCents),
+        chinChinFeeCents: Math.max(0, ledgerAllocation.chinChinFeeCents),
+        venueShareCents: Math.max(0, ledgerAllocation.venueShareCents),
       };
     }
 
@@ -1484,26 +1705,60 @@ export class PaymentsService {
       return null;
     }
 
+    const signedAmount = (entry: {
+      direction: LedgerEntryDirection;
+      amountCents: number;
+    }) =>
+      entry.direction === LedgerEntryDirection.DEBIT
+        ? -entry.amountCents
+        : entry.amountCents;
     const chinChinFeeCents = ledgerEntries
-      .filter(
-        (entry) =>
-          entry.type === LedgerEntryType.CHIN_CHIN_FEE &&
-          entry.direction === LedgerEntryDirection.CREDIT,
-      )
-      .reduce((sum, entry) => sum + entry.amountCents, 0);
+      .filter((entry) => entry.type === LedgerEntryType.CHIN_CHIN_FEE)
+      .reduce((sum, entry) => sum + signedAmount(entry), 0);
     const venueShareCents = ledgerEntries
-      .filter(
-        (entry) =>
-          entry.type === LedgerEntryType.VENUE_SHARE &&
-          entry.direction === LedgerEntryDirection.CREDIT,
-      )
-      .reduce((sum, entry) => sum + entry.amountCents, 0);
+      .filter((entry) => entry.type === LedgerEntryType.VENUE_SHARE)
+      .reduce((sum, entry) => sum + signedAmount(entry), 0);
 
     if (chinChinFeeCents <= 0 && venueShareCents <= 0) {
       return null;
     }
 
     return { chinChinFeeCents, venueShareCents };
+  }
+
+  private paymentLedgerSummary(
+    ledgerEntries?: Array<{
+      type: LedgerEntryType;
+      direction: LedgerEntryDirection;
+      amountCents: number;
+    }>,
+  ) {
+    const signedAmount = (entry: {
+      direction: LedgerEntryDirection;
+      amountCents: number;
+    }) =>
+      entry.direction === LedgerEntryDirection.DEBIT
+        ? -entry.amountCents
+        : entry.amountCents;
+
+    const sumByType = (type: LedgerEntryType) =>
+      ledgerEntries
+        ?.filter((entry) => entry.type === type)
+        .reduce((sum, entry) => sum + signedAmount(entry), 0) ?? 0;
+
+    return {
+      customerCaptureCents: Math.max(
+        0,
+        sumByType(LedgerEntryType.CUSTOMER_CAPTURE),
+      ),
+      customerRefundCents: Math.abs(sumByType(LedgerEntryType.CUSTOMER_REFUND)),
+      chinChinFeeCents: Math.max(0, sumByType(LedgerEntryType.CHIN_CHIN_FEE)),
+      venueShareCents: Math.max(0, sumByType(LedgerEntryType.VENUE_SHARE)),
+      paymentVoidCents: Math.abs(sumByType(LedgerEntryType.PAYMENT_VOID)),
+      venuePayoutAdjustmentCents: sumByType(
+        LedgerEntryType.VENUE_PAYOUT_ADJUSTMENT,
+      ),
+    };
   }
 
   private serializeEarningsPeriod(
