@@ -965,6 +965,60 @@ export class PaymentsService {
     return this.serializePayment(refunded);
   }
 
+  async backfillCapturedPaymentLedger() {
+    const payments = await this.prisma.reservationPayment.findMany({
+      where: {
+        status: ReservationPaymentStatus.CAPTURED,
+        capturedCents: { gt: 0 },
+      },
+      include: {
+        reservation: true,
+        ledgerEntries: {
+          select: { type: true },
+        },
+      },
+      orderBy: { capturedAt: "desc" },
+    });
+
+    let checked = 0;
+    let repaired = 0;
+    let createdEntries = 0;
+
+    for (const payment of payments) {
+      checked += 1;
+      const existingTypes = new Set(
+        payment.ledgerEntries.map((entry) => entry.type),
+      );
+      const missingTypes = this.missingCaptureLedgerTypes(existingTypes);
+      if (!missingTypes.length) {
+        continue;
+      }
+
+      const allocation = await this.previewReservationAllocation({
+        id: payment.reservation.id,
+        customerId: payment.reservation.customerId,
+        customerEmail: payment.reservation.customerEmail,
+        customerPhone: payment.reservation.customerPhone,
+        feeCents: payment.capturedCents,
+      });
+
+      const created = await this.prisma.$transaction((tx) =>
+        this.createCaptureLedgerEntries(tx, payment, allocation),
+      );
+
+      if (created > 0) {
+        repaired += 1;
+        createdEntries += created;
+      }
+    }
+
+    return {
+      checked,
+      repaired,
+      createdEntries,
+    };
+  }
+
   private async markPaymentAuthorized(input: {
     providerPaymentId?: string;
     merchantReference?: string;
@@ -1275,9 +1329,10 @@ export class PaymentsService {
       commissionBps: allocation.commissionBps,
       isNewCustomerReservation: allocation.isNewCustomerReservation,
     };
-    await tx.ledgerEntry.createMany({
-      data: [
-        {
+    const expectedEntries = [
+      {
+        type: LedgerEntryType.CUSTOMER_CAPTURE,
+        data: {
           reservationId: payment.reservationId,
           paymentId: payment.id,
           venueId: payment.venueId,
@@ -1288,7 +1343,10 @@ export class PaymentsService {
           currency: payment.currency,
           description: "Customer reservation fee captured.",
         },
-        {
+      },
+      {
+        type: LedgerEntryType.CHIN_CHIN_FEE,
+        data: {
           reservationId: payment.reservationId,
           paymentId: payment.id,
           venueId: payment.venueId,
@@ -1300,7 +1358,10 @@ export class PaymentsService {
           description: "Chin-Chin platform fee allocation.",
           metadata: allocationMetadata as Prisma.InputJsonValue,
         },
-        {
+      },
+      {
+        type: LedgerEntryType.VENUE_SHARE,
+        data: {
           reservationId: payment.reservationId,
           paymentId: payment.id,
           venueId: payment.venueId,
@@ -1312,8 +1373,37 @@ export class PaymentsService {
           description: "Venue payout allocation.",
           metadata: allocationMetadata as Prisma.InputJsonValue,
         },
-      ],
+      },
+    ];
+
+    const existingEntries = await tx.ledgerEntry.findMany({
+      where: {
+        paymentId: payment.id,
+        type: { in: expectedEntries.map((entry) => entry.type) },
+      },
+      select: { type: true },
     });
+    const existingTypes = new Set(existingEntries.map((entry) => entry.type));
+    const missingEntries = expectedEntries.filter(
+      (entry) => !existingTypes.has(entry.type),
+    );
+
+    if (!missingEntries.length) {
+      return 0;
+    }
+
+    await tx.ledgerEntry.createMany({
+      data: missingEntries.map((entry) => entry.data),
+    });
+    return missingEntries.length;
+  }
+
+  private missingCaptureLedgerTypes(existingTypes: Set<LedgerEntryType>) {
+    return [
+      LedgerEntryType.CUSTOMER_CAPTURE,
+      LedgerEntryType.CHIN_CHIN_FEE,
+      LedgerEntryType.VENUE_SHARE,
+    ].filter((type) => !existingTypes.has(type));
   }
 
   private async createPaymentVoidLedgerEntry(

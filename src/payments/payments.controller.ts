@@ -109,6 +109,11 @@ export class PaymentsController {
     return this.paymentsService.adminManualRefund(reservationId, dto);
   }
 
+  @Post("preview/admin/ledger/backfill-captured-payments")
+  backfillCapturedPaymentLedger() {
+    return this.paymentsService.backfillCapturedPaymentLedger();
+  }
+
   @Post("preview/reservations/:reservationId/mock-authorize")
   mockAuthorizeReservationPayment(
     @Param("reservationId") reservationId: string,
