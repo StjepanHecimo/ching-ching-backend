@@ -20,6 +20,7 @@ import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
+import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 
@@ -202,6 +203,66 @@ export class PaymentsService {
     return {
       items: methods.map((method) => this.serializePaymentMethod(method)),
     };
+  }
+
+  async createTestCustomerPaymentMethod(
+    customerUserId: string,
+    dto: CreateTestPaymentMethodDto,
+  ) {
+    if (
+      this.configService.get<string>("WORLDLINE_MODE")?.toLowerCase() ===
+      "production"
+    ) {
+      throw new BadRequestException(
+        "Test card creation is disabled in production payment mode.",
+      );
+    }
+
+    const digits = dto.cardNumber.replace(/\D/g, "");
+    if (digits.length < 12) {
+      throw new BadRequestException("Card number is not valid.");
+    }
+
+    const last4 = digits.slice(-4);
+    const brand = dto.brand?.trim() || this.detectCardBrand(digits);
+    const providerPaymentMethodId = `test_pm_${customerUserId}_${last4}_${Date.now()}`;
+
+    const defaultMethod = await this.prisma.customerPaymentMethod.findFirst({
+      where: {
+        customerId: customerUserId,
+        status: CustomerPaymentMethodStatus.ACTIVE,
+        isDefault: true,
+      },
+      select: { id: true },
+    });
+
+    const method = await this.prisma.customerPaymentMethod.create({
+      data: {
+        customerId: customerUserId,
+        provider: PaymentProvider.WORLDLINE,
+        status: CustomerPaymentMethodStatus.ACTIVE,
+        providerPaymentMethodId,
+        brand,
+        last4,
+        expiryMonth: dto.expiryMonth,
+        expiryYear: dto.expiryYear,
+        holderName: dto.holderName?.trim() || "Chin-Chin korisnik",
+        isDefault: !defaultMethod,
+        rawProviderData: {
+          mode: "test",
+          source: "manual_test_card",
+          providerPaymentMethodId,
+          brand,
+          last4,
+          expiryMonth: dto.expiryMonth,
+          expiryYear: dto.expiryYear,
+          holderName: dto.holderName?.trim() || "Chin-Chin korisnik",
+        },
+        lastUsedAt: new Date(),
+      },
+    });
+
+    return this.serializePaymentMethod(method);
   }
 
   async disableCustomerPaymentMethod(
@@ -1125,6 +1186,22 @@ export class PaymentsService {
       expiryYear: this.integerFrom(source.expiryYear),
       holderName: this.stringFrom(source.holderName),
     };
+  }
+
+  private detectCardBrand(cardNumberDigits: string) {
+    if (cardNumberDigits.startsWith("4")) {
+      return "Visa";
+    }
+
+    if (/^5[1-5]/.test(cardNumberDigits) || /^2[2-7]/.test(cardNumberDigits)) {
+      return "Mastercard";
+    }
+
+    if (/^3[47]/.test(cardNumberDigits)) {
+      return "American Express";
+    }
+
+    return "Kartica";
   }
 
   private async notifyVenueAboutReservationRequest(reservationId: string) {

@@ -14,6 +14,7 @@ import { AuthenticatedRequest } from "../auth/authenticated-request";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
+import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { PaymentsService } from "./payments.service";
 
@@ -47,6 +48,18 @@ export class PaymentsController {
   @UseGuards(JwtAuthGuard)
   listCustomerPaymentMethods(@Req() request: AuthenticatedRequest) {
     return this.paymentsService.listCustomerPaymentMethods(request.user.userId);
+  }
+
+  @Post("customers/me/payment-methods/test-card")
+  @UseGuards(JwtAuthGuard)
+  createTestCustomerPaymentMethod(
+    @Body() dto: CreateTestPaymentMethodDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentsService.createTestCustomerPaymentMethod(
+      request.user.userId,
+      dto,
+    );
   }
 
   @Patch("customers/me/payment-methods/:paymentMethodId/default")

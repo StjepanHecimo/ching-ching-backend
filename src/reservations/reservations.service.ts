@@ -93,6 +93,7 @@ export class ReservationsService {
       await this.getApprovedChinChinTables(venueId),
       venue,
       query.type,
+      slot.startAt,
     );
     const blockingReservations = await this.findBlockingReservations(
       venueId,
@@ -155,6 +156,7 @@ export class ReservationsService {
       await this.getApprovedChinChinTables(venueId),
       venue,
       dto.type,
+      slot.startAt,
     );
     const table = tables.find((item) => item.tableId === dto.tableId);
 
@@ -1150,12 +1152,20 @@ export class ReservationsService {
     tables: ReservableTable[],
     venue: VenueReservationState,
     type: "ADVANCE" | "LIVE",
+    startAt: Date,
   ) {
+    const activeTableIds = new Set(venue.liveChinChinTableIds);
     if (type !== "LIVE") {
-      return tables;
+      if (
+        !activeTableIds.size ||
+        !this.isSameLocalCalendarDay(new Date(), startAt)
+      ) {
+        return tables;
+      }
+
+      return tables.filter((table) => activeTableIds.has(table.tableId));
     }
 
-    const activeTableIds = new Set(venue.liveChinChinTableIds);
     if (!activeTableIds.size) {
       return [];
     }
