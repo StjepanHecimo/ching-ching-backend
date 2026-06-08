@@ -20,6 +20,11 @@ export class VenueChinChinPanelEventDto {
 
   @IsOptional()
   @IsString()
+  @Length(2, 20)
+  endsAt?: string;
+
+  @IsOptional()
+  @IsString()
   @Length(2, 120)
   contentName?: string;
 
@@ -63,6 +68,11 @@ export class UpsertVenueChinChinPanelDto {
   @IsString()
   @Length(2, 20)
   eventStartsAt?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(2, 20)
+  eventEndsAt?: string;
 
   @IsOptional()
   @IsString()

@@ -61,6 +61,7 @@ type NormalizedPanelEvent = {
   id: string;
   day: string;
   startsAt: string;
+  endsAt: string;
   band: string;
   content: NormalizedContent;
   description: string | null;
@@ -69,6 +70,7 @@ type NormalizedPanelEvent = {
 type PanelEventInput = {
   day: string;
   startsAt: string;
+  endsAt: string;
   contentName: string;
   description: string | null;
 };
@@ -476,10 +478,12 @@ export class VenueChinChinPanelService {
               id: this.createEventId(
                 panel.eventDay,
                 panel.eventStartsAt,
+                "23:00",
                 panel.eventBand,
               ),
               day: panel.eventDay,
               startsAt: panel.eventStartsAt,
+              endsAt: "23:00",
               band: panel.eventBand,
               content:
                 this.serializeContent(panel.eventContent) ??
@@ -621,6 +625,7 @@ export class VenueChinChinPanelService {
         const item = entry as Record<string, unknown>;
         const day = item.day?.toString().trim() || "";
         const startsAt = item.startsAt?.toString().trim() || "";
+        const endsAt = item.endsAt?.toString().trim() || "23:00";
         const band = item.band?.toString().trim() || "";
         const content = this.serializeContent(
           (item.content ?? null) as Prisma.JsonValue | null,
@@ -632,9 +637,15 @@ export class VenueChinChinPanelService {
         return {
           id:
             item.id?.toString() ||
-            this.createEventId(day, startsAt, content.contentKey ?? band),
+            this.createEventId(
+              day,
+              startsAt,
+              endsAt,
+              content.contentKey ?? band,
+            ),
           day,
           startsAt,
+          endsAt,
           band,
           content,
           description: item.description?.toString() || null,
@@ -649,10 +660,14 @@ export class VenueChinChinPanelService {
       .map((event) => ({
         day: event.day?.trim() ?? "",
         startsAt: event.startsAt?.trim() ?? "",
+        endsAt: event.endsAt?.trim() ?? "23:00",
         contentName: event.contentName?.trim() ?? "",
         description: event.description?.trim() || null,
       }))
-      .filter((event) => event.day && event.startsAt && event.contentName);
+      .filter(
+        (event) =>
+          event.day && event.startsAt && event.endsAt && event.contentName,
+      );
 
     if (eventInputs.length) {
       return eventInputs;
@@ -661,11 +676,15 @@ export class VenueChinChinPanelService {
     const singleEvent = {
       day: dto.eventDay?.trim() ?? "",
       startsAt: dto.eventStartsAt?.trim() ?? "",
+      endsAt: dto.eventEndsAt?.trim() ?? "23:00",
       contentName: (dto.eventContentName ?? dto.eventBand ?? "").trim(),
       description: dto.eventDescription?.trim() || null,
     };
 
-    return singleEvent.day && singleEvent.startsAt && singleEvent.contentName
+    return singleEvent.day &&
+      singleEvent.startsAt &&
+      singleEvent.endsAt &&
+      singleEvent.contentName
       ? [singleEvent]
       : [];
   }
@@ -681,6 +700,7 @@ export class VenueChinChinPanelService {
       const id = this.createEventId(
         event.day,
         event.startsAt,
+        event.endsAt,
         content.contentKey ?? content.name,
       );
       if (seen.has(id)) {
@@ -692,6 +712,7 @@ export class VenueChinChinPanelService {
         id,
         day: event.day,
         startsAt: event.startsAt,
+        endsAt: event.endsAt,
         band: content.name,
         content,
         description: event.description,
@@ -708,22 +729,28 @@ export class VenueChinChinPanelService {
       return null;
     }
 
-    const today = new Date();
-    const todayKey = this.formatDateKey(today);
-    const todaysEvents = events
+    const now = Date.now();
+    const visibleEvents = events.filter(
+      (event) => this.eventEndTimestamp(event) >= now,
+    );
+    if (!visibleEvents.length) {
+      return null;
+    }
+
+    const todayKey = this.formatDateKey(new Date());
+    const todaysEvents = visibleEvents
       .filter((event) => event.day === todayKey)
       .sort((left, right) => left.startsAt.localeCompare(right.startsAt));
     if (todaysEvents.length) {
       return todaysEvents[0];
     }
 
-    const now = Date.now();
-    const futureEvents = events
+    const futureEvents = visibleEvents
       .filter((event) => this.eventTimestamp(event) >= now)
       .sort(
         (left, right) => this.eventTimestamp(left) - this.eventTimestamp(right),
       );
-    return futureEvents[0] ?? events[0];
+    return futureEvents[0] ?? visibleEvents[0];
   }
 
   private async normalizeDrinks(
@@ -951,8 +978,13 @@ export class VenueChinChinPanelService {
     });
   }
 
-  private createEventId(day: string, startsAt: string, name: string) {
-    return this.normalizeText(`${day}-${startsAt}-${name}`).replace(
+  private createEventId(
+    day: string,
+    startsAt: string,
+    endsAt: string,
+    name: string,
+  ) {
+    return this.normalizeText(`${day}-${startsAt}-${endsAt}-${name}`).replace(
       /\s+/g,
       "-",
     );
@@ -960,6 +992,11 @@ export class VenueChinChinPanelService {
 
   private eventTimestamp(event: { day: string; startsAt: string }) {
     const timestamp = new Date(`${event.day}T${event.startsAt}:00`).getTime();
+    return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
+  }
+
+  private eventEndTimestamp(event: { day: string; endsAt: string }) {
+    const timestamp = new Date(`${event.day}T${event.endsAt}:00`).getTime();
     return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
   }
 
