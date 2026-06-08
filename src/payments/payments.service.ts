@@ -1372,7 +1372,7 @@ export class PaymentsService {
           reservationId: payment.reservationId,
           paymentId: payment.id,
           venueId: payment.venueId,
-          amountCents: notification.amountCents,
+          amountCents: String(notification.amountCents),
         },
       });
     } catch (error) {
@@ -1382,6 +1382,25 @@ export class PaymentsService {
         }`,
       );
     }
+  }
+
+  private customerDisplayName(payment: {
+    reservation: {
+      customerName: string | null;
+      customerEmail: string | null;
+      customerPhone: string | null;
+    };
+  }) {
+    return (
+      payment.reservation.customerName?.trim() ||
+      payment.reservation.customerEmail?.trim() ||
+      payment.reservation.customerPhone?.trim() ||
+      "Chin-Chin korisnik"
+    );
+  }
+
+  private formatCents(cents: number, currency = "EUR") {
+    return `${(cents / 100).toFixed(2)} ${currency}`;
   }
 
   private findProviderPayment(input: {

@@ -14,6 +14,7 @@ import {
   UserRole,
 } from "../../generated/prisma/enums";
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
+import { EmailService } from "../email/email.service";
 import { PaymentsService } from "../payments/payments.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
@@ -74,6 +75,7 @@ export class ReservationsService {
     private readonly prisma: PrismaService,
     private readonly paymentsService: PaymentsService,
     private readonly deviceTokensService: DeviceTokensService,
+    private readonly emailService: EmailService,
   ) {}
 
   async getVenueAvailability(
@@ -937,6 +939,7 @@ export class ReservationsService {
       body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
       type: "reservation_cancelled_by_venue",
     });
+    await this.notifyCustomerReservationRefundByEmail(updated, reservation, now);
 
     return {
       reservation: this.serializeReservation(updated),
@@ -1650,6 +1653,9 @@ export class ReservationsService {
         id: true,
         type: true,
         feeCents: true,
+        customerCheckedInAt: true,
+        checkedInAt: true,
+        seatedAt: true,
       },
     });
 
@@ -1664,10 +1670,7 @@ export class ReservationsService {
           data: {
             status: ReservationStatus.NO_SHOW,
             releasedAt: now,
-            refundCents:
-              reservation.type === ReservationType.ADVANCE
-                ? Math.floor(reservation.feeCents * 0.5)
-                : 0,
+            refundCents: this.noShowRefundCents(reservation),
           },
         }),
       ),
@@ -1677,9 +1680,7 @@ export class ReservationsService {
       expiredReservations.map((reservation) =>
         this.paymentsService.refundCapturedReservation(
           reservation.id,
-          reservation.type === ReservationType.ADVANCE
-            ? Math.floor(reservation.feeCents * 0.5)
-            : 0,
+          this.noShowRefundCents(reservation),
           "Reservation was released as no-show.",
         ),
       ),
@@ -1797,6 +1798,9 @@ export class ReservationsService {
       status: ReservationStatus;
       feeCents: number;
       notes: string | null;
+      customerCheckedInAt?: Date | null;
+      checkedInAt?: Date | null;
+      seatedAt?: Date | null;
     },
     nextStatus: ReservationStatus,
   ) {
@@ -1849,10 +1853,7 @@ export class ReservationsService {
 
     if (nextStatus === ReservationStatus.NO_SHOW) {
       data.releasedAt = now;
-      data.refundCents =
-        reservation.type === ReservationType.ADVANCE
-          ? Math.floor(reservation.feeCents * 0.5)
-          : 0;
+      data.refundCents = this.noShowRefundCents(reservation);
     }
 
     if (nextStatus === ReservationStatus.RELEASED) {
@@ -1879,6 +1880,28 @@ export class ReservationsService {
     }
 
     return reservation.feeCents;
+  }
+
+  private noShowRefundCents(reservation: {
+    type: ReservationType;
+    feeCents: number;
+    customerCheckedInAt?: Date | null;
+    checkedInAt?: Date | null;
+    seatedAt?: Date | null;
+  }) {
+    if (reservation.type === ReservationType.LIVE) {
+      return 0;
+    }
+
+    const customerConfirmedArrival = Boolean(reservation.customerCheckedInAt);
+    const venueConfirmedArrival = Boolean(
+      reservation.checkedInAt || reservation.seatedAt,
+    );
+    if (customerConfirmedArrival && !venueConfirmedArrival) {
+      return 0;
+    }
+
+    return Math.floor(reservation.feeCents * 0.5);
   }
 
   private customerCancellationRefundCents(
@@ -2052,6 +2075,97 @@ export class ReservationsService {
         }`,
       );
     }
+  }
+
+  private async notifyCustomerReservationRefundByEmail(reservation: {
+    id: string;
+    customerEmail: string | null;
+    tableLabel: string | null;
+    refundCents: number;
+    currency: string;
+    venue: { name: string };
+  }, cancellationContext: {
+    status: ReservationStatus;
+    timeSlotStart: Date;
+    confirmedAt: Date | null;
+    customerCheckedInAt: Date | null;
+    checkedInAt: Date | null;
+    seatedAt: Date | null;
+  }, cancelledAt: Date) {
+    const customerEmail = reservation.customerEmail?.trim().toLowerCase();
+    if (
+      !customerEmail ||
+      reservation.refundCents <= 0 ||
+      !this.shouldSendVenueCancellationRefundEmail(
+        cancellationContext,
+        cancelledAt,
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await this.emailService.sendReservationRefundEmail({
+        to: customerEmail,
+        venueName: reservation.venue.name,
+        tableLabel: reservation.tableLabel,
+        amountCents: reservation.refundCents,
+        currency: reservation.currency,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${reservation.id} refund email failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private shouldSendVenueCancellationRefundEmail(
+    reservation: {
+      status: ReservationStatus;
+      timeSlotStart: Date;
+      confirmedAt: Date | null;
+      customerCheckedInAt: Date | null;
+      checkedInAt: Date | null;
+      seatedAt: Date | null;
+    },
+    cancelledAt: Date,
+  ) {
+    const wasConfirmed =
+      Boolean(reservation.confirmedAt) ||
+      ([
+        ReservationStatus.CONFIRMED,
+        ReservationStatus.RESERVED,
+        ReservationStatus.CHECK_IN_PENDING,
+        ReservationStatus.CHECKED_IN,
+        ReservationStatus.SEATED,
+      ] as ReservationStatus[]).includes(reservation.status);
+    const hadAnyCheckIn = Boolean(
+      reservation.customerCheckedInAt ||
+        reservation.checkedInAt ||
+        reservation.seatedAt,
+    );
+    const isCancellationOnReservationDay = this.isSameLocalCalendarDay(
+      cancelledAt,
+      reservation.timeSlotStart,
+    );
+    const tomorrow = new Date(
+      cancelledAt.getFullYear(),
+      cancelledAt.getMonth(),
+      cancelledAt.getDate() + 1,
+    );
+    const isCancellationDayBeforeReservation = this.isSameLocalCalendarDay(
+      tomorrow,
+      reservation.timeSlotStart,
+    );
+
+    return (
+      wasConfirmed ||
+      hadAnyCheckIn ||
+      isCancellationOnReservationDay ||
+      isCancellationDayBeforeReservation
+    );
   }
 
   private async notifyVenueOwner(
