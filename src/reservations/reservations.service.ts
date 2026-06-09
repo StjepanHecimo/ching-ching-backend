@@ -657,6 +657,16 @@ export class ReservationsService {
       include: { venue: true },
     });
 
+    await this.notifyCustomer(updated, {
+      title: "Rezervacija potvrđena",
+      body: `${updated.venue.name} je potvrdio rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "reservation_confirmed",
+    });
+
+    if (!isLiveReservation) {
+      await this.notifyCustomerReservationConfirmedByEmail(updated);
+    }
+
     return this.serializeReservation(updated);
   }
 
@@ -807,8 +817,8 @@ export class ReservationsService {
     );
 
     await this.notifyCustomer(updated, {
-      title: "Rezervacija odbijena",
-      body: `${updated.venue.name} nije prihvatio zahtjev za rezervaciju.`,
+      title: "Rezervacija je odbijena",
+      body: `${updated.venue.name} je odbio rezervaciju. Pokušajte s drugim stolom.`,
       type: "reservation_declined",
     });
 
@@ -2077,6 +2087,34 @@ export class ReservationsService {
     } catch (error) {
       this.logger.warn(
         `Reservation ${reservation.id} customer notification failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async notifyCustomerReservationConfirmedByEmail(reservation: {
+    id: string;
+    customerEmail: string | null;
+    tableLabel: string | null;
+    timeSlotStart: Date;
+    venue: { name: string };
+  }) {
+    const customerEmail = reservation.customerEmail?.trim().toLowerCase();
+    if (!customerEmail) {
+      return;
+    }
+
+    try {
+      await this.emailService.sendReservationConfirmedEmail({
+        to: customerEmail,
+        venueName: reservation.venue.name,
+        tableLabel: reservation.tableLabel,
+        startAt: reservation.timeSlotStart,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${reservation.id} confirmed email failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
