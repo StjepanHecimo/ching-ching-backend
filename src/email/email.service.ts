@@ -167,7 +167,7 @@ export class EmailService {
         "",
         "Kafić će odgovoriti u najkraćem mogućem vremenu. U slučaju prihvaćanja ili otkazivanja bit ćete obaviješteni.",
         "",
-        "Detalje možeš pratiti u Chin-Chin aplikaciji pod rezervacijama.",
+        "Zahtjev za rezervaciju možete pronaći u Chin-Chin aplikaciji pod Rezervacije.",
       ].join("\n"),
       html: this.reservationRequestReceivedHtml(input),
     });
@@ -313,6 +313,9 @@ export class EmailService {
             </div>
             <p style="font-size:14px;line-height:1.55;margin:0;color:#79533d;">
               Kafić će odgovoriti u najkraćem mogućem vremenu. U slučaju prihvaćanja ili otkazivanja bit ćete obaviješteni.
+            </p>
+            <p style="font-size:14px;line-height:1.55;margin:12px 0 0;color:#79533d;">
+              Zahtjev za rezervaciju možete pronaći u Chin-Chin aplikaciji pod <strong>Rezervacije</strong>.
             </p>
           </div>
         </div>
