@@ -599,7 +599,8 @@ export class ReservationsService {
 
     if (
       reservation.confirmationExpiresAt &&
-      reservation.confirmationExpiresAt.getTime() < Date.now()
+      reservation.confirmationExpiresAt.getTime() < Date.now() &&
+      reservation.type === ReservationType.LIVE
     ) {
       const expired = await this.prisma.reservation.update({
         where: { id },
@@ -939,7 +940,11 @@ export class ReservationsService {
       body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
       type: "reservation_cancelled_by_venue",
     });
-    await this.notifyCustomerReservationRefundByEmail(updated, reservation, now);
+    await this.notifyCustomerReservationRefundByEmail(
+      updated,
+      reservation,
+      now,
+    );
 
     return {
       reservation: this.serializeReservation(updated),
@@ -1594,6 +1599,7 @@ export class ReservationsService {
       where: {
         venueId,
         status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
+        type: ReservationType.LIVE,
         OR: [
           { confirmationExpiresAt: { lt: now } },
           {
@@ -2077,21 +2083,25 @@ export class ReservationsService {
     }
   }
 
-  private async notifyCustomerReservationRefundByEmail(reservation: {
-    id: string;
-    customerEmail: string | null;
-    tableLabel: string | null;
-    refundCents: number;
-    currency: string;
-    venue: { name: string };
-  }, cancellationContext: {
-    status: ReservationStatus;
-    timeSlotStart: Date;
-    confirmedAt: Date | null;
-    customerCheckedInAt: Date | null;
-    checkedInAt: Date | null;
-    seatedAt: Date | null;
-  }, cancelledAt: Date) {
+  private async notifyCustomerReservationRefundByEmail(
+    reservation: {
+      id: string;
+      customerEmail: string | null;
+      tableLabel: string | null;
+      refundCents: number;
+      currency: string;
+      venue: { name: string };
+    },
+    cancellationContext: {
+      status: ReservationStatus;
+      timeSlotStart: Date;
+      confirmedAt: Date | null;
+      customerCheckedInAt: Date | null;
+      checkedInAt: Date | null;
+      seatedAt: Date | null;
+    },
+    cancelledAt: Date,
+  ) {
     const customerEmail = reservation.customerEmail?.trim().toLowerCase();
     if (
       !customerEmail ||
@@ -2134,17 +2144,19 @@ export class ReservationsService {
   ) {
     const wasConfirmed =
       Boolean(reservation.confirmedAt) ||
-      ([
-        ReservationStatus.CONFIRMED,
-        ReservationStatus.RESERVED,
-        ReservationStatus.CHECK_IN_PENDING,
-        ReservationStatus.CHECKED_IN,
-        ReservationStatus.SEATED,
-      ] as ReservationStatus[]).includes(reservation.status);
+      (
+        [
+          ReservationStatus.CONFIRMED,
+          ReservationStatus.RESERVED,
+          ReservationStatus.CHECK_IN_PENDING,
+          ReservationStatus.CHECKED_IN,
+          ReservationStatus.SEATED,
+        ] as ReservationStatus[]
+      ).includes(reservation.status);
     const hadAnyCheckIn = Boolean(
       reservation.customerCheckedInAt ||
-        reservation.checkedInAt ||
-        reservation.seatedAt,
+      reservation.checkedInAt ||
+      reservation.seatedAt,
     );
     const isCancellationOnReservationDay = this.isSameLocalCalendarDay(
       cancelledAt,
