@@ -722,10 +722,6 @@ export class ReservationsService {
       type: "reservation_confirmed",
     });
 
-    if (!isLiveReservation) {
-      await this.notifyCustomerReservationConfirmedByEmail(updated);
-    }
-
     return this.serializeReservation(updated);
   }
 
