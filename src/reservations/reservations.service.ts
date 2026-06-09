@@ -20,6 +20,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { DeclineReservationDto } from "./dto/decline-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
+import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailable-slots-query.dto";
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
 import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservation-settings.dto";
@@ -66,6 +67,7 @@ const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 const LAST_RESERVATION_REQUEST_BUFFER_MINUTES = 15;
 const LIVE_PROMOTIONAL_PRICE_START_MINUTES = 18 * 60;
+const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 
 @Injectable()
 export class ReservationsService {
@@ -137,6 +139,63 @@ export class ReservationsService {
           ),
         };
       }),
+    };
+  }
+
+  async getVenueUnavailableSlots(
+    venueId: string,
+    query: ReservationUnavailableSlotsQueryDto,
+  ) {
+    const venue = await this.getVenueReservationState(venueId);
+    const date = this.parseLocalDateKey(query.date);
+    const latestReservationStartMinutes =
+      venue.reservationWindowEndMinutes -
+      LAST_RESERVATION_REQUEST_BUFFER_MINUTES;
+    const tables = this.filterTablesForReservationType(
+      await this.getApprovedChinChinTables(venueId),
+      venue,
+      query.type,
+      this.zagrebDateTimeToUtc(date.year, date.month, date.day, 12, 0),
+    );
+    const table = tables.find((item) => item.tableId === query.tableId);
+
+    if (!table) {
+      throw new BadRequestException(
+        "Selected table is not an approved Chin-Chin table.",
+      );
+    }
+
+    const unavailableMinutes: number[] = [];
+    for (
+      let minutes = venue.reservationWindowStartMinutes;
+      minutes <= latestReservationStartMinutes;
+      minutes += 15
+    ) {
+      const startAt = this.zagrebDateTimeToUtc(
+        date.year,
+        date.month,
+        date.day,
+        Math.floor(minutes / 60),
+        minutes % 60,
+      );
+      const endAt = new Date(startAt.getTime() + 90 * 60 * 1000);
+      const blocked = await this.findBlockingReservations(
+        venueId,
+        startAt,
+        endAt,
+        { tableId: table.tableId, tableLabel: table.tableLabel },
+      );
+      if (blocked.length) {
+        unavailableMinutes.push(minutes);
+      }
+    }
+
+    return {
+      venueId,
+      tableId: table.tableId,
+      date: query.date,
+      unavailableMinutes,
+      generatedAt: new Date(),
     };
   }
 
@@ -1104,7 +1163,7 @@ export class ReservationsService {
       );
     }
 
-    const startMinutes = startAt.getHours() * 60 + startAt.getMinutes();
+    const startMinutes = this.zagrebMinutesOfDay(startAt);
     const latestReservationStartMinutes =
       venue.reservationWindowEndMinutes -
       LAST_RESERVATION_REQUEST_BUFFER_MINUTES;
@@ -1246,7 +1305,7 @@ export class ReservationsService {
     table: ReservableTable,
     startAt: Date,
   ) {
-    const startMinutes = startAt.getHours() * 60 + startAt.getMinutes();
+    const startMinutes = this.zagrebMinutesOfDay(startAt);
     const usesLivePromotionalPrice =
       type === "LIVE" && startMinutes >= LIVE_PROMOTIONAL_PRICE_START_MINUTES;
     const basePrice = usesLivePromotionalPrice
@@ -1973,15 +2032,73 @@ export class ReservationsService {
   }
 
   private isSameLocalCalendarDay(left: Date, right: Date) {
+    const leftParts = this.zagrebDateParts(left);
+    const rightParts = this.zagrebDateParts(right);
     return (
-      left.getFullYear() === right.getFullYear() &&
-      left.getMonth() === right.getMonth() &&
-      left.getDate() === right.getDate()
+      leftParts.year === rightParts.year &&
+      leftParts.month === rightParts.month &&
+      leftParts.day === rightParts.day
     );
   }
 
   private startOfLocalCalendarDay(value: Date) {
-    return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+    const parts = this.zagrebDateParts(value);
+    return this.zagrebDateTimeToUtc(parts.year, parts.month, parts.day, 0, 0);
+  }
+
+  private zagrebMinutesOfDay(value: Date) {
+    const parts = this.zagrebDateParts(value);
+    return parts.hour * 60 + parts.minute;
+  }
+
+  private zagrebDateParts(value: Date) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: ZAGREB_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(value);
+    const part = (type: string) =>
+      Number(parts.find((item) => item.type === type)?.value ?? 0);
+
+    return {
+      year: part("year"),
+      month: part("month"),
+      day: part("day"),
+      hour: part("hour"),
+      minute: part("minute"),
+    };
+  }
+
+  private parseLocalDateKey(value: string) {
+    const [year, month, day] = value.split("-").map(Number);
+    if (!year || !month || !day) {
+      throw new BadRequestException("Invalid reservation date.");
+    }
+    return { year, month, day };
+  }
+
+  private zagrebDateTimeToUtc(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+  ) {
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute));
+    const zonedParts = this.zagrebDateParts(utcGuess);
+    const zonedAsUtc = Date.UTC(
+      zonedParts.year,
+      zonedParts.month - 1,
+      zonedParts.day,
+      zonedParts.hour,
+      zonedParts.minute,
+    );
+    const desiredAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+    return new Date(utcGuess.getTime() + desiredAsUtc - zonedAsUtc);
   }
 
   private distanceMeters(

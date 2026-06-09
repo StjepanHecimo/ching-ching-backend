@@ -14,6 +14,7 @@ import { AuthenticatedRequest } from "../auth/authenticated-request";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
+import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailable-slots-query.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
 import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservation-settings.dto";
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
@@ -30,6 +31,14 @@ export class ReservationsController {
     @Query() query: ReservationAvailabilityQueryDto,
   ) {
     return this.reservationsService.getVenueAvailability(venueId, query);
+  }
+
+  @Get("preview/venues/:venueId/unavailable-slots")
+  getVenueUnavailableSlots(
+    @Param("venueId") venueId: string,
+    @Query() query: ReservationUnavailableSlotsQueryDto,
+  ) {
+    return this.reservationsService.getVenueUnavailableSlots(venueId, query);
   }
 
   @Post("preview/venues/:venueId")
