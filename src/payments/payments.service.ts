@@ -14,9 +14,11 @@ import {
   PaymentProvider,
   PaymentWebhookStatus,
   ReservationPaymentStatus,
+  ReservationType,
   ReservationStatus,
 } from "../../generated/prisma/enums";
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
+import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
@@ -37,6 +39,7 @@ export class PaymentsService {
     private readonly configService: ConfigService,
     private readonly worldlineProvider: WorldlinePaymentProvider,
     private readonly deviceTokensService: DeviceTokensService,
+    private readonly emailService: EmailService,
   ) {}
 
   async createReservationCheckout(
@@ -1077,6 +1080,9 @@ export class PaymentsService {
       throw new NotFoundException("Reservation payment was not found.");
     }
 
+    const shouldNotifyReservationRequest =
+      payment.status !== ReservationPaymentStatus.AUTHORIZED &&
+      payment.status !== ReservationPaymentStatus.CAPTURED;
     const confirmationExpiresAt = new Date(
       Date.now() + VENUE_CONFIRMATION_WINDOW_SECONDS * 1000,
     );
@@ -1110,7 +1116,12 @@ export class PaymentsService {
       return updatedPayment;
     });
 
-    await this.notifyVenueAboutReservationRequest(payment.reservationId);
+    if (shouldNotifyReservationRequest) {
+      await this.notifyVenueAboutReservationRequest(payment.reservationId);
+      await this.notifyCustomerAboutAdvanceReservationRequest(
+        payment.reservationId,
+      );
+    }
     return updatedPayment;
   }
 
@@ -1330,6 +1341,38 @@ export class PaymentsService {
     } catch (error) {
       this.logger.warn(
         `Reservation ${reservationId} was authorized, but venue push notification failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async notifyCustomerAboutAdvanceReservationRequest(
+    reservationId: string,
+  ) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: { venue: { select: { name: true } } },
+    });
+
+    if (
+      !reservation ||
+      reservation.type !== ReservationType.ADVANCE ||
+      !reservation.customerEmail
+    ) {
+      return;
+    }
+
+    try {
+      await this.emailService.sendReservationRequestReceivedEmail({
+        to: reservation.customerEmail.trim().toLowerCase(),
+        venueName: reservation.venue.name,
+        tableLabel: reservation.tableLabel,
+        startAt: reservation.timeSlotStart,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${reservationId} advance request email failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
