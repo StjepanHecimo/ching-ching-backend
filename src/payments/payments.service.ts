@@ -208,6 +208,45 @@ export class PaymentsService {
     };
   }
 
+  async createCustomerPaymentMethodCheckout(customerUserId: string) {
+    const checkout =
+      await this.worldlineProvider.createPaymentMethodCheckout(customerUserId);
+    return {
+      provider: PaymentProvider.WORLDLINE,
+      providerCheckoutId: checkout.providerCheckoutId,
+      checkoutUrl: checkout.checkoutUrl,
+      checkoutExpiresAt: checkout.expiresAt,
+      rawProviderData: checkout.rawProviderData,
+    };
+  }
+
+  async assertCustomerPaymentMethodCheckout(
+    customerUserId: string,
+    token: string,
+  ) {
+    if (!token?.trim()) {
+      throw new BadRequestException(
+        "Payment method checkout token is missing.",
+      );
+    }
+
+    const providerResult =
+      await this.worldlineProvider.assertPaymentMethodCheckout(token.trim());
+    const method = await this.prisma.$transaction((tx) =>
+      this.upsertSavedPaymentMethodFromProviderData(
+        tx,
+        customerUserId,
+        providerResult.rawProviderData,
+      ),
+    );
+
+    if (!method) {
+      throw new BadRequestException("Payment method was not verified.");
+    }
+
+    return this.serializePaymentMethod(method);
+  }
+
   async createTestCustomerPaymentMethod(
     customerUserId: string,
     dto: CreateTestPaymentMethodDto,
@@ -628,6 +667,15 @@ export class PaymentsService {
         amountCents,
         `Admin customer refund: ${reason}`,
       );
+      await this.prisma.reservation.update({
+        where: { id: reservationId },
+        data: {
+          status: ReservationStatus.CANCELLED,
+          cancelledAt: new Date(),
+          releasedAt: new Date(),
+          confirmationExpiresAt: null,
+        },
+      });
       await this.notifyVenueAboutAdminPaymentAction(payment, {
         title: "Rezervacija je refundirana",
         body: `${this.customerDisplayName(payment)} · ${this.formatCents(amountCents, payment.currency)} refundirano za ${payment.reservation.tableLabel ?? "Chin-Chin stol"}.`,
@@ -794,6 +842,85 @@ export class PaymentsService {
     });
   }
 
+  async assertReservationCheckout(
+    reservationId: string,
+    token?: string,
+    customerUserId?: string,
+  ) {
+    const payment = await this.prisma.reservationPayment.findFirst({
+      where: {
+        reservationId,
+        ...(customerUserId
+          ? {
+              reservation: {
+                customerId: customerUserId,
+              },
+            }
+          : {}),
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!payment) {
+      throw new NotFoundException("Reservation payment was not found.");
+    }
+
+    if (
+      payment.status === ReservationPaymentStatus.AUTHORIZED ||
+      payment.status === ReservationPaymentStatus.CAPTURED ||
+      payment.status === ReservationPaymentStatus.CAPTURE_PENDING
+    ) {
+      return this.serializePayment(payment);
+    }
+
+    const providerCheckoutId = token?.trim() || payment.providerCheckoutId;
+    if (!providerCheckoutId) {
+      throw new BadRequestException("Payment checkout token is missing.");
+    }
+
+    try {
+      const providerResult =
+        await this.worldlineProvider.assertAuthorizationCheckout(
+          providerCheckoutId,
+        );
+      const rawProviderData = providerResult.rawProviderData;
+      const providerStatus = this.normalizedRawProviderStatus(rawProviderData);
+      if (providerStatus === "AUTH_FAILED") {
+        return this.serializePayment(
+          await this.markPaymentAuthorizationFailed({
+            providerPaymentId: providerResult.providerPaymentId,
+            merchantReference: payment.providerMerchantReference ?? undefined,
+            rawProviderData,
+          }),
+        );
+      }
+
+      return this.serializePayment(
+        await this.markPaymentAuthorized({
+          providerPaymentId: providerResult.providerPaymentId,
+          merchantReference: payment.providerMerchantReference ?? undefined,
+          rawProviderData,
+        }),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${reservationId} payment assert failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return this.serializePayment(
+        await this.markPaymentAuthorizationFailed({
+          providerPaymentId: payment.providerPaymentId ?? undefined,
+          merchantReference: payment.providerMerchantReference ?? undefined,
+          rawProviderData: {
+            action: "PAYMENT_PAGE_ASSERT_FAILED",
+            error: error instanceof Error ? error.message : String(error),
+          },
+        }),
+      );
+    }
+  }
+
   async captureForAcceptedReservation(reservationId: string) {
     const payment = await this.prisma.reservationPayment.findFirst({
       where: {
@@ -818,6 +945,9 @@ export class PaymentsService {
       payment.amountCents,
       payment.currency,
     );
+    const existingRawProviderData = this.recordFromJson(
+      payment.rawProviderData,
+    );
 
     const allocation = await this.previewReservationAllocation({
       id: payment.reservation.id,
@@ -834,8 +964,11 @@ export class PaymentsService {
           status: ReservationPaymentStatus.CAPTURED,
           capturedCents: payment.amountCents,
           capturedAt: new Date(),
-          rawProviderData:
-            providerResult.rawProviderData as Prisma.InputJsonValue,
+          rawProviderData: {
+            ...existingRawProviderData,
+            capture: providerResult.rawProviderData,
+            ...providerResult.rawProviderData,
+          } as Prisma.InputJsonValue,
         },
       });
 
@@ -946,6 +1079,10 @@ export class PaymentsService {
       payment.providerPaymentId ?? payment.id,
       nextRefundCents,
       payment.currency,
+      payment.rawProviderData,
+    );
+    const existingRawProviderData = this.recordFromJson(
+      payment.rawProviderData,
     );
 
     const refunded = await this.prisma.$transaction(async (tx) => {
@@ -960,8 +1097,10 @@ export class PaymentsService {
         data: {
           status,
           refundedCents,
-          rawProviderData:
-            providerResult.rawProviderData as Prisma.InputJsonValue,
+          rawProviderData: {
+            ...existingRawProviderData,
+            refund: providerResult.rawProviderData,
+          } as Prisma.InputJsonValue,
         },
       });
 
@@ -1988,6 +2127,8 @@ export class PaymentsService {
     const rawStatus = (
       dto.status ??
       this.stringFrom(payload.status) ??
+      this.nestedString(payload, "Transaction", "Status") ??
+      this.nestedString(payload, "transaction", "status") ??
       this.nestedString(payload, "payment", "status") ??
       ""
     ).toUpperCase();
@@ -2008,6 +2149,35 @@ export class PaymentsService {
     }
 
     return "IGNORED" as const;
+  }
+
+  private normalizedRawProviderStatus(payload: Record<string, unknown>) {
+    const saferpay = this.toJsonObject(payload.saferpay);
+    const rawStatus = (
+      this.stringFrom(payload.status) ??
+      this.nestedString(payload, "Transaction", "Status") ??
+      this.nestedString(payload, "transaction", "status") ??
+      this.nestedString(saferpay, "Transaction", "Status") ??
+      this.stringFrom(saferpay.Status) ??
+      ""
+    ).toUpperCase();
+
+    if (
+      rawStatus.includes("AUTHORIZED") ||
+      rawStatus === "AUTHORIZATION_REQUESTED"
+    ) {
+      return "AUTHORIZED" as const;
+    }
+
+    if (
+      rawStatus.includes("REJECTED") ||
+      rawStatus.includes("FAILED") ||
+      rawStatus.includes("CANCELLED")
+    ) {
+      return "AUTH_FAILED" as const;
+    }
+
+    return "AUTHORIZED" as const;
   }
 
   private payloadFromWebhook(dto: WorldlineWebhookDto) {

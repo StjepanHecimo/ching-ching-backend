@@ -62,6 +62,26 @@ export class PaymentsController {
     );
   }
 
+  @Post("customers/me/payment-methods/checkout")
+  @UseGuards(JwtAuthGuard)
+  createCustomerPaymentMethodCheckout(@Req() request: AuthenticatedRequest) {
+    return this.paymentsService.createCustomerPaymentMethodCheckout(
+      request.user.userId,
+    );
+  }
+
+  @Post("customers/me/payment-methods/assert")
+  @UseGuards(JwtAuthGuard)
+  assertCustomerPaymentMethodCheckout(
+    @Body() dto: { token?: string },
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentsService.assertCustomerPaymentMethodCheckout(
+      request.user.userId,
+      dto.token ?? "",
+    );
+  }
+
   @Patch("customers/me/payment-methods/:paymentMethodId/default")
   @UseGuards(JwtAuthGuard)
   setDefaultCustomerPaymentMethod(
@@ -89,6 +109,31 @@ export class PaymentsController {
   @Get("preview/reservations/:reservationId")
   getReservationPaymentSummary(@Param("reservationId") reservationId: string) {
     return this.paymentsService.getReservationPaymentSummary(reservationId);
+  }
+
+  @Post("preview/reservations/:reservationId/assert")
+  assertPreviewReservationCheckout(
+    @Param("reservationId") reservationId: string,
+    @Body() dto: { token?: string },
+  ) {
+    return this.paymentsService.assertReservationCheckout(
+      reservationId,
+      dto.token,
+    );
+  }
+
+  @Post("customers/me/reservations/:reservationId/assert")
+  @UseGuards(JwtAuthGuard)
+  assertCustomerReservationCheckout(
+    @Param("reservationId") reservationId: string,
+    @Body() dto: { token?: string },
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentsService.assertReservationCheckout(
+      reservationId,
+      dto.token,
+      request.user.userId,
+    );
   }
 
   @Get("preview/venues/:venueId/earnings")
