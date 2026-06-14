@@ -454,6 +454,7 @@ export class WorldlinePaymentProvider {
 
   private providerMode() {
     return (
+      this.configService.get<string>("SAFERPAY_MODE")?.toLowerCase().trim() ??
       this.configService.get<string>("WORLDLINE_MODE")?.toLowerCase().trim() ??
       "mock"
     );

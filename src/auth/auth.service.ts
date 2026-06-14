@@ -8,6 +8,7 @@ import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcrypt";
 import { createHash, randomBytes } from "node:crypto";
+import { Prisma } from "../../generated/prisma/client";
 import { UserRole, UserStatus } from "../../generated/prisma/enums";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
@@ -21,6 +22,7 @@ import { VerifyEmailDto } from "./dto/verify-email.dto";
 type RefreshTokenPayload = {
   sub: string;
   tokenType: "refresh";
+  jti?: string;
 };
 
 type TokenPair = {
@@ -414,13 +416,17 @@ export class AuthService {
     });
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.refreshToken.update({
-        where: { id: storedToken.id },
+      const revoked = await tx.refreshToken.updateMany({
+        where: { id: storedToken.id, revokedAt: null },
         data: {
           revokedAt: new Date(),
           rotatedAt: new Date(),
         },
       });
+
+      if (revoked.count !== 1) {
+        throw new UnauthorizedException("Refresh token has been revoked.");
+      }
 
       await tx.refreshToken.create({
         data: {
@@ -489,6 +495,7 @@ export class AuthService {
       {
         sub: user.id,
         tokenType: "refresh",
+        jti: this.createVerificationToken(),
       },
       {
         secret: this.configService.getOrThrow<string>("JWT_REFRESH_SECRET"),
@@ -519,13 +526,23 @@ export class AuthService {
   }
 
   private async storeRefreshToken(userId: string, refreshToken: string) {
-    await this.prisma.refreshToken.create({
-      data: {
-        userId,
-        tokenHash: this.hashToken(refreshToken),
-        expiresAt: this.createRefreshTokenExpiryDate(),
-      },
-    });
+    try {
+      await this.prisma.refreshToken.create({
+        data: {
+          userId,
+          tokenHash: this.hashToken(refreshToken),
+          expiresAt: this.createRefreshTokenExpiryDate(),
+        },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        throw new ConflictException("Refresh token collision. Retry login.");
+      }
+      throw error;
+    }
   }
 
   private createRefreshTokenExpiryDate() {
