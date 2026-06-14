@@ -185,8 +185,10 @@ export class WorldlinePaymentProvider {
 
     return {
       providerCheckoutId: response.Token,
-      checkoutUrl: response.RedirectUrl,
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      checkoutUrl: this.saferpayAliasRedirectUrl(response),
+      expiresAt: response.Expiration
+        ? new Date(response.Expiration)
+        : new Date(Date.now() + 15 * 60 * 1000),
       rawProviderData: {
         mode: this.providerMode(),
         action: "ALIAS_INSERT",
@@ -672,6 +674,14 @@ export class WorldlinePaymentProvider {
     };
   }
 
+  private saferpayAliasRedirectUrl(response: SaferpayAliasInsert) {
+    const redirectUrl = response.Redirect?.RedirectUrl;
+    if (!redirectUrl) {
+      throw new Error("Saferpay alias insert did not return RedirectUrl.");
+    }
+    return redirectUrl;
+  }
+
   private lastFourDigits(value: string) {
     const digits = value.replace(/\D/g, "");
     return digits.length >= 4 ? digits.slice(-4) : undefined;
@@ -712,7 +722,10 @@ type SaferpayPaymentPageInitialize = {
 
 type SaferpayAliasInsert = {
   Token: string;
-  RedirectUrl: string;
+  Expiration?: string;
+  Redirect?: {
+    RedirectUrl?: string;
+  };
 };
 
 type SaferpayPaymentPageAssert = {
