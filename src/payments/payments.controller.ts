@@ -7,7 +7,9 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
+  Res,
   UseGuards,
 } from "@nestjs/common";
 import { AuthenticatedRequest } from "../auth/authenticated-request";
@@ -172,5 +174,87 @@ export class PaymentsController {
     @Headers() headers: Record<string, unknown>,
   ) {
     return this.paymentsService.handleWorldlineWebhook(dto, headers);
+  }
+
+  @Get("returns/saferpay/payment-method")
+  handleSaferpayPaymentMethodReturn(
+    @Query() query: Record<string, unknown>,
+    @Res() response: any,
+  ) {
+    const queryString = this.queryStringFromRecord(query);
+    const targetUrl = `chinchincustomer://payment-method-return/saferpay${
+      queryString ? `?${queryString}` : ""
+    }`;
+    return this.sendCustomerAppReturnPage(
+      response,
+      targetUrl,
+      "Vracamo te u Chin-Chin aplikaciju.",
+    );
+  }
+
+  @Get("returns/saferpay/reservation")
+  handleSaferpayReservationReturn(
+    @Query() query: Record<string, unknown>,
+    @Res() response: any,
+  ) {
+    const queryString = this.queryStringFromRecord(query);
+    const targetUrl = `chinchincustomer://payment-return/saferpay${
+      queryString ? `?${queryString}` : ""
+    }`;
+    return this.sendCustomerAppReturnPage(
+      response,
+      targetUrl,
+      "Vracamo te na rezervaciju.",
+    );
+  }
+
+  private queryStringFromRecord(query: Record<string, unknown>) {
+    const params = new URLSearchParams();
+    for (const [key, value] of Object.entries(query)) {
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          if (item !== undefined && item !== null) {
+            params.append(key, String(item));
+          }
+        }
+        continue;
+      }
+      if (value !== undefined && value !== null) {
+        params.set(key, String(value));
+      }
+    }
+    return params.toString();
+  }
+
+  private sendCustomerAppReturnPage(
+    response: any,
+    targetUrl: string,
+    message: string,
+  ) {
+    const encodedTargetUrl = JSON.stringify(targetUrl);
+    const escapedTargetUrl = targetUrl.replace(/"/g, "&quot;");
+    return response.type("html").send(`<!doctype html>
+<html lang="hr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chin-Chin</title>
+  <style>
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #fff8ea; color: #191511; }
+    main { width: min(90vw, 420px); text-align: center; }
+    a { display: inline-block; margin-top: 18px; padding: 12px 18px; border-radius: 999px; background: #191511; color: white; text-decoration: none; font-weight: 800; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Chin-Chin</h1>
+    <p>${message}</p>
+    <a href="${escapedTargetUrl}">Otvori aplikaciju</a>
+  </main>
+  <script>
+    window.location.href = ${encodedTargetUrl};
+  </script>
+</body>
+</html>`);
   }
 }

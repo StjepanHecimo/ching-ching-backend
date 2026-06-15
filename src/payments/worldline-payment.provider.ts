@@ -469,6 +469,14 @@ export class WorldlinePaymentProvider {
     );
   }
 
+  private publicApiUrl() {
+    const configured =
+      this.configService.get<string>("API_PUBLIC_URL") ??
+      this.configService.get<string>("APP_WEB_URL") ??
+      this.publicAppUrl();
+    return configured.replace(/\/+$/, "");
+  }
+
   private saferpayBaseUrl() {
     const configured =
       this.configService.get<string>("SAFERPAY_API_BASE_URL") ??
@@ -530,7 +538,8 @@ export class WorldlinePaymentProvider {
   private saferpayReturnUrl(reservationId: string) {
     const configured = this.configService.get<string>("SAFERPAY_RETURN_URL");
     const base =
-      configured?.trim() || "chinchincustomer://payment-return/saferpay";
+      configured?.trim() ||
+      `${this.publicApiUrl()}/api/payments/returns/saferpay/reservation`;
     const separator = base.includes("?") ? "&" : "?";
     return `${base}${separator}reservationId=${encodeURIComponent(
       reservationId,
@@ -538,10 +547,12 @@ export class WorldlinePaymentProvider {
   }
 
   private saferpayPaymentMethodReturnUrl() {
+    const configured = this.configService.get<string>(
+      "SAFERPAY_PAYMENT_METHOD_RETURN_URL",
+    );
     return (
-      this.configService
-        .get<string>("SAFERPAY_PAYMENT_METHOD_RETURN_URL")
-        ?.trim() || "chinchincustomer://payment-method-return/saferpay"
+      configured?.trim() ||
+      `${this.publicApiUrl()}/api/payments/returns/saferpay/payment-method`
     );
   }
 
