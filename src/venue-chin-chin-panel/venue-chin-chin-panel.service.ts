@@ -211,6 +211,14 @@ export class VenueChinChinPanelService {
         : undefined,
       include: {
         chinChinPanel: true,
+        spaceLayoutProjects: {
+          orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
+          take: 1,
+          select: {
+            photos: true,
+            space: true,
+          },
+        },
       },
       orderBy: {
         name: "asc",
@@ -244,6 +252,7 @@ export class VenueChinChinPanelService {
           liveChinChinTableIds: isLive ? liveChinChinTableIds : [],
           reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
           reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+          profile: this.serializeVenueProfile(venue),
           panel: venue.chinChinPanel
             ? this.serializePanel({
                 ...venue.chinChinPanel,
@@ -279,6 +288,14 @@ export class VenueChinChinPanelService {
       },
       include: {
         chinChinPanel: true,
+        spaceLayoutProjects: {
+          orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
+          take: 1,
+          select: {
+            photos: true,
+            space: true,
+          },
+        },
       },
       orderBy: {
         name: "asc",
@@ -328,6 +345,7 @@ export class VenueChinChinPanelService {
           liveChinChinTableIds: isLive ? liveChinChinTableIds : [],
           reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
           reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+          profile: this.serializeVenueProfile(venue),
           panel,
         };
       })
@@ -446,6 +464,164 @@ export class VenueChinChinPanelService {
     });
 
     return this.serializePanel(panel);
+  }
+
+  private serializeVenueProfile(venue: {
+    name: string;
+    profileDescription?: string | null;
+    profileImages?: Prisma.JsonValue;
+    spaceLayoutProjects?: Array<{
+      photos: Prisma.JsonValue;
+      space: Prisma.JsonValue;
+    }>;
+  }) {
+    const configuredImages = this.serializeVenueProfileImages(
+      venue.profileImages,
+    );
+    const fallbackImages = configuredImages.length
+      ? []
+      : this.extractProfileImagesFromLayoutProjects(
+          venue.spaceLayoutProjects ?? [],
+        );
+    const images = (configuredImages.length ? configuredImages : fallbackImages)
+      .slice(0, 8)
+      .map((image, index) => ({
+        ...image,
+        isPrimary: index === 0,
+      }));
+    const description = venue.profileDescription?.trim();
+
+    return {
+      description:
+        description ||
+        `${venue.name} je Chin-Chin kafić za društvo, izlazak i rezervaciju stola bez čekanja. Odaberi stol, pošalji zahtjev i dođi spreman za večer.`,
+      images,
+    };
+  }
+
+  private serializeVenueProfileImages(value: Prisma.JsonValue | undefined) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return this.collectProfileImages(value);
+  }
+
+  private extractProfileImagesFromLayoutProjects(
+    projects: Array<{ photos: Prisma.JsonValue; space: Prisma.JsonValue }>,
+  ) {
+    const result: Array<{
+      id: string;
+      fileName: string;
+      mimeType: string;
+      dataUrl: string | null;
+      remoteUrl: string | null;
+      caption: string | null;
+    }> = [];
+
+    for (const project of projects) {
+      result.push(
+        ...this.collectProfileImagesFromSpace(project.space),
+        ...this.collectProfileImages(project.photos),
+      );
+    }
+
+    const seen = new Set<string>();
+    return result.filter((image) => {
+      const key =
+        image.remoteUrl || image.dataUrl || `${image.fileName}-${image.id}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
+
+  private collectProfileImagesFromSpace(value: Prisma.JsonValue) {
+    const result: ReturnType<typeof this.collectProfileImages> = [];
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return result;
+    }
+
+    const space = value as Record<string, unknown>;
+    result.push(...this.collectProfileImages(space.venuePhotos));
+
+    const rooms = Array.isArray(space.rooms) ? space.rooms : [];
+    for (const room of rooms) {
+      if (!room || typeof room !== "object" || Array.isArray(room)) {
+        continue;
+      }
+      result.push(
+        ...this.collectProfileImages((room as Record<string, unknown>).photos),
+      );
+    }
+
+    return result;
+  }
+
+  private collectProfileImages(value: unknown) {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry, index) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return null;
+        }
+
+        const image = entry as Record<string, unknown>;
+        const dataUrl =
+          typeof image.dataUrl === "string" && image.dataUrl.trim()
+            ? image.dataUrl.trim()
+            : null;
+        const remoteUrl =
+          typeof image.remoteUrl === "string" && image.remoteUrl.trim()
+            ? image.remoteUrl.trim()
+            : null;
+        if (!dataUrl && !remoteUrl) {
+          return null;
+        }
+
+        const id =
+          typeof image.id === "string" && image.id.trim()
+            ? image.id.trim()
+            : `venue-profile-image-${index + 1}`;
+        const fileName =
+          typeof image.fileName === "string" && image.fileName.trim()
+            ? image.fileName.trim()
+            : `venue-profile-${index + 1}.jpg`;
+        const mimeType =
+          typeof image.mimeType === "string" && image.mimeType.trim()
+            ? image.mimeType.trim()
+            : "image/jpeg";
+        const caption =
+          typeof image.caption === "string" && image.caption.trim()
+            ? image.caption.trim()
+            : null;
+
+        return {
+          id,
+          fileName,
+          mimeType,
+          dataUrl,
+          remoteUrl,
+          caption,
+        };
+      })
+      .filter(
+        (
+          entry,
+        ): entry is {
+          id: string;
+          fileName: string;
+          mimeType: string;
+          dataUrl: string | null;
+          remoteUrl: string | null;
+          caption: string | null;
+        } => entry !== null,
+      );
   }
 
   private serializePanel(panel: {

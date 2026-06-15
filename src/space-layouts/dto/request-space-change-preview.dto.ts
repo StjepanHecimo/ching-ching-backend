@@ -11,8 +11,8 @@ import {
 import { LayoutPhotoDto } from "./layout-photo.dto";
 
 export class RequestSpaceChangePreviewDto {
-  @IsIn(["EDIT_SPACE", "DELETE_ROOM"])
-  type!: "EDIT_SPACE" | "DELETE_ROOM";
+  @IsIn(["EDIT_SPACE", "DELETE_ROOM", "PROFILE_IMAGES"])
+  type!: "EDIT_SPACE" | "DELETE_ROOM" | "PROFILE_IMAGES";
 
   @IsOptional()
   @IsString()
@@ -30,8 +30,13 @@ export class RequestSpaceChangePreviewDto {
   ownerNotes?: string;
 
   @IsOptional()
+  @IsString()
+  @Length(10, 1000)
+  profileDescription?: string;
+
+  @IsOptional()
   @IsArray()
-  @ArrayMaxSize(4)
+  @ArrayMaxSize(5)
   @ValidateNested({ each: true })
   @Type(() => LayoutPhotoDto)
   attachments?: LayoutPhotoDto[];

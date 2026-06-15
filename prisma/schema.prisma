@@ -250,6 +250,8 @@ model Venue {
   country                       String    @default("HR")
   latitude                      Float?
   longitude                     Float?
+  profileDescription            String?
+  profileImages                 Json      @default("[]")
   isLive                        Boolean   @default(false)
   liveChinChinTableIds          Json      @default("[]")
   liveStartedAt                 DateTime?

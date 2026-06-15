@@ -491,6 +491,7 @@ export class SpaceLayoutsService {
     }
 
     this.ensureSpaceChangeTarget(sourceLayout, dto);
+    this.ensureProfileImagesChangeTarget(dto);
 
     const now = new Date().toISOString();
     const attachments = (dto.attachments ?? []).map((photo, index) =>
@@ -529,6 +530,7 @@ export class SpaceLayoutsService {
           changeRequestType: dto.type,
           requestedRoomLabel: dto.roomLabel?.trim(),
           ownerNotes: dto.ownerNotes?.trim(),
+          profileDescription: dto.profileDescription?.trim(),
           remodelLevel: dto.remodelLevel?.trim(),
           layout: sourceLayout,
           sourceProjectId: sourceProject.id,
@@ -543,6 +545,7 @@ export class SpaceLayoutsService {
             sourceProjectId: sourceProject.id,
             roomLabel: dto.roomLabel?.trim(),
             remodelLevel: dto.remodelLevel?.trim(),
+            profileDescription: dto.profileDescription?.trim(),
             attachments,
             originalFloorPlan,
             requestedAt: now,
@@ -648,6 +651,26 @@ export class SpaceLayoutsService {
       include: { venue: true },
     });
 
+    if (changeRequest?.type === "PROFILE_IMAGES") {
+      const profileImages = Array.isArray(changeRequest.attachments)
+        ? changeRequest.attachments
+        : [];
+      const profileDescription =
+        typeof changeRequest.profileDescription === "string"
+          ? changeRequest.profileDescription.trim()
+          : "";
+
+      await this.prisma.venue.update({
+        where: { id: project.venueId },
+        data: {
+          ...(profileImages.length === 5
+            ? { profileImages: profileImages as Prisma.InputJsonValue }
+            : {}),
+          ...(profileDescription ? { profileDescription } : {}),
+        },
+      });
+    }
+
     return this.serializeProject(updatedProject);
   }
 
@@ -744,8 +767,10 @@ export class SpaceLayoutsService {
       return;
     }
 
-    if (venuePhotos.length !== 4) {
-      throw new BadRequestException("Provide exactly 4 venue space photos.");
+    if (venuePhotos.length !== 5) {
+      throw new BadRequestException(
+        "Provide exactly 5 venue profile photos: facade plus four interior photos.",
+      );
     }
 
     this.ensureUsablePhotoReferences(venuePhotos);
@@ -1051,6 +1076,28 @@ export class SpaceLayoutsService {
     if (!found) {
       throw new BadRequestException(
         "Room was not found in the approved layout.",
+      );
+    }
+  }
+
+  private ensureProfileImagesChangeTarget(dto: RequestSpaceChangePreviewDto) {
+    if (dto.type !== "PROFILE_IMAGES") {
+      return;
+    }
+
+    const attachmentCount = (dto.attachments ?? []).length;
+    const hasProfileDescription =
+      (dto.profileDescription?.trim().length ?? 0) > 0;
+
+    if (!hasProfileDescription && attachmentCount === 0) {
+      throw new BadRequestException(
+        "Profile change requests require a profile description or exactly 5 photos.",
+      );
+    }
+
+    if (attachmentCount > 0 && attachmentCount !== 5) {
+      throw new BadRequestException(
+        "Profile image change requests require exactly 5 photos: facade plus four interior photos.",
       );
     }
   }

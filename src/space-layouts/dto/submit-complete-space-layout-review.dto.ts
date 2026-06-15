@@ -36,8 +36,8 @@ export class SubmitCompleteSpaceLayoutReviewDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMinSize(4)
-  @ArrayMaxSize(4)
+  @ArrayMinSize(5)
+  @ArrayMaxSize(5)
   @ValidateNested({ each: true })
   @Type(() => LayoutPhotoDto)
   venuePhotos?: LayoutPhotoDto[];
