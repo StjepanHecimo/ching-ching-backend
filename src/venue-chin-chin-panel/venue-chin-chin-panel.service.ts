@@ -29,6 +29,12 @@ type NormalizedDrink = {
   logoAssetKey: string | null;
   logoUrl: string | null;
   sourceText: string;
+  promoPriceLabel?: string | null;
+};
+
+type DrinkPanelInput = {
+  name: string;
+  promoPriceLabel?: string | null;
 };
 
 type DrinkBrandLookup = {
@@ -93,6 +99,69 @@ const DRINK_BRAND_SEEDS: DrinkBrandSeed[] = [
     logoAssetKey: "heineken",
   },
   {
+    name: "Carlsberg",
+    brandKey: "carlsberg",
+    type: "DRAFT_BEER",
+    aliases: ["carlsberg"],
+    logoAssetKey: "carlsberg",
+  },
+  {
+    name: "Stella Artois",
+    brandKey: "stella_artois",
+    type: "DRAFT_BEER",
+    aliases: ["stella artois", "stella"],
+    logoAssetKey: "stella_artois",
+  },
+  {
+    name: "Amstel",
+    brandKey: "amstel",
+    type: "DRAFT_BEER",
+    aliases: ["amstel"],
+    logoAssetKey: "amstel",
+  },
+  {
+    name: "Kronenbourg 1664",
+    brandKey: "kronenbourg_1664",
+    type: "DRAFT_BEER",
+    aliases: ["kronenbourg 1664", "kronenbourg", "1664"],
+    logoAssetKey: "kronenbourg_1664",
+  },
+  {
+    name: "Guinness",
+    brandKey: "guinness",
+    type: "DRAFT_BEER",
+    aliases: ["guinness"],
+    logoAssetKey: "guinness",
+  },
+  {
+    name: "Beck's",
+    brandKey: "becks",
+    type: "DRAFT_BEER",
+    aliases: ["becks", "beck's"],
+    logoAssetKey: "becks",
+  },
+  {
+    name: "Budweiser Budvar",
+    brandKey: "budweiser_budvar",
+    type: "DRAFT_BEER",
+    aliases: ["budweiser budvar", "budvar"],
+    logoAssetKey: "budweiser_budvar",
+  },
+  {
+    name: "Pilsner Urquell",
+    brandKey: "pilsner_urquell",
+    type: "DRAFT_BEER",
+    aliases: ["pilsner urquell", "pilsner"],
+    logoAssetKey: "pilsner_urquell",
+  },
+  {
+    name: "Estrella Damm",
+    brandKey: "estrella_damm",
+    type: "DRAFT_BEER",
+    aliases: ["estrella damm", "estrella"],
+    logoAssetKey: "estrella_damm",
+  },
+  {
     name: "Ozujsko",
     brandKey: "ozujsko",
     type: "DRAFT_BEER",
@@ -107,6 +176,20 @@ const DRINK_BRAND_SEEDS: DrinkBrandSeed[] = [
     logoAssetKey: "staropramen",
   },
   {
+    name: "Ballantine's",
+    brandKey: "ballantines",
+    type: "WHISKEY",
+    aliases: ["ballantines", "ballantine's", "ballantine"],
+    logoAssetKey: "ballantines",
+  },
+  {
+    name: "Johnnie Walker",
+    brandKey: "johnnie_walker",
+    type: "WHISKEY",
+    aliases: ["johnnie walker", "johnie walker", "johnny walker"],
+    logoAssetKey: "johnnie_walker",
+  },
+  {
     name: "Jameson",
     brandKey: "jameson",
     type: "WHISKEY",
@@ -118,7 +201,119 @@ const DRINK_BRAND_SEEDS: DrinkBrandSeed[] = [
     brandKey: "jack_daniels",
     type: "WHISKEY",
     aliases: ["jack daniels", "jack daniel's", "jack"],
-    logoAssetKey: "jack_daniels",
+    logoAssetKey: "jack-daniels",
+  },
+  {
+    name: "Chivas Regal",
+    brandKey: "chivas_regal",
+    type: "WHISKEY",
+    aliases: ["chivas regal", "chivas"],
+    logoAssetKey: "chivas_regal",
+  },
+  {
+    name: "Bacardi",
+    brandKey: "bacardi",
+    type: "OTHER",
+    aliases: ["bacardi"],
+    logoAssetKey: "bacardi",
+  },
+  {
+    name: "Malibu",
+    brandKey: "malibu",
+    type: "OTHER",
+    aliases: ["malibu"],
+    logoAssetKey: "malibu",
+  },
+  {
+    name: "Bailey's",
+    brandKey: "baileys",
+    type: "OTHER",
+    aliases: ["baileys", "bailey's"],
+    logoAssetKey: "baileys",
+  },
+  {
+    name: "Vodka strana",
+    brandKey: "vodka_strana",
+    type: "OTHER",
+    aliases: ["vodka strana", "strana vodka"],
+    logoAssetKey: "vodka_strana",
+  },
+  {
+    name: "Vodka voćna",
+    brandKey: "vodka_vocna",
+    type: "OTHER",
+    aliases: ["vodka vocna", "vodka voćna", "vocna vodka", "voćna vodka"],
+    logoAssetKey: "vodka_vocna",
+  },
+  {
+    name: "Sambuca",
+    brandKey: "sambuca",
+    type: "OTHER",
+    aliases: ["sambuca"],
+    logoAssetKey: "sambuca",
+  },
+  {
+    name: "Viljamovka",
+    brandKey: "viljamovka",
+    type: "OTHER",
+    aliases: ["viljamovka", "viljam"],
+    logoAssetKey: "viljamovka",
+  },
+  {
+    name: "Campari",
+    brandKey: "campari",
+    type: "OTHER",
+    aliases: ["campari"],
+    logoAssetKey: "campari",
+  },
+  {
+    name: "Jagermeister",
+    brandKey: "jagermeister",
+    type: "OTHER",
+    aliases: ["jagermeister", "jägermeister", "jager"],
+    logoAssetKey: "jagermeister",
+  },
+  {
+    name: "Tequila",
+    brandKey: "tequila",
+    type: "OTHER",
+    aliases: ["tequila", "tequilla"],
+    logoAssetKey: "tequila",
+  },
+  {
+    name: "Martell",
+    brandKey: "martell",
+    type: "OTHER",
+    aliases: ["martell"],
+    logoAssetKey: "martell",
+  },
+  {
+    name: "Courvoisier",
+    brandKey: "courvoisier",
+    type: "OTHER",
+    aliases: ["courvoisier"],
+    logoAssetKey: "courvoisier",
+  },
+  {
+    name: "Hennessy",
+    brandKey: "hennessy",
+    type: "OTHER",
+    aliases: ["hennessy"],
+    logoAssetKey: "hennessy",
+  },
+  {
+    name: "Aperol",
+    brandKey: "aperol",
+    type: "OTHER",
+    aliases: ["aperol"],
+    logoAssetKey: "aperol",
+  },
+  {
+    name: "Aperol Spritz",
+    brandKey: "aperol_spritz",
+    type: "COCKTAIL",
+    aliases: ["aperol spritz", "spritz"],
+    logoAssetKey: "aperol_spritz",
   },
   {
     name: "Bombay Sapphire",
@@ -260,6 +455,7 @@ export class VenueChinChinPanelService {
                   id: venue.id,
                   name: venue.name,
                   slug: venue.slug,
+                  country: venue.country,
                 },
               })
             : null,
@@ -315,6 +511,7 @@ export class VenueChinChinPanelService {
             id: venue.id,
             name: venue.name,
             slug: venue.slug,
+            country: venue.country,
           },
         });
 
@@ -398,11 +595,12 @@ export class VenueChinChinPanelService {
       this.ensureDefaultContentAssets(),
     ]);
 
-    const promotionalDrinkNames = dto.promotionalDrinks
-      .map((drink) => drink.trim())
-      .filter(Boolean)
+    const currency = this.currencyForCountry(venue.country);
+    const promotionalDrinkInputs = dto.promotionalDrinks
+      .map((drink) => this.parsePanelDrinkInput(drink, currency))
+      .filter((drink): drink is DrinkPanelInput => drink !== null)
       .slice(0, 3);
-    if (!promotionalDrinkNames.length) {
+    if (!promotionalDrinkInputs.length) {
       throw new BadRequestException("Provide at least one promotional drink.");
     }
 
@@ -416,10 +614,13 @@ export class VenueChinChinPanelService {
     }
 
     const promotionalDrinks = await this.normalizeDrinks(
-      promotionalDrinkNames,
+      promotionalDrinkInputs,
       "OTHER",
     );
-    const draftBeers = await this.normalizeDrinks(draftBeerNames, "DRAFT_BEER");
+    const draftBeers = await this.normalizeDrinks(
+      draftBeerNames.map((name) => ({ name })),
+      "DRAFT_BEER",
+    );
     const eventInputs = this.collectEventInputs(dto);
     if (dto.hasEvent && !eventInputs.length) {
       throw new BadRequestException(
@@ -435,6 +636,7 @@ export class VenueChinChinPanelService {
       where: { venueId },
       create: {
         venueId,
+        currency,
         promotionalDrinks: promotionalDrinks as Prisma.InputJsonValue,
         hasDraftBeer: dto.hasDraftBeer,
         draftBeers: draftBeers as Prisma.InputJsonValue,
@@ -449,6 +651,7 @@ export class VenueChinChinPanelService {
       },
       update: {
         promotionalDrinks: promotionalDrinks as Prisma.InputJsonValue,
+        currency,
         hasDraftBeer: dto.hasDraftBeer,
         draftBeers: draftBeers as Prisma.InputJsonValue,
         hasEvent: dto.hasEvent,
@@ -644,8 +847,12 @@ export class VenueChinChinPanelService {
       id: string;
       name: string;
       slug: string;
+      country?: string | null;
     };
+    currency?: string;
   }) {
+    const currency =
+      panel.currency || this.currencyForCountry(panel.venue.country);
     const events = this.serializePanelEvents(panel.events);
     const fallbackEvent =
       !events.length && panel.eventDay && panel.eventStartsAt && panel.eventBand
@@ -675,6 +882,7 @@ export class VenueChinChinPanelService {
       id: panel.id,
       venueId: panel.venueId,
       venue: panel.venue,
+      currency,
       promotionalDrinks: this.serializeDrinkList(panel.promotionalDrinks),
       hasDraftBeer: panel.hasDraftBeer,
       draftBeers: this.serializeDrinkList(panel.draftBeers),
@@ -740,9 +948,90 @@ export class VenueChinChinPanelService {
           logoAssetKey: item.logoAssetKey?.toString() || null,
           logoUrl: item.logoUrl?.toString() || null,
           sourceText: item.sourceText?.toString() || name,
+          promoPriceLabel:
+            item.promoPriceLabel?.toString().trim() ||
+            item.priceLabel?.toString().trim() ||
+            null,
         };
       })
       .filter((entry): entry is NormalizedDrink => entry !== null);
+  }
+
+  private parsePanelDrinkInput(
+    value: unknown,
+    currency: string,
+  ): DrinkPanelInput | null {
+    if (typeof value === "string") {
+      const name = value.trim();
+      return name ? { name } : null;
+    }
+
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+
+    const item = value as Record<string, unknown>;
+    const name = item.name?.toString().trim() || "";
+    if (!name) {
+      return null;
+    }
+
+    const rawPrice =
+      item.promoPriceLabel?.toString().trim() ||
+      item.priceLabel?.toString().trim() ||
+      item.price?.toString().trim() ||
+      "";
+    const promoPriceLabel = rawPrice
+      ? this.formatPromoPriceLabel(rawPrice, currency)
+      : null;
+    return { name, promoPriceLabel };
+  }
+
+  private formatPromoPriceLabel(rawPrice: string, currency: string) {
+    const value = rawPrice.trim().replace(/\s+/g, " ").slice(0, 32);
+    if (!value) {
+      return null;
+    }
+
+    const normalizedCurrency = currency.toUpperCase();
+    const hasCurrency =
+      value.toUpperCase().includes(normalizedCurrency) ||
+      /[€$£]|CHF|BAM|RSD|USD|GBP/i.test(value);
+    return hasCurrency ? value : `${value} ${normalizedCurrency}`;
+  }
+
+  private currencyForCountry(country?: string | null) {
+    const normalized = country?.trim().toUpperCase();
+    const currenciesByCountry: Record<string, string> = {
+      HR: "EUR",
+      DE: "EUR",
+      AT: "EUR",
+      SI: "EUR",
+      IT: "EUR",
+      FR: "EUR",
+      ES: "EUR",
+      NL: "EUR",
+      BE: "EUR",
+      IE: "EUR",
+      PT: "EUR",
+      FI: "EUR",
+      SK: "EUR",
+      EE: "EUR",
+      LV: "EUR",
+      LT: "EUR",
+      GR: "EUR",
+      CY: "EUR",
+      LU: "EUR",
+      MT: "EUR",
+      CH: "CHF",
+      LI: "CHF",
+      GB: "GBP",
+      UK: "GBP",
+      US: "USD",
+      BA: "BAM",
+      RS: "RSD",
+    };
+    return currenciesByCountry[normalized ?? ""] ?? "EUR";
   }
 
   private serializeContent(
@@ -930,14 +1219,15 @@ export class VenueChinChinPanelService {
   }
 
   private async normalizeDrinks(
-    drinkNames: string[],
+    drinks: DrinkPanelInput[],
     fallbackType: NormalizedDrink["type"],
   ): Promise<NormalizedDrink[]> {
     const brands = await this.loadDrinkBrands();
 
-    return drinkNames.map((drinkName) =>
-      this.normalizeDrinkFromBrands(drinkName, fallbackType, brands),
-    );
+    return drinks.map((drink) => ({
+      ...this.normalizeDrinkFromBrands(drink.name, fallbackType, brands),
+      promoPriceLabel: drink.promoPriceLabel ?? null,
+    }));
   }
 
   private async normalizeContent(
@@ -965,6 +1255,7 @@ export class VenueChinChinPanelService {
       logoAssetKey: match?.logoAssetKey ?? null,
       logoUrl: null,
       sourceText,
+      promoPriceLabel: null,
     };
   }
 

@@ -37,9 +37,7 @@ export class VenueChinChinPanelEventDto {
 export class UpsertVenueChinChinPanelDto {
   @IsArray()
   @ArrayMaxSize(3)
-  @IsString({ each: true })
-  @Length(1, 80, { each: true })
-  promotionalDrinks!: string[];
+  promotionalDrinks!: unknown[];
 
   @IsBoolean()
   hasDraftBeer!: boolean;
