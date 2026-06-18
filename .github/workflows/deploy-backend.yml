@@ -63,13 +63,26 @@ jobs:
           echo "Applying Prisma migrations..."
           docker compose -f compose.prod.yml --profile tools run --rm migrate
 
-          echo "Rebuilding and restarting API..."
-          docker compose -f compose.prod.yml up -d --build api
+          echo "Rebuilding API image from the deployed commit..."
+          docker compose -f compose.prod.yml build --no-cache api
+
+          echo "Recreating API container from the new image..."
+          docker compose -f compose.prod.yml up -d --force-recreate --no-build api
 
           echo "Checking containers..."
           docker compose -f compose.prod.yml ps
 
           echo "Checking backend health..."
-          curl -fsS "$HEALTH_URL"
-          echo
+          for attempt in $(seq 1 30); do
+            if curl -fsS "$HEALTH_URL"; then
+              echo
+              break
+            fi
+            if [ "$attempt" -eq 30 ]; then
+              echo "Backend health check failed after 60 seconds."
+              docker compose -f compose.prod.yml logs --tail=100 api
+              exit 1
+            fi
+            sleep 2
+          done
           REMOTE
