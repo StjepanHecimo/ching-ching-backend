@@ -636,7 +636,6 @@ export class VenueChinChinPanelService {
       where: { venueId },
       create: {
         venueId,
-        currency,
         promotionalDrinks: promotionalDrinks as Prisma.InputJsonValue,
         hasDraftBeer: dto.hasDraftBeer,
         draftBeers: draftBeers as Prisma.InputJsonValue,
@@ -651,7 +650,6 @@ export class VenueChinChinPanelService {
       },
       update: {
         promotionalDrinks: promotionalDrinks as Prisma.InputJsonValue,
-        currency,
         hasDraftBeer: dto.hasDraftBeer,
         draftBeers: draftBeers as Prisma.InputJsonValue,
         hasEvent: dto.hasEvent,
