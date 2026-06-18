@@ -5,7 +5,20 @@ import {
   IsOptional,
   IsString,
   Length,
+  ValidateNested,
 } from "class-validator";
+import { Type } from "class-transformer";
+
+export class VenueChinChinPanelPromotionalDrinkDto {
+  @IsString()
+  @Length(1, 80)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  promoPriceLabel?: string;
+}
 
 export class VenueChinChinPanelEventDto {
   @IsOptional()
@@ -37,7 +50,9 @@ export class VenueChinChinPanelEventDto {
 export class UpsertVenueChinChinPanelDto {
   @IsArray()
   @ArrayMaxSize(3)
-  promotionalDrinks!: unknown[];
+  @ValidateNested({ each: true })
+  @Type(() => VenueChinChinPanelPromotionalDrinkDto)
+  promotionalDrinks!: VenueChinChinPanelPromotionalDrinkDto[];
 
   @IsBoolean()
   hasDraftBeer!: boolean;
