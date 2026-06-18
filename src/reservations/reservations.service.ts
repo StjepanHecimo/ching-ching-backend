@@ -86,9 +86,14 @@ export class ReservationsService {
   ) {
     const venue = await this.getVenueReservationState(venueId);
     const slot = this.parseSlot(query.startAt, query.endAt, venue);
-    const liveDistanceMeters = this.validateReservationRuleContext(
+    const reservationType = this.resolveReservationType(
       venue,
       query.type,
+      slot.startAt,
+    );
+    const liveDistanceMeters = this.validateReservationRuleContext(
+      venue,
+      reservationType,
       query.userLatitude,
       query.userLongitude,
     );
@@ -96,7 +101,7 @@ export class ReservationsService {
     const tables = this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
       venue,
-      query.type,
+      reservationType,
       slot.startAt,
     );
     const blockingReservations = await this.findBlockingReservations(
@@ -112,20 +117,25 @@ export class ReservationsService {
 
     return {
       venueId,
-      type: query.type,
+      type: reservationType,
       startAt: slot.startAt.toISOString(),
       endAt: slot.endAt.toISOString(),
       checkInOpensAt: slot.checkInOpensAt.toISOString(),
       checkInClosesAt: slot.checkInClosesAt.toISOString(),
       arrivalDeadlineAt: slot.arrivalDeadlineAt.toISOString(),
       partySize: query.partySize,
-      liveRadiusMeters: query.type === "LIVE" ? LIVE_RADIUS_METERS : null,
+      liveRadiusMeters:
+        reservationType === "LIVE" ? LIVE_RADIUS_METERS : null,
       distanceMeters: liveDistanceMeters,
       tables: tables.map((table) => {
         const reserved = this.isTableReservedByKeys(table, blockedTableKeys);
         return {
           ...table,
-          priceCents: this.calculateFeeCents(query.type, table, slot.startAt),
+          priceCents: this.calculateFeeCents(
+            reservationType,
+            table,
+            slot.startAt,
+          ),
           currency: "EUR",
           available:
             table.reservable &&
@@ -206,9 +216,14 @@ export class ReservationsService {
   ) {
     const venue = await this.getVenueReservationState(venueId);
     const slot = this.parseSlot(dto.startAt, dto.endAt, venue);
-    const liveDistanceMeters = this.validateReservationRuleContext(
+    const reservationType = this.resolveReservationType(
       venue,
       dto.type,
+      slot.startAt,
+    );
+    const liveDistanceMeters = this.validateReservationRuleContext(
+      venue,
+      reservationType,
       dto.userLatitude,
       dto.userLongitude,
     );
@@ -216,7 +231,7 @@ export class ReservationsService {
     const tables = this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
       venue,
-      dto.type,
+      reservationType,
       slot.startAt,
     );
     const table = tables.find((item) => item.tableId === dto.tableId);
@@ -262,7 +277,7 @@ export class ReservationsService {
         tableId: table.tableId,
         tableLabel: table.tableLabel,
         roomLabel: table.roomLabel,
-        type: dto.type as ReservationType,
+        type: reservationType as ReservationType,
         status: ReservationStatus.REQUESTED,
         partySize: dto.partySize,
         timeSlotStart: slot.startAt,
@@ -271,7 +286,11 @@ export class ReservationsService {
         checkInClosesAt: slot.checkInClosesAt,
         arrivalDeadlineAt: slot.arrivalDeadlineAt,
         confirmationExpiresAt: null,
-        feeCents: this.calculateFeeCents(dto.type, table, slot.startAt),
+        feeCents: this.calculateFeeCents(
+          reservationType,
+          table,
+          slot.startAt,
+        ),
         refundCents: 0,
         currency: "EUR",
         userLatitude: dto.userLatitude,
@@ -1244,6 +1263,21 @@ export class ReservationsService {
     }
 
     return tables.filter((table) => activeTableIds.has(table.tableId));
+  }
+
+  private resolveReservationType(
+    venue: VenueReservationState,
+    requestedType: "ADVANCE" | "LIVE",
+    startAt: Date,
+  ): "ADVANCE" | "LIVE" {
+    if (
+      venue.isLive &&
+      this.isSameLocalCalendarDay(new Date(), startAt)
+    ) {
+      return "LIVE";
+    }
+
+    return requestedType;
   }
 
   private validateReservationRuleContext(
