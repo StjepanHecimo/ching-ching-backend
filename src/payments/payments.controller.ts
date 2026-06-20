@@ -18,6 +18,7 @@ import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
 import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
 import { CreateVenueRefundRequestDto } from "./dto/create-venue-refund-request.dto";
+import { ResolveVenueProblemReportDto } from "./dto/resolve-venue-problem-report.dto";
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { PaymentsService } from "./payments.service";
 
@@ -147,6 +148,22 @@ export class PaymentsController {
   @Get("preview/admin/transactions")
   listAdminPaymentTransactions() {
     return this.paymentsService.listAdminPaymentTransactions();
+  }
+
+  @Get("preview/admin/problem-reports")
+  listAdminVenueProblemReports() {
+    return this.paymentsService.listAdminVenueProblemReports();
+  }
+
+  @Patch("preview/admin/problem-reports/:requestId/refunded-by-chin-chin")
+  markVenueProblemReportRefundedByChinChin(
+    @Param("requestId") requestId: string,
+    @Body() dto: ResolveVenueProblemReportDto,
+  ) {
+    return this.paymentsService.markVenueProblemReportRefundedByChinChin(
+      requestId,
+      dto,
+    );
   }
 
   @Post("preview/admin/reservations/:reservationId/refund")

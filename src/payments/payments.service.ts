@@ -25,6 +25,7 @@ import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
 import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
 import { CreateVenueRefundRequestDto } from "./dto/create-venue-refund-request.dto";
+import { ResolveVenueProblemReportDto } from "./dto/resolve-venue-problem-report.dto";
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 
@@ -549,10 +550,6 @@ export class PaymentsService {
         reservation: {
           include: { venue: true },
         },
-        refundRequests: {
-          orderBy: { createdAt: "desc" },
-          take: 5,
-        },
         ledgerEntries: {
           orderBy: { createdAt: "desc" },
         },
@@ -604,20 +601,6 @@ export class PaymentsService {
           failedAt: payment.failedAt,
           createdAt: payment.createdAt,
           updatedAt: payment.updatedAt,
-          refundRequests: payment.refundRequests.map((request) =>
-            this.serializeVenueRefundRequest(request),
-          ),
-          pendingVenueRefundRequest:
-            payment.refundRequests.find(
-              (request) => request.status === VenueRefundRequestStatus.PENDING,
-            )
-              ? this.serializeVenueRefundRequest(
-                  payment.refundRequests.find(
-                    (request) =>
-                      request.status === VenueRefundRequestStatus.PENDING,
-                  )!,
-                )
-              : null,
           ledgerEntries: payment.ledgerEntries.map((entry) => ({
             id: entry.id,
             type: entry.type,
@@ -653,25 +636,9 @@ export class PaymentsService {
       where: {
         reservationId,
         venueId,
-        status: {
-          in: [
-            ReservationPaymentStatus.CAPTURED,
-            ReservationPaymentStatus.PARTIALLY_REFUNDED,
-          ],
-        },
       },
       orderBy: { createdAt: "desc" },
     });
-
-    if (!payment) {
-      throw new BadRequestException(
-        "Refund request is available only for captured payments.",
-      );
-    }
-
-    if (payment.capturedCents - payment.refundedCents <= 0) {
-      throw new BadRequestException("Payment has no refundable amount left.");
-    }
 
     const existingPending = await this.prisma.venueRefundRequest.findFirst({
       where: {
@@ -686,7 +653,7 @@ export class PaymentsService {
       ? await this.prisma.venueRefundRequest.update({
           where: { id: existingPending.id },
           data: {
-            paymentId: payment.id,
+            paymentId: payment?.id,
             requestedByOwnerId: reservation.venue.ownerId,
             problemDescription,
           },
@@ -694,7 +661,7 @@ export class PaymentsService {
       : await this.prisma.venueRefundRequest.create({
           data: {
             reservationId,
-            paymentId: payment.id,
+            paymentId: payment?.id,
             venueId,
             requestedByOwnerId: reservation.venue.ownerId,
             problemDescription,
@@ -702,6 +669,70 @@ export class PaymentsService {
         });
 
     return this.serializeVenueRefundRequest(refundRequest);
+  }
+
+  async listAdminVenueProblemReports() {
+    const requests = await this.prisma.venueRefundRequest.findMany({
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+      take: 250,
+      include: {
+        venue: true,
+        reservation: true,
+        payment: true,
+        requestedByOwner: true,
+      },
+    });
+
+    return {
+      total: requests.length,
+      generatedAt: new Date(),
+      items: requests.map((request) =>
+        this.serializeAdminVenueProblemReport(request),
+      ),
+    };
+  }
+
+  async markVenueProblemReportRefundedByChinChin(
+    requestId: string,
+    dto: ResolveVenueProblemReportDto,
+  ) {
+    const request = await this.prisma.venueRefundRequest.findUnique({
+      where: { id: requestId },
+      include: {
+        venue: true,
+        reservation: true,
+        payment: true,
+        requestedByOwner: true,
+      },
+    });
+
+    if (!request) {
+      throw new NotFoundException("Problem report was not found.");
+    }
+
+    const updated = await this.prisma.venueRefundRequest.update({
+      where: { id: requestId },
+      data: {
+        status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
+        resolutionAmountCents: dto.amountCents,
+        resolutionCurrency:
+          dto.currency?.trim().toUpperCase() ??
+          request.payment?.currency ??
+          request.reservation.currency,
+        adminNotes:
+          dto.adminNotes?.trim() ||
+          "Refund/korekcija ugostitelju označena kao Chin-Chin support trošak.",
+        resolvedAt: new Date(),
+      },
+      include: {
+        venue: true,
+        reservation: true,
+        payment: true,
+        requestedByOwner: true,
+      },
+    });
+
+    return this.serializeAdminVenueProblemReport(updated);
   }
 
   async adminManualRefund(reservationId: string, dto: AdminManualRefundDto) {
@@ -765,17 +796,6 @@ export class PaymentsService {
           cancelledAt: new Date(),
           releasedAt: new Date(),
           confirmationExpiresAt: null,
-        },
-      });
-      await this.prisma.venueRefundRequest.updateMany({
-        where: {
-          reservationId,
-          status: VenueRefundRequestStatus.PENDING,
-        },
-        data: {
-          status: VenueRefundRequestStatus.APPROVED,
-          adminNotes: reason,
-          resolvedAt: new Date(),
         },
       });
       await this.notifyVenueAboutAdminPaymentAction(payment, {
@@ -2356,6 +2376,8 @@ export class PaymentsService {
     requestedByOwnerId: string | null;
     status: VenueRefundRequestStatus;
     problemDescription: string;
+    resolutionAmountCents: number | null;
+    resolutionCurrency: string | null;
     adminNotes: string | null;
     resolvedAt: Date | null;
     createdAt: Date;
@@ -2369,10 +2391,67 @@ export class PaymentsService {
       requestedByOwnerId: request.requestedByOwnerId,
       status: request.status,
       problemDescription: request.problemDescription,
+      resolutionAmountCents: request.resolutionAmountCents,
+      resolutionCurrency: request.resolutionCurrency,
       adminNotes: request.adminNotes,
       resolvedAt: request.resolvedAt,
       createdAt: request.createdAt,
       updatedAt: request.updatedAt,
+    };
+  }
+
+  private serializeAdminVenueProblemReport(request: {
+    id: string;
+    reservationId: string;
+    paymentId: string | null;
+    venueId: string;
+    requestedByOwnerId: string | null;
+    status: VenueRefundRequestStatus;
+    problemDescription: string;
+    resolutionAmountCents: number | null;
+    resolutionCurrency: string | null;
+    adminNotes: string | null;
+    resolvedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    venue: { id: string; name: string; city: string | null };
+    reservation: {
+      id: string;
+      status: ReservationStatus;
+      type: ReservationType;
+      tableId: string;
+      tableLabel: string | null;
+      customerName: string | null;
+      customerEmail: string | null;
+      customerPhone: string | null;
+      timeSlotStart: Date;
+      feeCents: number;
+      refundCents: number;
+      currency: string;
+    };
+    payment: {
+      id: string;
+      status: ReservationPaymentStatus;
+      amountCents: number;
+      capturedCents: number;
+      refundedCents: number;
+      currency: string;
+      providerPaymentId: string | null;
+    } | null;
+    requestedByOwner: {
+      id: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      phoneNumber: string | null;
+    } | null;
+  }) {
+    return {
+      ...this.serializeVenueRefundRequest(request),
+      venue: request.venue,
+      reservation: request.reservation,
+      payment: request.payment,
+      requestedByOwner: request.requestedByOwner,
     };
   }
 

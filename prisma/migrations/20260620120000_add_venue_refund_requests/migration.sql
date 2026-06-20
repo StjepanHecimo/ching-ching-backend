@@ -1,4 +1,4 @@
-CREATE TYPE "VenueRefundRequestStatus" AS ENUM ('PENDING', 'APPROVED', 'REJECTED');
+CREATE TYPE "VenueRefundRequestStatus" AS ENUM ('PENDING', 'REFUNDED_BY_CHIN_CHIN', 'CLOSED_NO_REFUND');
 
 CREATE TABLE "venue_refund_requests" (
   "id" TEXT NOT NULL,
@@ -8,6 +8,8 @@ CREATE TABLE "venue_refund_requests" (
   "requestedByOwnerId" TEXT,
   "status" "VenueRefundRequestStatus" NOT NULL DEFAULT 'PENDING',
   "problemDescription" TEXT NOT NULL,
+  "resolutionAmountCents" INTEGER,
+  "resolutionCurrency" TEXT,
   "adminNotes" TEXT,
   "resolvedAt" TIMESTAMP(3),
   "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

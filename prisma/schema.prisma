@@ -105,8 +105,8 @@ enum PaymentWebhookStatus {
 
 enum VenueRefundRequestStatus {
   PENDING
-  APPROVED
-  REJECTED
+  REFUNDED_BY_CHIN_CHIN
+  CLOSED_NO_REFUND
 }
 
 enum LedgerEntryType {
@@ -489,6 +489,8 @@ model VenueRefundRequest {
   requestedByOwnerId String?
   status             VenueRefundRequestStatus @default(PENDING)
   problemDescription String
+  resolutionAmountCents Int?
+  resolutionCurrency String?
   adminNotes         String?
   resolvedAt         DateTime?
   createdAt          DateTime                 @default(now())
