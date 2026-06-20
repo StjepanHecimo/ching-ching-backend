@@ -17,6 +17,7 @@ import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
 import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
+import { CreateVenueRefundRequestDto } from "./dto/create-venue-refund-request.dto";
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { PaymentsService } from "./payments.service";
 
@@ -154,6 +155,19 @@ export class PaymentsController {
     @Body() dto: AdminManualRefundDto,
   ) {
     return this.paymentsService.adminManualRefund(reservationId, dto);
+  }
+
+  @Post("preview/venues/:venueId/reservations/:reservationId/refund-request")
+  createVenueRefundRequest(
+    @Param("venueId") venueId: string,
+    @Param("reservationId") reservationId: string,
+    @Body() dto: CreateVenueRefundRequestDto,
+  ) {
+    return this.paymentsService.createVenueRefundRequest(
+      venueId,
+      reservationId,
+      dto,
+    );
   }
 
   @Post("preview/admin/ledger/backfill-captured-payments")

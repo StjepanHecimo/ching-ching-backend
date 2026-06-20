@@ -370,6 +370,7 @@ model Reservation {
   customer      User?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
   payments      ReservationPayment[]
   ledgerEntries LedgerEntry[]
+  refundRequests VenueRefundRequest[]
 
   @@index([venueId])
   @@index([customerId])
@@ -412,6 +413,7 @@ model ReservationPayment {
   customer      User?                  @relation(fields: [customerId], references: [id], onDelete: SetNull)
   paymentMethod CustomerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
   ledgerEntries LedgerEntry[]
+  refundRequests VenueRefundRequest[]
 
   @@index([reservationId])
   @@index([venueId])
@@ -477,6 +479,32 @@ model LedgerEntry {
   @@index([payoutBatchId])
   @@index([type])
   @@map("ledger_entries")
+}
+
+model VenueRefundRequest {
+  id                 String                   @id @default(uuid())
+  reservationId      String
+  paymentId          String?
+  venueId            String
+  requestedByOwnerId String?
+  status             VenueRefundRequestStatus @default(PENDING)
+  problemDescription String
+  adminNotes         String?
+  resolvedAt         DateTime?
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  reservation      Reservation         @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  payment          ReservationPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  venue            Venue               @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  requestedByOwner User?               @relation(fields: [requestedByOwnerId], references: [id], onDelete: SetNull)
+
+  @@index([reservationId])
+  @@index([paymentId])
+  @@index([venueId])
+  @@index([requestedByOwnerId])
+  @@index([status])
+  @@map("venue_refund_requests")
 }
 
 model PaymentWebhookEvent {

@@ -16,6 +16,7 @@ import {
   ReservationPaymentStatus,
   ReservationType,
   ReservationStatus,
+  VenueRefundRequestStatus,
 } from "../../generated/prisma/enums";
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
@@ -23,6 +24,7 @@ import { PrismaService } from "../prisma/prisma.service";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
 import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
+import { CreateVenueRefundRequestDto } from "./dto/create-venue-refund-request.dto";
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 
@@ -547,6 +549,10 @@ export class PaymentsService {
         reservation: {
           include: { venue: true },
         },
+        refundRequests: {
+          orderBy: { createdAt: "desc" },
+          take: 5,
+        },
         ledgerEntries: {
           orderBy: { createdAt: "desc" },
         },
@@ -598,6 +604,20 @@ export class PaymentsService {
           failedAt: payment.failedAt,
           createdAt: payment.createdAt,
           updatedAt: payment.updatedAt,
+          refundRequests: payment.refundRequests.map((request) =>
+            this.serializeVenueRefundRequest(request),
+          ),
+          pendingVenueRefundRequest:
+            payment.refundRequests.find(
+              (request) => request.status === VenueRefundRequestStatus.PENDING,
+            )
+              ? this.serializeVenueRefundRequest(
+                  payment.refundRequests.find(
+                    (request) =>
+                      request.status === VenueRefundRequestStatus.PENDING,
+                  )!,
+                )
+              : null,
           ledgerEntries: payment.ledgerEntries.map((entry) => ({
             id: entry.id,
             type: entry.type,
@@ -611,6 +631,77 @@ export class PaymentsService {
         };
       }),
     };
+  }
+
+  async createVenueRefundRequest(
+    venueId: string,
+    reservationId: string,
+    dto: CreateVenueRefundRequestDto,
+  ) {
+    const problemDescription = dto.problemDescription.trim();
+
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: { venue: true },
+    });
+
+    if (!reservation || reservation.venueId !== venueId) {
+      throw new NotFoundException("Reservation was not found for this venue.");
+    }
+
+    const payment = await this.prisma.reservationPayment.findFirst({
+      where: {
+        reservationId,
+        venueId,
+        status: {
+          in: [
+            ReservationPaymentStatus.CAPTURED,
+            ReservationPaymentStatus.PARTIALLY_REFUNDED,
+          ],
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!payment) {
+      throw new BadRequestException(
+        "Refund request is available only for captured payments.",
+      );
+    }
+
+    if (payment.capturedCents - payment.refundedCents <= 0) {
+      throw new BadRequestException("Payment has no refundable amount left.");
+    }
+
+    const existingPending = await this.prisma.venueRefundRequest.findFirst({
+      where: {
+        reservationId,
+        venueId,
+        status: VenueRefundRequestStatus.PENDING,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const refundRequest = existingPending
+      ? await this.prisma.venueRefundRequest.update({
+          where: { id: existingPending.id },
+          data: {
+            paymentId: payment.id,
+            requestedByOwnerId: reservation.venue.ownerId,
+            problemDescription,
+          },
+        })
+      : await this.prisma.venueRefundRequest.create({
+          data: {
+            reservationId,
+            paymentId: payment.id,
+            venueId,
+            requestedByOwnerId: reservation.venue.ownerId,
+            problemDescription,
+          },
+        });
+
+    return this.serializeVenueRefundRequest(refundRequest);
   }
 
   async adminManualRefund(reservationId: string, dto: AdminManualRefundDto) {
@@ -674,6 +765,17 @@ export class PaymentsService {
           cancelledAt: new Date(),
           releasedAt: new Date(),
           confirmationExpiresAt: null,
+        },
+      });
+      await this.prisma.venueRefundRequest.updateMany({
+        where: {
+          reservationId,
+          status: VenueRefundRequestStatus.PENDING,
+        },
+        data: {
+          status: VenueRefundRequestStatus.APPROVED,
+          adminNotes: reason,
+          resolvedAt: new Date(),
         },
       });
       await this.notifyVenueAboutAdminPaymentAction(payment, {
@@ -2244,6 +2346,34 @@ export class PaymentsService {
       status === ReservationStatus.NO_SHOW ||
       status === ReservationStatus.RELEASED
     );
+  }
+
+  private serializeVenueRefundRequest(request: {
+    id: string;
+    reservationId: string;
+    paymentId: string | null;
+    venueId: string;
+    requestedByOwnerId: string | null;
+    status: VenueRefundRequestStatus;
+    problemDescription: string;
+    adminNotes: string | null;
+    resolvedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id: request.id,
+      reservationId: request.reservationId,
+      paymentId: request.paymentId,
+      venueId: request.venueId,
+      requestedByOwnerId: request.requestedByOwnerId,
+      status: request.status,
+      problemDescription: request.problemDescription,
+      adminNotes: request.adminNotes,
+      resolvedAt: request.resolvedAt,
+      createdAt: request.createdAt,
+      updatedAt: request.updatedAt,
+    };
   }
 
   private serializePayment(payment: {
