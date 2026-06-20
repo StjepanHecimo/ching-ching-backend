@@ -103,6 +103,12 @@ enum PaymentWebhookStatus {
   FAILED
 }
 
+enum VenueRefundRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum LedgerEntryType {
   CUSTOMER_CAPTURE
   CHIN_CHIN_FEE
@@ -188,6 +194,7 @@ model User {
   reservationPayments     ReservationPayment[]
   paymentMethods          CustomerPaymentMethod[]
   ledgerEntries           LedgerEntry[]
+  venueRefundRequests     VenueRefundRequest[]
   devicePushTokens        DevicePushToken[]
   pushNotificationLogs    PushNotificationLog[]
 
@@ -268,6 +275,7 @@ model Venue {
   chinChinPanel        VenueChinChinPanel?
   reservationPenalties VenueReservationPenalty[]
   reservationPayments  ReservationPayment[]
+  refundRequests       VenueRefundRequest[]
   ledgerEntries        LedgerEntry[]
   payoutBatches        VenuePayoutBatch[]
 
