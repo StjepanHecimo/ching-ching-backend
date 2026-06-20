@@ -704,7 +704,6 @@ export class ReservationsService {
         tableLabel: reservation.tableLabel,
       },
       reservation.id,
-      { includePendingConfirmation: false },
     );
 
     if (blockers.length) {
@@ -742,13 +741,7 @@ export class ReservationsService {
       type: "reservation_confirmed",
     });
 
-    const autoDeclinedConflictingRequests =
-      await this.declinePendingConflictingReservationRequests(updated);
-
-    return {
-      ...this.serializeReservation(updated),
-      autoDeclinedConflictingRequests,
-    };
+    return this.serializeReservation(updated);
   }
 
   async checkInReservation(id: string) {
@@ -1423,11 +1416,8 @@ export class ReservationsService {
     endAt: Date,
     tableIdentity?: { tableId?: string | null; tableLabel?: string | null },
     excludeReservationId?: string,
-    options?: { includePendingConfirmation?: boolean },
   ) {
     const now = new Date();
-    const includePendingConfirmation =
-      options?.includePendingConfirmation ?? true;
     const dayStart = this.startOfLocalCalendarDay(startAt);
     const dayEnd = new Date(dayStart);
     dayEnd.setDate(dayEnd.getDate() + 1);
@@ -1450,17 +1440,13 @@ export class ReservationsService {
           AND: [
             {
               OR: [
-                ...(includePendingConfirmation
-                  ? [
-                      {
-                        status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
-                        OR: [
-                          { confirmationExpiresAt: null },
-                          { confirmationExpiresAt: { gt: now } },
-                        ],
-                      },
-                    ]
-                  : []),
+                {
+                  status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
+                  OR: [
+                    { confirmationExpiresAt: null },
+                    { confirmationExpiresAt: { gt: now } },
+                  ],
+                },
                 {
                   status: {
                     in: [
@@ -1517,88 +1503,6 @@ export class ReservationsService {
             );
           }),
       );
-  }
-
-  private async declinePendingConflictingReservationRequests(accepted: {
-    id: string;
-    venueId: string;
-    tableId: string;
-    tableLabel: string | null;
-    timeSlotStart: Date;
-    timeSlotEnd: Date;
-    venue: { id: string; name: string };
-  }) {
-    const now = new Date();
-    const tableKeys = new Set(
-      this.tableIdentityKeys(accepted.tableId, accepted.tableLabel),
-    );
-
-    const conflictingRequests = await this.prisma.reservation.findMany({
-      where: {
-        id: { not: accepted.id },
-        venueId: accepted.venueId,
-        status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
-        OR: [
-          { confirmationExpiresAt: null },
-          { confirmationExpiresAt: { gt: now } },
-        ],
-        timeSlotStart: { lt: accepted.timeSlotEnd },
-        timeSlotEnd: { gt: accepted.timeSlotStart },
-      },
-      include: { venue: true },
-    });
-
-    const pendingConflicts = conflictingRequests.filter((reservation) =>
-      this.hasSharedTableIdentity(
-        tableKeys,
-        this.tableIdentityKeys(reservation.tableId, reservation.tableLabel),
-      ),
-    );
-
-    if (!pendingConflicts.length) {
-      return 0;
-    }
-
-    const results = await Promise.allSettled(
-      pendingConflicts.map(async (reservation) => {
-        const declined = await this.prisma.reservation.update({
-          where: { id: reservation.id },
-          data: {
-            status: ReservationStatus.DECLINED,
-            declinedAt: now,
-            releasedAt: now,
-            confirmationExpiresAt: null,
-            notes:
-              reservation.notes ??
-              "Automatically declined because another reservation for this table and time was accepted.",
-          },
-          include: { venue: true },
-        });
-
-        await this.paymentsService.voidForInactiveReservation(
-          reservation.id,
-          "Another reservation for this table and time was accepted by the venue.",
-        );
-
-        await this.notifyCustomer(declined, {
-          title: "Rezervacija je odbijena",
-          body: `${declined.venue.name} je prihvatio drugi zahtjev za isti stol i termin. Pokušajte s drugim stolom.`,
-          type: "reservation_declined",
-        });
-      }),
-    );
-
-    const failedCount = results.filter(
-      (result) => result.status === "rejected",
-    ).length;
-
-    if (failedCount > 0) {
-      this.logger.warn(
-        `Reservation ${accepted.id} accepted, but ${failedCount} conflicting request auto-decline task(s) failed.`,
-      );
-    }
-
-    return results.length - failedCount;
   }
 
   private async assertSingleActiveCustomerReservationPerDay(
