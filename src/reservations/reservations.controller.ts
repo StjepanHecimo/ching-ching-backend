@@ -20,10 +20,15 @@ import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservatio
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
 import { DeclineReservationDto } from "./dto/decline-reservation.dto";
 import { ReservationsService } from "./reservations.service";
+import { CreateVenueRefundRequestDto } from "../payments/dto/create-venue-refund-request.dto";
+import { PaymentsService } from "../payments/payments.service";
 
 @Controller("reservations")
 export class ReservationsController {
-  constructor(private readonly reservationsService: ReservationsService) {}
+  constructor(
+    private readonly reservationsService: ReservationsService,
+    private readonly paymentsService: PaymentsService,
+  ) {}
 
   @Get("preview/venues/:venueId/availability")
   getVenueAvailability(
@@ -55,6 +60,19 @@ export class ReservationsController {
     @Body() dto: CreateReservationDto,
   ) {
     return this.reservationsService.createReservation(venueId, dto);
+  }
+
+  @Post("preview/venues/:venueId/reservations/:reservationId/problem-report")
+  createVenueProblemReport(
+    @Param("venueId") venueId: string,
+    @Param("reservationId") reservationId: string,
+    @Body() dto: CreateVenueRefundRequestDto,
+  ) {
+    return this.paymentsService.createVenueRefundRequest(
+      venueId,
+      reservationId,
+      dto,
+    );
   }
 
   @Post("customers/venues/:venueId/request")
