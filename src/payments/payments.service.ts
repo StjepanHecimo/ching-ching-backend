@@ -548,7 +548,16 @@ export class PaymentsService {
       take: 250,
       include: {
         reservation: {
-          include: { venue: true },
+          include: {
+            venue: true,
+            refundRequests: {
+              where: {
+                status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
+              },
+              orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
+              take: 1,
+            },
+          },
         },
         ledgerEntries: {
           orderBy: { createdAt: "desc" },
@@ -566,6 +575,7 @@ export class PaymentsService {
         );
         const ledgerSummary = this.paymentLedgerSummary(payment.ledgerEntries);
         const allocation = this.paymentNetAllocation(payment);
+        const supportRefund = payment.reservation.refundRequests[0] ?? null;
         return {
           id: payment.id,
           reservationId: payment.reservationId,
@@ -580,6 +590,13 @@ export class PaymentsService {
           amountCents: payment.amountCents,
           capturedCents: payment.capturedCents,
           refundedCents: payment.refundedCents,
+          chinChinSupportRefundRequestId: supportRefund?.id ?? null,
+          chinChinSupportRefundStatus: supportRefund?.status ?? null,
+          chinChinSupportRefundCents: supportRefund?.resolutionAmountCents ?? 0,
+          chinChinSupportRefundCurrency:
+            supportRefund?.resolutionCurrency ?? payment.currency,
+          chinChinSupportRefundResolvedAt: supportRefund?.resolvedAt ?? null,
+          chinChinSupportRefundNotes: supportRefund?.adminNotes ?? null,
           customerCaptureCents: ledgerSummary.customerCaptureCents,
           customerRefundCents: ledgerSummary.customerRefundCents,
           refundableCents: Math.max(
@@ -676,7 +693,11 @@ export class PaymentsService {
       orderBy: [{ status: "asc" }, { createdAt: "desc" }],
       take: 250,
       include: {
-        venue: true,
+        venue: {
+          include: {
+            owner: true,
+          },
+        },
         reservation: true,
         payment: true,
         requestedByOwner: true,
@@ -699,7 +720,11 @@ export class PaymentsService {
     const request = await this.prisma.venueRefundRequest.findUnique({
       where: { id: requestId },
       include: {
-        venue: true,
+        venue: {
+          include: {
+            owner: true,
+          },
+        },
         reservation: true,
         payment: true,
         requestedByOwner: true,
@@ -710,27 +735,43 @@ export class PaymentsService {
       throw new NotFoundException("Problem report was not found.");
     }
 
+    const supportRefundCents =
+      dto.amountCents != null && dto.amountCents > 0 ? dto.amountCents : null;
+
     const updated = await this.prisma.venueRefundRequest.update({
       where: { id: requestId },
       data: {
-        status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
-        resolutionAmountCents: dto.amountCents,
+        status:
+          supportRefundCents != null
+            ? VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN
+            : VenueRefundRequestStatus.CLOSED_NO_REFUND,
+        resolutionAmountCents: supportRefundCents,
         resolutionCurrency:
-          dto.currency?.trim().toUpperCase() ??
-          request.payment?.currency ??
-          request.reservation.currency,
+          supportRefundCents != null
+            ? (dto.currency?.trim().toUpperCase() ??
+              request.payment?.currency ??
+              request.reservation.currency)
+            : null,
         adminNotes:
           dto.adminNotes?.trim() ||
-          "Refund/korekcija ugostitelju označena kao Chin-Chin support trošak.",
+          (supportRefundCents != null
+            ? "Refund/korekcija ugostitelju označena kao Chin-Chin support trošak."
+            : "Prijava je pregledana i zatvorena bez Chin-Chin korekcije."),
         resolvedAt: new Date(),
       },
       include: {
-        venue: true,
+        venue: {
+          include: {
+            owner: true,
+          },
+        },
         reservation: true,
         payment: true,
         requestedByOwner: true,
       },
     });
+
+    await this.notifyVenueProblemReportResolved(updated);
 
     return this.serializeAdminVenueProblemReport(updated);
   }
@@ -1640,6 +1681,53 @@ export class PaymentsService {
     }
   }
 
+  private async notifyVenueProblemReportResolved(request: {
+    id: string;
+    reservationId: string;
+    resolutionAmountCents: number | null;
+    resolutionCurrency: string | null;
+    adminNotes: string | null;
+    venue: {
+      id: string;
+      name: string;
+      owner: { email: string } | null;
+    };
+    reservation: {
+      id: string;
+      currency: string;
+    };
+    requestedByOwner: { email: string } | null;
+  }) {
+    const recipient =
+      request.venue.owner?.email?.trim().toLowerCase() ||
+      request.requestedByOwner?.email?.trim().toLowerCase();
+
+    if (!recipient) {
+      this.logger.warn(
+        `Venue problem report ${request.id} resolved, but venue owner email was not found.`,
+      );
+      return;
+    }
+
+    try {
+      await this.emailService.sendVenueProblemReportResolvedEmail({
+        to: recipient,
+        venueName: request.venue.name,
+        reservationId: request.reservationId,
+        amountCents: request.resolutionAmountCents,
+        currency:
+          request.resolutionCurrency ?? request.reservation.currency ?? "EUR",
+        adminNotes: request.adminNotes,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Venue problem report ${request.id} resolved email failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   private async notifyVenueAboutAdminPaymentAction(
     payment: {
       id: string;
@@ -2414,7 +2502,12 @@ export class PaymentsService {
     resolvedAt: Date | null;
     createdAt: Date;
     updatedAt: Date;
-    venue: { id: string; name: string; city: string | null };
+    venue: {
+      id: string;
+      name: string;
+      city: string | null;
+      owner?: { email: string } | null;
+    };
     reservation: {
       id: string;
       status: ReservationStatus;
@@ -2448,7 +2541,12 @@ export class PaymentsService {
   }) {
     return {
       ...this.serializeVenueRefundRequest(request),
-      venue: request.venue,
+      venue: {
+        id: request.venue.id,
+        name: request.venue.name,
+        city: request.venue.city,
+        ownerEmail: request.venue.owner?.email ?? null,
+      },
       reservation: request.reservation,
       payment: request.payment,
       requestedByOwner: request.requestedByOwner,

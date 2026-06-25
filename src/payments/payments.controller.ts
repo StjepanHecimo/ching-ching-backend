@@ -155,6 +155,17 @@ export class PaymentsController {
     return this.paymentsService.listAdminVenueProblemReports();
   }
 
+  @Patch("preview/admin/problem-reports/:requestId/response")
+  sendVenueProblemReportResponse(
+    @Param("requestId") requestId: string,
+    @Body() dto: ResolveVenueProblemReportDto,
+  ) {
+    return this.paymentsService.markVenueProblemReportRefundedByChinChin(
+      requestId,
+      dto,
+    );
+  }
+
   @Patch("preview/admin/problem-reports/:requestId/refunded-by-chin-chin")
   markVenueProblemReportRefundedByChinChin(
     @Param("requestId") requestId: string,

@@ -5,7 +5,7 @@ export class ResolveVenueProblemReportDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(1)
+  @Min(0)
   amountCents?: number;
 
   @IsOptional()

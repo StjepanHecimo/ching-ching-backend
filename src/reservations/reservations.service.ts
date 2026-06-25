@@ -12,6 +12,7 @@ import {
   ReservationType,
   SpaceLayoutStatus,
   UserRole,
+  VenueRefundRequestStatus,
 } from "../../generated/prisma/enums";
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
@@ -124,8 +125,7 @@ export class ReservationsService {
       checkInClosesAt: slot.checkInClosesAt.toISOString(),
       arrivalDeadlineAt: slot.arrivalDeadlineAt.toISOString(),
       partySize: query.partySize,
-      liveRadiusMeters:
-        reservationType === "LIVE" ? LIVE_RADIUS_METERS : null,
+      liveRadiusMeters: reservationType === "LIVE" ? LIVE_RADIUS_METERS : null,
       distanceMeters: liveDistanceMeters,
       tables: tables.map((table) => {
         const reserved = this.isTableReservedByKeys(table, blockedTableKeys);
@@ -286,11 +286,7 @@ export class ReservationsService {
         checkInClosesAt: slot.checkInClosesAt,
         arrivalDeadlineAt: slot.arrivalDeadlineAt,
         confirmationExpiresAt: null,
-        feeCents: this.calculateFeeCents(
-          reservationType,
-          table,
-          slot.startAt,
-        ),
+        feeCents: this.calculateFeeCents(reservationType, table, slot.startAt),
         refundCents: 0,
         currency: "EUR",
         userLatitude: dto.userLatitude,
@@ -351,7 +347,16 @@ export class ReservationsService {
       where: { venueId },
       orderBy: { timeSlotStart: "desc" },
       take: 100,
-      include: { venue: true },
+      include: {
+        venue: true,
+        refundRequests: {
+          where: {
+            status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
+          },
+          orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
+          take: 1,
+        },
+      },
     });
 
     return Promise.all(
@@ -1270,10 +1275,7 @@ export class ReservationsService {
     requestedType: "ADVANCE" | "LIVE",
     startAt: Date,
   ): "ADVANCE" | "LIVE" {
-    if (
-      venue.isLive &&
-      this.isSameLocalCalendarDay(new Date(), startAt)
-    ) {
+    if (venue.isLive && this.isSameLocalCalendarDay(new Date(), startAt)) {
       return "LIVE";
     }
 
@@ -2529,6 +2531,13 @@ export class ReservationsService {
       name: string;
       slug: string;
     };
+    refundRequests?: {
+      id: string;
+      status: VenueRefundRequestStatus;
+      resolutionAmountCents: number | null;
+      resolutionCurrency: string | null;
+      resolvedAt: Date | null;
+    }[];
   }) {
     const allocation = await this.paymentsService.previewReservationAllocation({
       id: reservation.id,
@@ -2544,6 +2553,21 @@ export class ReservationsService {
       venueShareCents: allocation.venueShareCents,
       commissionBps: allocation.commissionBps,
       isNewCustomerReservation: allocation.isNewCustomerReservation,
+      chinChinSupportRefund:
+        reservation.refundRequests?.[0] &&
+        reservation.refundRequests[0].status ===
+          VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN
+          ? {
+              id: reservation.refundRequests[0].id,
+              status: reservation.refundRequests[0].status,
+              amountCents:
+                reservation.refundRequests[0].resolutionAmountCents ?? 0,
+              currency:
+                reservation.refundRequests[0].resolutionCurrency ??
+                reservation.currency,
+              resolvedAt: reservation.refundRequests[0].resolvedAt,
+            }
+          : null,
     };
   }
 }

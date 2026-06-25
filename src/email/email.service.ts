@@ -31,6 +31,15 @@ type ReservationRequestReceivedEmailInput = {
   startAt: Date;
 };
 
+type VenueProblemReportResolvedEmailInput = {
+  to: string;
+  venueName: string;
+  reservationId: string;
+  amountCents?: number | null;
+  currency?: string | null;
+  adminNotes?: string | null;
+};
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -173,6 +182,51 @@ export class EmailService {
     });
 
     this.logger.log(`Reservation request received email sent to ${input.to}`);
+  }
+
+  async sendVenueProblemReportResolvedEmail(
+    input: VenueProblemReportResolvedEmailInput,
+  ) {
+    const transporter = this.getTransporter();
+    const from =
+      this.configService.get<string>("EMAIL_FROM") ??
+      "Chin-Chin <no-reply@chin-chin.local>";
+
+    if (!transporter) {
+      this.logVenueProblemReportResolvedFallback(input);
+      return;
+    }
+
+    const amount = this.problemReportAmountLabel(input);
+    const venueName = input.venueName.trim() || "kafić";
+    const adminNotes =
+      input.adminNotes?.trim() ||
+      (input.amountCents != null && input.amountCents > 0
+        ? "Prijava je pregledana i označena kao refundirana od strane Chin-Chin."
+        : "Prijava je pregledana i riješena od strane Chin-Chin admina.");
+
+    await transporter.sendMail({
+      from,
+      to: input.to,
+      subject: "Chin-Chin prijava problema je riješena",
+      text: [
+        "Chin-Chin prijava problema je riješena",
+        "",
+        `Kafić: ${venueName}`,
+        `ID rezervacije: ${input.reservationId}`,
+        ...(input.amountCents != null && input.amountCents > 0
+          ? [`Iznos korekcije: ${amount}`]
+          : []),
+        "",
+        "Odgovor admina:",
+        adminNotes,
+        "",
+        "Ova korekcija je evidentirana kao Chin-Chin support trošak prema ugostitelju.",
+      ].join("\n"),
+      html: this.venueProblemReportResolvedHtml(input),
+    });
+
+    this.logger.log(`Venue problem report resolved email sent to ${input.to}`);
   }
 
   private getTransporter() {
@@ -323,6 +377,58 @@ export class EmailService {
     `;
   }
 
+  private venueProblemReportResolvedHtml(
+    input: VenueProblemReportResolvedEmailInput,
+  ) {
+    const venueName = this.escapeHtml(input.venueName.trim() || "kafić");
+    const reservationId = this.escapeHtml(input.reservationId);
+    const amount =
+      input.amountCents != null && input.amountCents > 0
+        ? this.escapeHtml(this.problemReportAmountLabel(input))
+        : null;
+    const adminNotes = this.escapeHtml(
+      input.adminNotes?.trim() ||
+        "Prijava je pregledana i riješena od strane Chin-Chin admina.",
+    );
+
+    return `
+      <div style="margin:0;padding:0;background:#ffc857;">
+        <div style="max-width:560px;margin:0 auto;padding:32px 18px;font-family:Arial,sans-serif;color:#2d1a10;">
+          <div style="background:#fff4d6;border:2px solid #ff9f1c;border-radius:18px;padding:28px;box-shadow:0 12px 32px rgba(45,26,16,0.12);">
+            <div style="font-size:38px;font-weight:900;letter-spacing:0;margin-bottom:4px;text-align:center;">Chin-Chin</div>
+            <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
+            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;text-align:center;">Prijava problema je riješena</h1>
+            <p style="font-size:16px;line-height:1.55;margin:0 0 18px;color:#6c4127;text-align:center;">
+              Prijava za <strong>${venueName}</strong> pregledana je od strane Chin-Chin admina.
+            </p>
+            <div style="background:#2d1a10;color:#ffffff;padding:16px 18px;border-radius:12px;margin:2px 0 18px;">
+              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">ID rezervacije</div>
+              <div style="font-size:16px;font-weight:900;line-height:1.25;word-break:break-word;">${reservationId}</div>
+              ${
+                amount
+                  ? `<div style="height:1px;background:rgba(255,255,255,.18);margin:14px 0;"></div>
+              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">Iznos korekcije</div>
+              <div style="font-size:28px;font-weight:900;line-height:1.15;">${amount}</div>`
+                  : ""
+              }
+            </div>
+            <div style="background:#fff9e8;border:1px solid #e3c883;border-radius:12px;padding:14px 16px;">
+              <div style="font-size:13px;font-weight:900;color:#7a2f12;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Odgovor admina</div>
+              <p style="font-size:15px;line-height:1.55;margin:0;color:#63391e;">${adminNotes}</p>
+            </div>
+            <p style="font-size:13px;line-height:1.55;margin:18px 0 0;color:#79533d;text-align:center;">
+              ${
+                amount
+                  ? "Ova korekcija je evidentirana kao Chin-Chin support trošak prema ugostitelju."
+                  : "Ova prijava je zatvorena prema odgovoru admina."
+              }
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   private logVerificationFallback(input: VerificationEmailInput) {
     this.logger.warn(
       "SMTP is not configured. Verification email was not sent; using console fallback.",
@@ -371,6 +477,30 @@ export class EmailService {
     console.log("Venue: " + input.venueName);
     console.log("Table: " + (input.tableLabel ?? "Chin-Chin stol"));
     console.log("Start: " + this.formatDateTime(input.startAt));
+  }
+
+  private logVenueProblemReportResolvedFallback(
+    input: VenueProblemReportResolvedEmailInput,
+  ) {
+    this.logger.warn(
+      "SMTP is not configured. Venue problem report resolved email was not sent; using console fallback.",
+    );
+    console.log("Chin-Chin venue problem report resolved email");
+    console.log("To: " + input.to);
+    console.log("Venue: " + input.venueName);
+    console.log("Reservation ID: " + input.reservationId);
+    if (input.amountCents != null && input.amountCents > 0) {
+      console.log("Amount: " + this.problemReportAmountLabel(input));
+    }
+    console.log("Admin notes: " + (input.adminNotes ?? "-"));
+  }
+
+  private problemReportAmountLabel(
+    input: VenueProblemReportResolvedEmailInput,
+  ) {
+    return input.amountCents != null
+      ? this.formatCents(input.amountCents, input.currency ?? "EUR")
+      : "Nije naveden";
   }
 
   private formatCents(cents: number, currency = "EUR") {
