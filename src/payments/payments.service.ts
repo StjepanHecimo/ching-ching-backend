@@ -737,26 +737,40 @@ export class PaymentsService {
 
     const supportRefundCents =
       dto.amountCents != null && dto.amountCents > 0 ? dto.amountCents : null;
+    const resolvedStatus =
+      supportRefundCents != null
+        ? VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN
+        : VenueRefundRequestStatus.CLOSED_NO_REFUND;
+    const resolutionCurrency =
+      supportRefundCents != null
+        ? (dto.currency?.trim().toUpperCase() ??
+          request.payment?.currency ??
+          request.reservation.currency)
+        : null;
+    const adminNotes =
+      dto.adminNotes?.trim() ||
+      (supportRefundCents != null
+        ? "Refund/korekcija ugostitelju označena kao Chin-Chin support trošak."
+        : "Prijava je pregledana i zatvorena bez Chin-Chin korekcije.");
+
+    await this.notifyVenueProblemReportResolved({
+      id: request.id,
+      reservationId: request.reservationId,
+      resolutionAmountCents: supportRefundCents,
+      resolutionCurrency,
+      adminNotes,
+      venue: request.venue,
+      reservation: request.reservation,
+      requestedByOwner: request.requestedByOwner,
+    });
 
     const updated = await this.prisma.venueRefundRequest.update({
       where: { id: requestId },
       data: {
-        status:
-          supportRefundCents != null
-            ? VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN
-            : VenueRefundRequestStatus.CLOSED_NO_REFUND,
+        status: resolvedStatus,
         resolutionAmountCents: supportRefundCents,
-        resolutionCurrency:
-          supportRefundCents != null
-            ? (dto.currency?.trim().toUpperCase() ??
-              request.payment?.currency ??
-              request.reservation.currency)
-            : null,
-        adminNotes:
-          dto.adminNotes?.trim() ||
-          (supportRefundCents != null
-            ? "Refund/korekcija ugostitelju označena kao Chin-Chin support trošak."
-            : "Prijava je pregledana i zatvorena bez Chin-Chin korekcije."),
+        resolutionCurrency,
+        adminNotes,
         resolvedAt: new Date(),
       },
       include: {
@@ -770,8 +784,6 @@ export class PaymentsService {
         requestedByOwner: true,
       },
     });
-
-    await this.notifyVenueProblemReportResolved(updated);
 
     return this.serializeAdminVenueProblemReport(updated);
   }
@@ -1709,23 +1721,18 @@ export class PaymentsService {
       return;
     }
 
-    try {
-      await this.emailService.sendVenueProblemReportResolvedEmail({
-        to: recipient,
-        venueName: request.venue.name,
-        reservationId: request.reservationId,
-        amountCents: request.resolutionAmountCents,
-        currency:
-          request.resolutionCurrency ?? request.reservation.currency ?? "EUR",
-        adminNotes: request.adminNotes,
-      });
-    } catch (error) {
-      this.logger.warn(
-        `Venue problem report ${request.id} resolved email failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
+    this.logger.log(
+      `Sending venue problem report ${request.id} response email to ${recipient}.`,
+    );
+    await this.emailService.sendVenueProblemReportResolvedEmail({
+      to: recipient,
+      venueName: request.venue.name,
+      reservationId: request.reservationId,
+      amountCents: request.resolutionAmountCents,
+      currency:
+        request.resolutionCurrency ?? request.reservation.currency ?? "EUR",
+      adminNotes: request.adminNotes,
+    });
   }
 
   private async notifyVenueAboutAdminPaymentAction(

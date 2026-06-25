@@ -221,7 +221,9 @@ export class EmailService {
         "Odgovor admina:",
         adminNotes,
         "",
-        "Ova korekcija je evidentirana kao Chin-Chin support trošak prema ugostitelju.",
+        input.amountCents != null && input.amountCents > 0
+          ? "Ova korekcija je evidentirana kao Chin-Chin support trošak prema ugostitelju."
+          : "Prijava je zatvorena prema odgovoru admina.",
       ].join("\n"),
       html: this.venueProblemReportResolvedHtml(input),
     });
