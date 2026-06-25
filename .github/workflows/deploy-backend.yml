@@ -60,11 +60,14 @@ jobs:
           echo "Pulling latest backend code..."
           git pull --ff-only origin main
 
+          echo "Rebuilding migration tools image from the deployed commit..."
+          docker compose -f compose.prod.yml --profile tools build migrate
+
           echo "Applying Prisma migrations..."
           docker compose -f compose.prod.yml --profile tools run --rm migrate
 
           echo "Rebuilding API image from the deployed commit..."
-          docker compose -f compose.prod.yml build --no-cache api
+          docker compose -f compose.prod.yml build api
 
           echo "Recreating API container from the new image..."
           docker compose -f compose.prod.yml up -d --force-recreate --no-build api
@@ -85,4 +88,7 @@ jobs:
             fi
             sleep 2
           done
+
+          echo "Cleaning dangling Docker images..."
+          docker image prune -f
           REMOTE
