@@ -888,6 +888,12 @@ export class ReservationsService {
       include: { venue: true },
     });
 
+    await this.notifyVenueOwner(checkedIn, {
+      title: "Gost je potvrdio dolazak",
+      body: `${checkedIn.customerName ?? "Chin-Chin korisnik"} je potvrdio/la dolazak za ${checkedIn.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "customer_check_in_confirmed",
+    });
+
     return this.serializeReservation(checkedIn);
   }
 
