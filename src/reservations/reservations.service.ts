@@ -54,6 +54,20 @@ type VenueReservationState = {
   reservationWindowEndMinutes: number;
 };
 
+type ReservationWithVenue = Prisma.ReservationGetPayload<{
+  include: { venue: true };
+}>;
+
+type ReservationWithVenueRefundRequests = ReservationWithVenue & {
+  refundRequests?: {
+    id: string;
+    status: VenueRefundRequestStatus;
+    resolutionAmountCents: number | null;
+    resolutionCurrency: string | null;
+    resolvedAt: Date | null;
+  }[];
+};
+
 const ADVANCE_BASE_PRICE_CENTS = 400;
 const LIVE_BASE_PRICE_CENTS = 500;
 const LARGE_TABLE_SURCHARGE_CENTS = 100;
@@ -408,12 +422,21 @@ export class ReservationsService {
       },
       orderBy: { timeSlotStart: "desc" },
       take: 100,
-      include: { venue: true },
+      include: {
+        venue: true,
+        refundRequests: {
+          where: {
+            status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
+          },
+          orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
+          take: 1,
+        },
+      },
     });
 
     return {
       items: refreshedReservations.map((reservation) =>
-        this.serializeReservation(reservation),
+        this.serializeCustomerReservation(reservation),
       ),
     };
   }
@@ -2487,6 +2510,29 @@ export class ReservationsService {
       source: reservation.source,
       createdAt: reservation.createdAt,
       updatedAt: reservation.updatedAt,
+    };
+  }
+
+  private serializeCustomerReservation(
+    reservation: ReservationWithVenueRefundRequests,
+  ) {
+    return {
+      ...this.serializeReservation(reservation),
+      chinChinSupportRefund:
+        reservation.refundRequests?.[0] &&
+        reservation.refundRequests[0].status ===
+          VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN
+          ? {
+              id: reservation.refundRequests[0].id,
+              status: reservation.refundRequests[0].status,
+              amountCents:
+                reservation.refundRequests[0].resolutionAmountCents ?? 0,
+              currency:
+                reservation.refundRequests[0].resolutionCurrency ??
+                reservation.currency,
+              resolvedAt: reservation.refundRequests[0].resolvedAt,
+            }
+          : null,
     };
   }
 
