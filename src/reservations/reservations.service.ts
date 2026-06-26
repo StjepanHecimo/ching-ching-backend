@@ -741,8 +741,14 @@ export class ReservationsService {
     }
 
     const now = new Date();
-    const liveCustomerCheckInClosesAt = new Date(
+    const liveMinimumCheckInClosesAt = new Date(
       now.getTime() + LIVE_CUSTOMER_CHECK_IN_WINDOW_MINUTES * 60 * 1000,
+    );
+    const liveCustomerCheckInClosesAt = new Date(
+      Math.max(
+        liveMinimumCheckInClosesAt.getTime(),
+        reservation.timeSlotStart.getTime(),
+      ),
     );
     const isLiveReservation = reservation.type === ReservationType.LIVE;
     await this.paymentsService.captureForAcceptedReservation(reservation.id);
@@ -865,7 +871,7 @@ export class ReservationsService {
       throw new BadRequestException(
         refreshed.type === ReservationType.LIVE
           ? "Live customer check-in is not open yet."
-          : "Customer check-in opens three hours before the reservation.",
+          : "Customer check-in opens one hour before the reservation.",
       );
     }
 
@@ -1221,8 +1227,7 @@ export class ReservationsService {
       );
     }
 
-    const checkInOpensAt = this.customerCheckInOpensAt(startAt);
-    const checkInClosesAt = this.customerCheckInClosesAt(startAt);
+    const checkInWindow = this.customerCheckInWindowFor(startAt, new Date());
     const arrivalDeadlineAt = new Date(
       startAt.getTime() + ARRIVAL_GRACE_MINUTES * 60 * 1000,
     );
@@ -1230,8 +1235,8 @@ export class ReservationsService {
     return {
       startAt,
       endAt,
-      checkInOpensAt,
-      checkInClosesAt,
+      checkInOpensAt: checkInWindow.checkInOpensAt,
+      checkInClosesAt: checkInWindow.checkInClosesAt,
       arrivalDeadlineAt,
     };
   }
@@ -1613,17 +1618,45 @@ export class ReservationsService {
   }
 
   private customerCheckInOpensAt(startAt: Date) {
-    return new Date(startAt.getTime() - 3 * 60 * 60 * 1000);
+    return new Date(startAt.getTime() - 60 * 60 * 1000);
   }
 
   private customerCheckInClosesAt(startAt: Date) {
-    return new Date(startAt.getTime() - 2 * 60 * 60 * 1000);
+    return startAt;
+  }
+
+  private customerCheckInWindowFor(startAt: Date, referenceAt: Date) {
+    const checkInOpensAt = this.customerCheckInOpensAt(startAt);
+    const checkInClosesAt = this.customerCheckInClosesAt(startAt);
+    if (
+      checkInClosesAt.getTime() <= referenceAt.getTime() &&
+      startAt.getTime() > referenceAt.getTime()
+    ) {
+      return {
+        checkInOpensAt: referenceAt,
+        checkInClosesAt: startAt,
+      };
+    }
+
+    return { checkInOpensAt, checkInClosesAt };
   }
 
   private effectiveCustomerCheckInOpensAt(reservation: {
     timeSlotStart: Date;
     checkInOpensAt: Date | null;
+    checkInClosesAt: Date | null;
+    createdAt: Date;
   }) {
+    const checkInClosesAt =
+      reservation.checkInClosesAt ??
+      this.customerCheckInClosesAt(reservation.timeSlotStart);
+    if (
+      checkInClosesAt.getTime() <= reservation.createdAt.getTime() &&
+      reservation.timeSlotStart.getTime() > reservation.createdAt.getTime()
+    ) {
+      return reservation.createdAt;
+    }
+
     return (
       reservation.checkInOpensAt ??
       this.customerCheckInOpensAt(reservation.timeSlotStart)
@@ -1632,8 +1665,20 @@ export class ReservationsService {
 
   private effectiveCustomerCheckInClosesAt(reservation: {
     timeSlotStart: Date;
+    checkInOpensAt: Date | null;
     checkInClosesAt: Date | null;
+    createdAt: Date;
   }) {
+    const checkInClosesAt =
+      reservation.checkInClosesAt ??
+      this.customerCheckInClosesAt(reservation.timeSlotStart);
+    if (
+      checkInClosesAt.getTime() <= reservation.createdAt.getTime() &&
+      reservation.timeSlotStart.getTime() > reservation.createdAt.getTime()
+    ) {
+      return reservation.timeSlotStart;
+    }
+
     return (
       reservation.checkInClosesAt ??
       this.customerCheckInClosesAt(reservation.timeSlotStart)
@@ -2019,14 +2064,14 @@ export class ReservationsService {
     checkedInAt?: Date | null;
     seatedAt?: Date | null;
   }) {
-    if (reservation.type === ReservationType.LIVE) {
-      return 0;
-    }
-
     const customerConfirmedArrival = Boolean(reservation.customerCheckedInAt);
     const venueConfirmedArrival = Boolean(
       reservation.checkedInAt || reservation.seatedAt,
     );
+    if (!customerConfirmedArrival) {
+      return Math.floor(reservation.feeCents * 0.5);
+    }
+
     if (customerConfirmedArrival && !venueConfirmedArrival) {
       return 0;
     }
