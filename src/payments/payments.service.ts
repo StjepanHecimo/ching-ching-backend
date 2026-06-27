@@ -1658,38 +1658,6 @@ export class PaymentsService {
     }
   }
 
-  private async notifyCustomerAboutAdvanceReservationRequest(
-    reservationId: string,
-  ) {
-    const reservation = await this.prisma.reservation.findUnique({
-      where: { id: reservationId },
-      include: { venue: { select: { name: true } } },
-    });
-
-    if (
-      !reservation ||
-      reservation.type !== ReservationType.ADVANCE ||
-      !reservation.customerEmail
-    ) {
-      return;
-    }
-
-    try {
-      await this.emailService.sendReservationRequestReceivedEmail({
-        to: reservation.customerEmail.trim().toLowerCase(),
-        venueName: reservation.venue.name,
-        tableLabel: reservation.tableLabel,
-        startAt: reservation.timeSlotStart,
-      });
-    } catch (error) {
-      this.logger.warn(
-        `Reservation ${reservationId} advance request email failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
   private async notifyVenueProblemReportResolved(request: {
     id: string;
     reservationId: string;

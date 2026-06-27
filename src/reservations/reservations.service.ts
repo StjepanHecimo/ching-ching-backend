@@ -868,8 +868,8 @@ export class ReservationsService {
     }
 
     const now = new Date();
-    const opensAt = this.effectiveCustomerCheckInOpensAt(refreshed);
-    const closesAt = this.effectiveCustomerCheckInClosesAt(refreshed);
+    const { opensAt, closesAt } =
+      this.effectiveCustomerCheckInWindow(refreshed);
 
     if (now.getTime() < opensAt.getTime()) {
       throw new BadRequestException(
@@ -1689,10 +1689,26 @@ export class ReservationsService {
       return reservation.timeSlotStart;
     }
 
-    return (
+    const effectiveClosesAt =
       reservation.checkInClosesAt ??
-      this.customerCheckInClosesAt(reservation.timeSlotStart)
-    );
+      this.customerCheckInClosesAt(reservation.timeSlotStart);
+    return effectiveClosesAt.getTime() < reservation.timeSlotStart.getTime()
+      ? reservation.timeSlotStart
+      : effectiveClosesAt;
+  }
+
+  private effectiveCustomerCheckInWindow(reservation: {
+    timeSlotStart: Date;
+    checkInOpensAt: Date | null;
+    checkInClosesAt: Date | null;
+    createdAt: Date;
+  }) {
+    const opensAt = this.effectiveCustomerCheckInOpensAt(reservation);
+    const closesAt = this.effectiveCustomerCheckInClosesAt(reservation);
+    return {
+      opensAt: opensAt.getTime() > closesAt.getTime() ? closesAt : opensAt,
+      closesAt,
+    };
   }
 
   private chinChinTierFrom(tableMap: Record<string, unknown>) {
@@ -2539,8 +2555,9 @@ export class ReservationsService {
       partySize: reservation.partySize,
       startAt: reservation.timeSlotStart,
       endAt: reservation.timeSlotEnd,
-      checkInOpensAt: this.effectiveCustomerCheckInOpensAt(reservation),
-      checkInClosesAt: this.effectiveCustomerCheckInClosesAt(reservation),
+      checkInOpensAt: this.effectiveCustomerCheckInWindow(reservation).opensAt,
+      checkInClosesAt:
+        this.effectiveCustomerCheckInWindow(reservation).closesAt,
       arrivalDeadlineAt: reservation.arrivalDeadlineAt,
       confirmationExpiresAt: reservation.confirmationExpiresAt,
       confirmedAt: reservation.confirmedAt,
