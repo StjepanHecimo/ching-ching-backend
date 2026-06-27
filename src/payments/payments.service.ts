@@ -857,6 +857,7 @@ export class PaymentsService {
         type: "reservation_refunded_by_admin",
         amountCents,
       });
+      await this.notifyCustomerAboutAdminRefund(payment, amountCents);
       return {
         target: dto.target,
         amountCents,
@@ -1742,6 +1743,43 @@ export class PaymentsService {
     } catch (error) {
       this.logger.warn(
         `Payment ${payment.id} venue notification failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async notifyCustomerAboutAdminRefund(
+    payment: {
+      reservationId: string;
+      currency: string;
+      reservation: {
+        customerEmail: string | null;
+        tableLabel: string | null;
+        venue: { name: string };
+      };
+    },
+    amountCents: number,
+  ) {
+    const customerEmail = payment.reservation.customerEmail
+      ?.trim()
+      .toLowerCase();
+
+    if (!customerEmail || amountCents <= 0) {
+      return;
+    }
+
+    try {
+      await this.emailService.sendReservationRefundEmail({
+        to: customerEmail,
+        venueName: payment.reservation.venue.name,
+        tableLabel: payment.reservation.tableLabel,
+        amountCents,
+        currency: payment.currency,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${payment.reservationId} admin refund email failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

@@ -756,13 +756,16 @@ export class ReservationsService {
     const updated = await this.prisma.reservation.update({
       where: { id },
       data: {
-        status: ReservationStatus.CONFIRMED,
+        status: isLiveReservation
+          ? ReservationStatus.CHECK_IN_PENDING
+          : ReservationStatus.CONFIRMED,
         confirmedAt: now,
         confirmationExpiresAt: null,
         ...(isLiveReservation
           ? {
               checkInOpensAt: now,
               checkInClosesAt: liveCustomerCheckInClosesAt,
+              customerCheckedInAt: now,
             }
           : {}),
       },
