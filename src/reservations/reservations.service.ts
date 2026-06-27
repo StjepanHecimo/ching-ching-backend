@@ -775,6 +775,10 @@ export class ReservationsService {
       type: "reservation_confirmed",
     });
 
+    if (updated.type === ReservationType.ADVANCE) {
+      await this.notifyCustomerReservationConfirmedByEmail(updated);
+    }
+
     return this.serializeReservation(updated);
   }
 
@@ -2321,6 +2325,9 @@ export class ReservationsService {
     customerEmail: string | null;
     tableLabel: string | null;
     timeSlotStart: Date;
+    checkInOpensAt: Date | null;
+    checkInClosesAt: Date | null;
+    createdAt: Date;
     venue: { name: string };
   }) {
     const customerEmail = reservation.customerEmail?.trim().toLowerCase();
@@ -2334,6 +2341,8 @@ export class ReservationsService {
         venueName: reservation.venue.name,
         tableLabel: reservation.tableLabel,
         startAt: reservation.timeSlotStart,
+        checkInOpensAt: this.effectiveCustomerCheckInOpensAt(reservation),
+        checkInClosesAt: this.effectiveCustomerCheckInClosesAt(reservation),
       });
     } catch (error) {
       this.logger.warn(

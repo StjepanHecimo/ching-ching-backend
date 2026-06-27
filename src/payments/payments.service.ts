@@ -1432,9 +1432,6 @@ export class PaymentsService {
 
     if (shouldNotifyReservationRequest) {
       await this.notifyVenueAboutReservationRequest(payment.reservationId);
-      await this.notifyCustomerAboutAdvanceReservationRequest(
-        payment.reservationId,
-      );
     }
     return updatedPayment;
   }

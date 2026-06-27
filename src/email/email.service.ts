@@ -22,6 +22,8 @@ type ReservationConfirmedEmailInput = {
   venueName: string;
   tableLabel?: string | null;
   startAt: Date;
+  checkInOpensAt: Date;
+  checkInClosesAt: Date;
 };
 
 type ReservationRequestReceivedEmailInput = {
@@ -128,6 +130,7 @@ export class EmailService {
     const venueName = input.venueName.trim() || "kafić";
     const tableLabel = input.tableLabel?.trim() || "Chin-Chin stol";
     const reservationTime = this.formatDateTime(input.startAt);
+    const checkInWindow = this.formatCheckInWindow(input);
 
     await transporter.sendMail({
       from,
@@ -136,8 +139,9 @@ export class EmailService {
       text: [
         "Chin-Chin rezervacija potvrđena",
         "",
-        `${venueName} je potvrdio rezervaciju za ${tableLabel}.`,
+        `Ugostitelj je prihvatio vašu rezervaciju u ${venueName} za ${tableLabel}.`,
         `Vrijeme rezervacije: ${reservationTime}.`,
+        `Molimo vas da check-in potvrdite u aplikaciji u periodu ${checkInWindow}.`,
         "",
         "Detalje rezervacije možeš provjeriti u Chin-Chin aplikaciji.",
       ].join("\n"),
@@ -320,6 +324,7 @@ export class EmailService {
       input.tableLabel?.trim() || "Chin-Chin stol",
     );
     const reservationTime = this.escapeHtml(this.formatDateTime(input.startAt));
+    const checkInWindow = this.escapeHtml(this.formatCheckInWindow(input));
 
     return `
       <div style="margin:0;padding:0;background:#ffc857;">
@@ -329,13 +334,16 @@ export class EmailService {
             <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
             <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">Rezervacija je potvrđena</h1>
             <p style="font-size:16px;line-height:1.55;margin:0 0 18px;color:#6c4127;">
-              ${venueName} je potvrdio tvoju rezervaciju za <strong>${tableLabel}</strong>.
+              Ugostitelj je prihvatio vašu rezervaciju u ${venueName} za <strong>${tableLabel}</strong>.
             </p>
             <div style="display:inline-block;background:#2d1a10;color:#ffffff;padding:16px 26px;border-radius:12px;margin:2px 0 18px;">
               <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">Vrijeme rezervacije</div>
               <div style="font-size:24px;font-weight:900;line-height:1.2;">${reservationTime}</div>
             </div>
             <p style="font-size:14px;line-height:1.55;margin:0;color:#79533d;">
+              Molimo vas da check-in potvrdite u aplikaciji u periodu <strong>${checkInWindow}</strong>.
+            </p>
+            <p style="font-size:14px;line-height:1.55;margin:12px 0 0;color:#79533d;">
               Detalje rezervacije i check-in status možeš pratiti u Chin-Chin aplikaciji.
             </p>
           </div>
@@ -466,6 +474,7 @@ export class EmailService {
     console.log("Venue: " + input.venueName);
     console.log("Table: " + (input.tableLabel ?? "Chin-Chin stol"));
     console.log("Start: " + this.formatDateTime(input.startAt));
+    console.log("Check-in: " + this.formatCheckInWindow(input));
   }
 
   private logReservationRequestReceivedFallback(
@@ -523,6 +532,19 @@ export class EmailService {
       timeStyle: "short",
       timeZone: "Europe/Zagreb",
     }).format(date);
+  }
+
+  private formatTime(date: Date) {
+    return new Intl.DateTimeFormat("hr-HR", {
+      timeStyle: "short",
+      timeZone: "Europe/Zagreb",
+    }).format(date);
+  }
+
+  private formatCheckInWindow(input: ReservationConfirmedEmailInput) {
+    return `${this.formatTime(input.checkInOpensAt)} - ${this.formatTime(
+      input.checkInClosesAt,
+    )}`;
   }
 
   private escapeHtml(value: string) {
