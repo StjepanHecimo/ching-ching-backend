@@ -1745,7 +1745,7 @@ export class SpaceLayoutsService {
             },
             {
               type: "input_text",
-              text: "Additional setup rules that override generic symbol rules: if a room in the JSON space data has isTemporarySpace=true, that room may include one extra Chin-Chin table/photo above the normal one-quarter limit. Otherwise keep the one-quarter limit strict. Dashed or dotted terrace fences, railings, ograde, or pregrade are not walls; return them as straight, evenly aligned partition line fixtures. Small square blocks are tables only when they are table symbols; if they are labelled or visually placed as postolje tende, awning bases, terrace posts, stupići, or support columns, return them as column or feature fixtures instead of tables.",
+              text: "Additional setup rule that overrides generic symbol rules only for standalone support markers: standalone small square blocks on the sketch are stupići/postolje tende/support posts and should be returned as column or feature fixtures, not customer tables. Keep the existing table logic unchanged: circles are regular tables, plus-marked tables are STANDARD Chin-Chin tables, and a square/box drawn inside a table circle is still the LARGE Chin-Chin table marker.",
             },
           ],
         },
@@ -1760,7 +1760,7 @@ export class SpaceLayoutsService {
             },
             {
               type: "input_text",
-              text: "Temporary terrace rule: isTemporarySpace=true means the room is a temporary/seasonal area such as a terrace and may use one additional Chin-Chin table/photo above the standard 1-per-4-tables rule. Treat dashed/dotted terrace ograde, fences, railings, and pregrade as clean straight partition lines, not walls. Treat small square marks for postolje tende, tende supports, stupići, or posts as column/feature fixtures, not customer tables.",
+              text: "Support marker rule: treat standalone small square marks as postolje tende, tende supports, stupići, or posts and return them as column/feature fixtures, not customer tables. Do not change Chin-Chin table interpretation: plus marks stay STANDARD and square/box markers inside table circles stay LARGE.",
             },
             ...floorPlanContent,
           ],
