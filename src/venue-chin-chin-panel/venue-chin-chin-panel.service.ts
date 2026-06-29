@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { Prisma } from "../../generated/prisma/client";
+import { SpaceLayoutStatus } from "../../generated/prisma/enums";
 import { PrismaService } from "../prisma/prisma.service";
 import { UpsertVenueChinChinPanelDto } from "./dto/upsert-venue-chin-chin-panel.dto";
 
@@ -396,17 +397,25 @@ export class VenueChinChinPanelService {
     const normalizedCity = city?.trim();
 
     const venues = await this.prisma.venue.findMany({
-      where: normalizedCity
-        ? {
-            city: {
-              equals: normalizedCity,
-              mode: "insensitive",
-            },
-          }
-        : undefined,
+      where: {
+        ...(normalizedCity
+          ? {
+              city: {
+                equals: normalizedCity,
+                mode: "insensitive",
+              },
+            }
+          : {}),
+        spaceLayoutProjects: {
+          some: {
+            status: SpaceLayoutStatus.APPROVED,
+          },
+        },
+      },
       include: {
         chinChinPanel: true,
         spaceLayoutProjects: {
+          where: { status: SpaceLayoutStatus.APPROVED },
           orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
           take: 1,
           select: {
@@ -481,10 +490,16 @@ export class VenueChinChinPanelService {
             hasEvent: true,
           },
         },
+        spaceLayoutProjects: {
+          some: {
+            status: SpaceLayoutStatus.APPROVED,
+          },
+        },
       },
       include: {
         chinChinPanel: true,
         spaceLayoutProjects: {
+          where: { status: SpaceLayoutStatus.APPROVED },
           orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
           take: 1,
           select: {

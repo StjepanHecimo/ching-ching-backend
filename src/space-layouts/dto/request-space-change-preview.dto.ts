@@ -11,8 +11,8 @@ import {
 import { LayoutPhotoDto } from "./layout-photo.dto";
 
 export class RequestSpaceChangePreviewDto {
-  @IsIn(["EDIT_SPACE", "DELETE_ROOM", "PROFILE_IMAGES"])
-  type!: "EDIT_SPACE" | "DELETE_ROOM" | "PROFILE_IMAGES";
+  @IsIn(["EDIT_SPACE", "DELETE_ROOM", "HIDE_ROOM", "PROFILE_IMAGES"])
+  type!: "EDIT_SPACE" | "DELETE_ROOM" | "HIDE_ROOM" | "PROFILE_IMAGES";
 
   @IsOptional()
   @IsString()

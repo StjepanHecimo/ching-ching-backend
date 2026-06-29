@@ -1115,12 +1115,14 @@ export class ReservationsService {
 
   async getVenueLiveStatus(venueId: string) {
     const venue = await this.getVenueReservationState(venueId);
+    const hasApprovedLayout = await this.venueHasApprovedLayout(venueId);
+    const isLive = hasApprovedLayout ? venue.isLive : false;
     return {
       id: venue.id,
-      isLive: venue.isLive,
+      isLive,
       latitude: venue.latitude,
       longitude: venue.longitude,
-      liveChinChinTableIds: venue.liveChinChinTableIds,
+      liveChinChinTableIds: isLive ? venue.liveChinChinTableIds : [],
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
     };
@@ -1176,6 +1178,12 @@ export class ReservationsService {
 
     if (!existingVenue) {
       throw new NotFoundException("Venue was not found.");
+    }
+
+    if (dto.isLive && !(await this.venueHasApprovedLayout(venueId))) {
+      throw new BadRequestException(
+        "Venue cannot go live before Chin-Chin approves the first space draft.",
+      );
     }
 
     const liveChinChinTableIds =
@@ -1415,6 +1423,9 @@ export class ReservationsService {
       }
 
       const roomMap = room as Record<string, unknown>;
+      if (this.isRoomHidden(roomMap)) {
+        continue;
+      }
       const roomLabel =
         roomMap.roomLabel?.toString().trim() || `Prostorija ${roomIndex + 1}`;
       const roomTables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
@@ -1451,6 +1462,23 @@ export class ReservationsService {
     }
 
     return tables;
+  }
+
+  private isRoomHidden(room: Record<string, unknown>) {
+    return (
+      room.hidden === true ||
+      room.disabled === true ||
+      typeof room.disabledAt === "string"
+    );
+  }
+
+  private async venueHasApprovedLayout(venueId: string) {
+    const approvedProject = await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId, status: SpaceLayoutStatus.APPROVED },
+      select: { id: true },
+    });
+
+    return approvedProject !== null;
   }
 
   private findBlockingReservations(

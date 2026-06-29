@@ -3,6 +3,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsInt,
   IsNumber,
@@ -43,6 +44,10 @@ export class SpaceShapeDto {
   @IsOptional()
   @IsIn(["rectangle", "custom"])
   shapeType?: "rectangle" | "custom";
+
+  @IsOptional()
+  @IsBoolean()
+  isTemporarySpace?: boolean;
 
   @IsOptional()
   @IsArray()

@@ -96,7 +96,7 @@ export class EmailService {
       text: [
         "Chin-Chin povrat sredstava",
         "",
-        `${venueName} je otkazao rezervaciju za ${tableLabel}.`,
+        `Povrat sredstava za rezervaciju u ${venueName} za ${tableLabel} je evidentiran.`,
         `Iznos povrata: ${amount}.`,
         "",
         "Pravila otkazivanja dostupna su u aplikaciji pod rezervacijama.",
@@ -262,7 +262,7 @@ export class EmailService {
             <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
             <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">Povrat sredstava je evidentiran</h1>
             <p style="font-size:16px;line-height:1.55;margin:0 0 18px;color:#6c4127;">
-              ${venueName} je otkazao rezervaciju za <strong>${tableLabel}</strong>.
+              Povrat sredstava za rezervaciju u <strong>${venueName}</strong> za <strong>${tableLabel}</strong> je evidentiran.
             </p>
             <div style="display:inline-block;background:#2d1a10;color:#ffffff;padding:16px 26px;border-radius:12px;margin:2px 0 18px;">
               <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">Iznos povrata</div>

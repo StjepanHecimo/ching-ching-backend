@@ -1765,7 +1765,17 @@ export class PaymentsService {
       ?.trim()
       .toLowerCase();
 
-    if (!customerEmail || amountCents <= 0) {
+    if (!customerEmail) {
+      this.logger.warn(
+        `Reservation ${payment.reservationId} admin refund email was skipped because customer email is missing.`,
+      );
+      return;
+    }
+
+    if (amountCents <= 0) {
+      this.logger.warn(
+        `Reservation ${payment.reservationId} admin refund email was skipped because refund amount is ${amountCents}.`,
+      );
       return;
     }
 
