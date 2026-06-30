@@ -126,7 +126,11 @@ export class ReservationsService {
     );
     const blockedTableKeys = new Set(
       blockingReservations.flatMap((reservation) =>
-        this.tableIdentityKeys(reservation.tableId, reservation.tableLabel),
+        this.tableIdentityKeys(
+          reservation.tableId,
+          reservation.tableLabel,
+          reservation.roomLabel,
+        ),
       ),
     );
 
@@ -207,7 +211,11 @@ export class ReservationsService {
         venueId,
         startAt,
         endAt,
-        { tableId: table.tableId, tableLabel: table.tableLabel },
+        {
+          tableId: table.tableId,
+          tableLabel: table.tableLabel,
+          roomLabel: table.roomLabel,
+        },
       );
       if (blocked.length) {
         unavailableMinutes.push(minutes);
@@ -273,7 +281,11 @@ export class ReservationsService {
       venueId,
       slot.startAt,
       slot.endAt,
-      { tableId: dto.tableId, tableLabel: table.tableLabel },
+      {
+        tableId: dto.tableId,
+        tableLabel: table.tableLabel,
+        roomLabel: table.roomLabel,
+      },
     );
 
     if (blockingReservations.length) {
@@ -1485,7 +1497,11 @@ export class ReservationsService {
     venueId: string,
     startAt: Date,
     endAt: Date,
-    tableIdentity?: { tableId?: string | null; tableLabel?: string | null },
+    tableIdentity?: {
+      tableId?: string | null;
+      tableLabel?: string | null;
+      roomLabel?: string | null;
+    },
     excludeReservationId?: string,
   ) {
     const now = new Date();
@@ -1497,6 +1513,7 @@ export class ReservationsService {
           this.tableIdentityKeys(
             tableIdentity.tableId,
             tableIdentity.tableLabel,
+            tableIdentity.roomLabel,
           ),
         )
       : null;
@@ -1570,6 +1587,7 @@ export class ReservationsService {
               this.tableIdentityKeys(
                 reservation.tableId,
                 reservation.tableLabel,
+                reservation.roomLabel,
               ),
             );
           }),
@@ -1978,7 +1996,7 @@ export class ReservationsService {
   ) {
     return this.hasSharedTableIdentity(
       reservedTableKeys,
-      this.tableIdentityKeys(table.tableId, table.tableLabel),
+      this.tableIdentityKeys(table.tableId, table.tableLabel, table.roomLabel),
     );
   }
 
@@ -1989,19 +2007,26 @@ export class ReservationsService {
   private tableIdentityKeys(
     tableId?: string | null,
     tableLabel?: string | null,
+    roomLabel?: string | null,
   ) {
     const keys = new Set<string>();
-    for (const value of [tableId, tableLabel]) {
-      const text = value?.trim();
-      if (!text) {
-        continue;
-      }
-      keys.add(this.normalizeTableIdentity(text));
-      const numbers = text.match(/\d+/g);
-      if (numbers?.length) {
-        keys.add(`number:${numbers[numbers.length - 1]}`);
-      }
+    const normalizedTableId = tableId?.trim()
+      ? this.normalizeTableIdentity(tableId)
+      : "";
+    const normalizedTableLabel = tableLabel?.trim()
+      ? this.normalizeTableIdentity(tableLabel)
+      : "";
+    const normalizedRoomLabel = roomLabel?.trim()
+      ? this.normalizeTableIdentity(roomLabel)
+      : "";
+
+    if (normalizedTableId) {
+      keys.add(`id:${normalizedTableId}`);
     }
+    if (normalizedRoomLabel && normalizedTableLabel) {
+      keys.add(`room:${normalizedRoomLabel}|label:${normalizedTableLabel}`);
+    }
+
     return [...keys];
   }
 

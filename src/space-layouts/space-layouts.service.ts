@@ -628,14 +628,14 @@ export class SpaceLayoutsService {
         ? dto.layout.rooms.length
         : null,
     });
-    const layoutForApproval = dto.forceApprove
-      ? dto.layout
-      : isAdditionalRoomRequest
-        ? await this.mergeAdditionalRoomLayout(
-            project.venueId,
-            project.id,
-            dto.layout,
-          )
+    const layoutForApproval = isAdditionalRoomRequest
+      ? await this.mergeAdditionalRoomLayout(
+          project.venueId,
+          project.id,
+          dto.layout,
+        )
+      : dto.forceApprove
+        ? dto.layout
         : isDeleteRoomRequest
           ? this.removeRequestedRoomFromLayout(
               dto.layout,
@@ -1416,11 +1416,20 @@ export class SpaceLayoutsService {
       mergedRoomCount: existingRooms.length + incomingRooms.length,
     });
 
+    const usedTableIds = this.collectLayoutTableIds(existingRooms);
+    const normalizedIncomingRooms = incomingRooms.map((room, index) =>
+      this.ensureUniqueIncomingRoomTableIds(
+        room,
+        existingRooms.length + index,
+        usedTableIds,
+      ),
+    );
+
     const mergedLayout = JSON.parse(JSON.stringify(approvedLayout)) as Record<
       string,
       unknown
     >;
-    mergedLayout.rooms = [...existingRooms, ...incomingRooms];
+    mergedLayout.rooms = [...existingRooms, ...normalizedIncomingRooms];
     mergedLayout.summary = this.recalculateLayoutSummary(mergedLayout);
     mergedLayout.strategy = [
       approvedLayout.strategy?.toString(),
@@ -1430,6 +1439,95 @@ export class SpaceLayoutsService {
       .join(" ");
 
     return mergedLayout;
+  }
+
+  private collectLayoutTableIds(rooms: unknown[]) {
+    const ids = new Set<string>();
+
+    for (const room of rooms) {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        continue;
+      }
+
+      const tables = Array.isArray((room as Record<string, unknown>).tables)
+        ? ((room as Record<string, unknown>).tables as unknown[])
+        : [];
+      for (const table of tables) {
+        if (typeof table !== "object" || !table || Array.isArray(table)) {
+          continue;
+        }
+
+        const id = (table as Record<string, unknown>).id?.toString().trim();
+        if (id) {
+          ids.add(id);
+        }
+      }
+    }
+
+    return ids;
+  }
+
+  private ensureUniqueIncomingRoomTableIds(
+    room: unknown,
+    roomIndex: number,
+    usedTableIds: Set<string>,
+  ) {
+    const clonedRoom = JSON.parse(JSON.stringify(room)) as unknown;
+    if (
+      typeof clonedRoom !== "object" ||
+      !clonedRoom ||
+      Array.isArray(clonedRoom)
+    ) {
+      return clonedRoom;
+    }
+
+    const roomMap = clonedRoom as Record<string, unknown>;
+    const roomLabel =
+      roomMap.roomLabel?.toString().trim() || `Prostorija ${roomIndex + 1}`;
+    const roomSlug = this.slugForLayoutId(roomLabel) || `room-${roomIndex + 1}`;
+    const tables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+    roomMap.tables = tables.map((table, tableIndex) => {
+      if (typeof table !== "object" || !table || Array.isArray(table)) {
+        return table;
+      }
+
+      const tableMap = table as Record<string, unknown>;
+      const rawId = tableMap.id?.toString().trim();
+      const fallbackId = `table-${tableIndex + 1}`;
+      const candidateBase =
+        rawId && !usedTableIds.has(rawId)
+          ? rawId
+          : `${roomSlug}-${this.slugForLayoutId(rawId || fallbackId) || fallbackId}`;
+      const uniqueId = this.nextUniqueLayoutTableId(
+        candidateBase,
+        usedTableIds,
+      );
+      tableMap.id = uniqueId;
+      usedTableIds.add(uniqueId);
+      return tableMap;
+    });
+
+    return roomMap;
+  }
+
+  private nextUniqueLayoutTableId(baseId: string, usedTableIds: Set<string>) {
+    let candidate = baseId;
+    let counter = 2;
+    while (usedTableIds.has(candidate)) {
+      candidate = `${baseId}-${counter}`;
+      counter += 1;
+    }
+    return candidate;
+  }
+
+  private slugForLayoutId(value: string) {
+    return value
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
   }
 
   private async withMergedAdditionalRoomFallback(project: {
