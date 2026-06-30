@@ -1796,6 +1796,10 @@ export class SpaceLayoutsService {
               type: "input_text",
               text: "Additional setup rule that overrides generic symbol rules only for standalone support markers: standalone small square blocks on the sketch are stupići/postolje tende/support posts and should be returned as column or feature fixtures, not customer tables. Keep the existing table logic unchanged: circles are regular tables, plus-marked tables are STANDARD Chin-Chin tables, and a square/box drawn inside a table circle is still the LARGE Chin-Chin table marker.",
             },
+            {
+              type: "input_text",
+              text: "Entrance opening rule: when a label such as ulaz, glavni ulaz, entrance, or main entrance is placed on or directly next to a wall/boundary line, cut that wall at the entrance position instead of returning one continuous wall across it. Leave an opening about 0.9-1.2 meters wide, roughly the visual width needed for the entrance icon, and center the door/passage fixture inside that opening. No wall fixture or outline segment may cross the entrance opening.",
+            },
           ],
         },
         {
@@ -1810,6 +1814,10 @@ export class SpaceLayoutsService {
             {
               type: "input_text",
               text: "Support marker rule: treat standalone small square marks as postolje tende, tende supports, stupići, or posts and return them as column/feature fixtures, not customer tables. Do not change Chin-Chin table interpretation: plus marks stay STANDARD and square/box markers inside table circles stay LARGE.",
+            },
+            {
+              type: "input_text",
+              text: "Entrance opening rule: if ulaz/glavni ulaz/entrance/main entrance is marked on a wall, split or shorten the wall so the entrance is physically open. Use an opening around 0.9-1.2 meters wide, approximately the previous entrance icon width, place the door/passage marker in the opening, and do not leave a wall line crossing that opening.",
             },
             ...floorPlanContent,
           ],
