@@ -8,6 +8,7 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
 import { SpaceLayoutStatus } from "../../generated/prisma/enums";
+import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
 import { CreateSpaceLayoutDto } from "./dto/create-space-layout.dto";
@@ -51,6 +52,7 @@ export class SpaceLayoutsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly emailService: EmailService,
   ) {}
 
   async create(userId: string, dto: CreateSpaceLayoutDto) {
@@ -588,7 +590,7 @@ export class SpaceLayoutsService {
   ) {
     const project = await this.prisma.spaceLayoutProject.findUnique({
       where: { id },
-      include: { venue: true },
+      include: { venue: { include: { owner: true } } },
     });
 
     if (!project) {
@@ -702,7 +704,54 @@ export class SpaceLayoutsService {
       });
     }
 
+    if (isDeleteRoomRequest) {
+      await this.notifyVenueRoomDeleted(
+        project,
+        changeRequest,
+        previousSavedLayout,
+      );
+    }
+
     return this.serializeProject(updatedProject);
+  }
+
+  private async notifyVenueRoomDeleted(
+    project: {
+      id: string;
+      venue?: {
+        name?: string | null;
+        owner?: { email?: string | null } | null;
+      } | null;
+    },
+    changeRequest: Record<string, unknown> | null,
+    previousSavedLayout: Record<string, unknown>,
+  ) {
+    const recipient = project.venue?.owner?.email?.trim().toLowerCase();
+    const roomLabel =
+      changeRequest?.roomLabel?.toString().trim() ||
+      previousSavedLayout.requestedRoomLabel?.toString().trim() ||
+      "odabrani prostor";
+
+    if (!recipient) {
+      this.logger.warn(
+        `Room delete approval email skipped for project ${project.id}: venue owner email is missing.`,
+      );
+      return;
+    }
+
+    try {
+      await this.emailService.sendVenueRoomDeletedEmail({
+        to: recipient,
+        venueName: project.venue?.name ?? "kafić",
+        roomLabel,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Room delete approval email failed for project ${project.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   async review(userId: string, id: string, dto: ReviewSpaceLayoutDto) {

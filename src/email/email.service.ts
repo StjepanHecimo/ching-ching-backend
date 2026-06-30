@@ -35,6 +35,12 @@ type VenueProblemReportResolvedEmailInput = {
   adminNotes?: string | null;
 };
 
+type VenueRoomDeletedEmailInput = {
+  to: string;
+  venueName: string;
+  roomLabel: string;
+};
+
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
@@ -192,6 +198,40 @@ export class EmailService {
     });
 
     this.logger.log(`Venue problem report resolved email sent to ${input.to}`);
+  }
+
+  async sendVenueRoomDeletedEmail(input: VenueRoomDeletedEmailInput) {
+    const transporter = this.getTransporter();
+    const from =
+      this.configService.get<string>("EMAIL_FROM") ??
+      "Chin-Chin <no-reply@chin-chin.local>";
+
+    if (!transporter) {
+      this.logVenueRoomDeletedFallback(input);
+      return;
+    }
+
+    const venueName = input.venueName.trim() || "kafić";
+    const roomLabel = input.roomLabel.trim() || "odabrani prostor";
+
+    await transporter.sendMail({
+      from,
+      to: input.to,
+      subject: "Chin-Chin prostor je obrisan",
+      text: [
+        "Chin-Chin prostor je obrisan",
+        "",
+        `Za kafić ${venueName} obrisan je prostor: ${roomLabel}.`,
+        "",
+        "Promjena je odobrena i spremljena od strane Chin-Chin admina.",
+        "Molimo vas da zatvorite i ponovno otvorite aplikaciju kako bi se novi prikaz prostora odmah učitao.",
+        "",
+        "Ako i nakon ponovnog otvaranja aplikacije ne vidite promjenu, javite se Chin-Chin podršci.",
+      ].join("\n"),
+      html: this.venueRoomDeletedHtml(input),
+    });
+
+    this.logger.log(`Venue room deleted email sent to ${input.to}`);
   }
 
   private getTransporter() {
@@ -366,6 +406,38 @@ export class EmailService {
     `;
   }
 
+  private venueRoomDeletedHtml(input: VenueRoomDeletedEmailInput) {
+    const venueName = this.escapeHtml(input.venueName.trim() || "kafić");
+    const roomLabel = this.escapeHtml(
+      input.roomLabel.trim() || "odabrani prostor",
+    );
+
+    return `
+      <div style="margin:0;padding:0;background:#ffc857;">
+        <div style="max-width:560px;margin:0 auto;padding:32px 18px;font-family:Arial,sans-serif;color:#2d1a10;">
+          <div style="background:#fff4d6;border:2px solid #ff9f1c;border-radius:18px;padding:28px;text-align:center;box-shadow:0 12px 32px rgba(45,26,16,0.12);">
+            <div style="font-size:38px;font-weight:900;letter-spacing:0;margin-bottom:4px;">Chin-Chin</div>
+            <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
+            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">Prostor je obrisan</h1>
+            <p style="font-size:16px;line-height:1.55;margin:0 0 18px;color:#6c4127;">
+              Za kafić <strong>${venueName}</strong> obrisan je prostor:
+            </p>
+            <div style="display:inline-block;background:#2d1a10;color:#ffffff;padding:16px 26px;border-radius:12px;margin:2px 0 18px;">
+              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">Prostor</div>
+              <div style="font-size:24px;font-weight:900;line-height:1.2;">${roomLabel}</div>
+            </div>
+            <p style="font-size:14px;line-height:1.55;margin:0;color:#79533d;">
+              Promjena je odobrena i spremljena od strane Chin-Chin admina.
+            </p>
+            <p style="font-size:14px;line-height:1.55;margin:12px 0 0;color:#79533d;">
+              Molimo vas da zatvorite i ponovno otvorite aplikaciju kako bi se novi prikaz prostora odmah učitao.
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   private logVerificationFallback(input: VerificationEmailInput) {
     this.logger.warn(
       "SMTP is not configured. Verification email was not sent; using console fallback.",
@@ -418,6 +490,16 @@ export class EmailService {
       console.log("Amount: " + this.problemReportAmountLabel(input));
     }
     console.log("Admin notes: " + (input.adminNotes ?? "-"));
+  }
+
+  private logVenueRoomDeletedFallback(input: VenueRoomDeletedEmailInput) {
+    this.logger.warn(
+      "SMTP is not configured. Venue room deleted email was not sent; using console fallback.",
+    );
+    console.log("Chin-Chin venue room deleted email");
+    console.log("To: " + input.to);
+    console.log("Venue: " + input.venueName);
+    console.log("Room: " + input.roomLabel);
   }
 
   private problemReportAmountLabel(
