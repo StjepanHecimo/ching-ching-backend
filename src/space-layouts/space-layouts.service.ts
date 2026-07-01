@@ -633,6 +633,7 @@ export class SpaceLayoutsService {
           project.venueId,
           project.id,
           dto.layout,
+          project.space,
         )
       : dto.forceApprove
         ? dto.layout
@@ -1335,6 +1336,7 @@ export class SpaceLayoutsService {
     venueId: string,
     currentProjectId: string,
     additionalLayout: Record<string, unknown>,
+    projectSpace: Prisma.JsonValue | null,
   ) {
     const approvedProject = await this.prisma.spaceLayoutProject.findFirst({
       where: {
@@ -1416,12 +1418,23 @@ export class SpaceLayoutsService {
       mergedRoomCount: existingRooms.length + incomingRooms.length,
     });
 
-    const usedTableIds = this.collectLayoutTableIds(existingRooms);
-    const normalizedIncomingRooms = incomingRooms.map((room, index) =>
-      this.ensureUniqueIncomingRoomTableIds(
+    const approvedSpaceRooms = this.readSpaceRooms(
+      approvedProject?.space ?? null,
+    );
+    const normalizedExistingRooms = existingRooms.map((room, index) =>
+      this.syncRoomTablePhotoAssignments(
         room,
-        existingRooms.length + index,
+        this.photoIdsForIncomingRoom(approvedSpaceRooms, room, index),
+      ),
+    );
+    const usedTableIds = this.collectLayoutTableIds(normalizedExistingRooms);
+    const currentSpaceRooms = this.readSpaceRooms(projectSpace);
+    const normalizedIncomingRooms = incomingRooms.map((room, index) =>
+      this.prepareIncomingAdditionalRoom(
+        room,
+        normalizedExistingRooms.length + index,
         usedTableIds,
+        this.photoIdsForIncomingRoom(currentSpaceRooms, room, index),
       ),
     );
 
@@ -1429,7 +1442,10 @@ export class SpaceLayoutsService {
       string,
       unknown
     >;
-    mergedLayout.rooms = [...existingRooms, ...normalizedIncomingRooms];
+    mergedLayout.rooms = [
+      ...normalizedExistingRooms,
+      ...normalizedIncomingRooms,
+    ];
     mergedLayout.summary = this.recalculateLayoutSummary(mergedLayout);
     mergedLayout.strategy = [
       approvedLayout.strategy?.toString(),
@@ -1467,10 +1483,11 @@ export class SpaceLayoutsService {
     return ids;
   }
 
-  private ensureUniqueIncomingRoomTableIds(
+  private prepareIncomingAdditionalRoom(
     room: unknown,
     roomIndex: number,
     usedTableIds: Set<string>,
+    roomPhotoIds: string[],
   ) {
     const clonedRoom = JSON.parse(JSON.stringify(room)) as unknown;
     if (
@@ -1485,6 +1502,7 @@ export class SpaceLayoutsService {
     const roomLabel =
       roomMap.roomLabel?.toString().trim() || `Prostorija ${roomIndex + 1}`;
     const roomSlug = this.slugForLayoutId(roomLabel) || `room-${roomIndex + 1}`;
+    const usedPhotoIds = new Set<string>();
     const tables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
     roomMap.tables = tables.map((table, tableIndex) => {
       if (typeof table !== "object" || !table || Array.isArray(table)) {
@@ -1504,10 +1522,149 @@ export class SpaceLayoutsService {
       );
       tableMap.id = uniqueId;
       usedTableIds.add(uniqueId);
+
+      this.ensureIncomingTablePhotoAssignment(
+        tableMap,
+        roomPhotoIds,
+        usedPhotoIds,
+      );
       return tableMap;
     });
 
     return roomMap;
+  }
+
+  private syncRoomTablePhotoAssignments(room: unknown, roomPhotoIds: string[]) {
+    const clonedRoom = JSON.parse(JSON.stringify(room)) as unknown;
+    if (
+      typeof clonedRoom !== "object" ||
+      !clonedRoom ||
+      Array.isArray(clonedRoom)
+    ) {
+      return clonedRoom;
+    }
+
+    const roomMap = clonedRoom as Record<string, unknown>;
+    const usedPhotoIds = new Set<string>();
+    const tables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+    roomMap.tables = tables.map((table) => {
+      if (typeof table !== "object" || !table || Array.isArray(table)) {
+        return table;
+      }
+
+      const tableMap = table as Record<string, unknown>;
+      this.ensureIncomingTablePhotoAssignment(
+        tableMap,
+        roomPhotoIds,
+        usedPhotoIds,
+      );
+      return tableMap;
+    });
+
+    return roomMap;
+  }
+
+  private readSpaceRooms(space: Prisma.JsonValue | null) {
+    const spaceMap = this.asJsonObject(space);
+    return Array.isArray(spaceMap?.rooms) ? spaceMap.rooms : [];
+  }
+
+  private photoIdsForIncomingRoom(
+    spaceRooms: unknown[],
+    incomingRoom: unknown,
+    incomingRoomIndex: number,
+  ) {
+    const incomingRoomMap =
+      typeof incomingRoom === "object" &&
+      incomingRoom &&
+      !Array.isArray(incomingRoom)
+        ? (incomingRoom as Record<string, unknown>)
+        : null;
+    const incomingLabel = incomingRoomMap?.roomLabel?.toString().trim() ?? "";
+    const normalizedIncomingLabel = incomingLabel.toLowerCase();
+
+    const matchingRoom =
+      spaceRooms.find((room) => {
+        if (typeof room !== "object" || !room || Array.isArray(room)) {
+          return false;
+        }
+
+        const label = (room as Record<string, unknown>).roomLabel
+          ?.toString()
+          .trim()
+          .toLowerCase();
+        return !!label && label === normalizedIncomingLabel;
+      }) ??
+      spaceRooms[incomingRoomIndex] ??
+      spaceRooms[0];
+
+    if (
+      typeof matchingRoom !== "object" ||
+      !matchingRoom ||
+      Array.isArray(matchingRoom)
+    ) {
+      return [];
+    }
+
+    const photos = Array.isArray(
+      (matchingRoom as Record<string, unknown>).photos,
+    )
+      ? ((matchingRoom as Record<string, unknown>).photos as unknown[])
+      : [];
+    const seen = new Set<string>();
+    const photoIds: string[] = [];
+
+    for (const photo of photos) {
+      if (typeof photo !== "object" || !photo || Array.isArray(photo)) {
+        continue;
+      }
+
+      const id = (photo as Record<string, unknown>).id?.toString().trim();
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        photoIds.push(id);
+      }
+    }
+
+    return photoIds;
+  }
+
+  private ensureIncomingTablePhotoAssignment(
+    tableMap: Record<string, unknown>,
+    roomPhotoIds: string[],
+    usedPhotoIds: Set<string>,
+  ) {
+    const tableRole = tableMap.tableRole?.toString();
+    const isChinChinTable =
+      tableRole === "CHIN_CHIN_TABLE" || tableMap.chinChinCandidate === true;
+
+    if (!isChinChinTable) {
+      tableMap.tablePhotoId = "";
+      tableMap.tablePhotoStatus = "NOT_REQUIRED";
+      return;
+    }
+
+    tableMap.tableRole = "CHIN_CHIN_TABLE";
+    tableMap.chinChinCandidate = true;
+
+    const existingPhotoId = tableMap.tablePhotoId?.toString().trim() ?? "";
+    const canKeepExistingPhoto =
+      existingPhotoId &&
+      roomPhotoIds.includes(existingPhotoId) &&
+      !usedPhotoIds.has(existingPhotoId);
+    const assignedPhotoId = canKeepExistingPhoto
+      ? existingPhotoId
+      : (roomPhotoIds.find((photoId) => !usedPhotoIds.has(photoId)) ?? "");
+
+    if (assignedPhotoId) {
+      usedPhotoIds.add(assignedPhotoId);
+      tableMap.tablePhotoId = assignedPhotoId;
+      tableMap.tablePhotoStatus = "APPROVED_WITH_PHOTO";
+      return;
+    }
+
+    tableMap.tablePhotoId = "";
+    tableMap.tablePhotoStatus = "MISSING_PHOTO";
   }
 
   private nextUniqueLayoutTableId(baseId: string, usedTableIds: Set<string>) {
@@ -1578,6 +1735,7 @@ export class SpaceLayoutsService {
       project.venueId,
       project.id,
       layout,
+      project.space,
     );
 
     return {
@@ -1726,9 +1884,12 @@ export class SpaceLayoutsService {
       outline: space.outline,
       photos:
         space.photos?.map((photo, photoIndex) =>
-          this.normalizePhoto(
+          this.normalizeRoomPhoto(
             photo,
-            `room-${index + 1}-chin-chin-photo-${photoIndex + 1}`,
+            space.roomLabel?.trim() ??
+              `Prostorija ${String.fromCharCode(65 + index)}`,
+            index,
+            photoIndex,
           ),
         ) ?? [],
       features: {
@@ -1752,6 +1913,28 @@ export class SpaceLayoutsService {
       .replace(/^-|-$/g, "");
 
     return slug ? `photo-${slug}` : "photo-reference";
+  }
+
+  private normalizeRoomPhoto(
+    photo: LayoutPhotoDto,
+    roomLabel: string,
+    roomIndex: number,
+    photoIndex: number,
+  ) {
+    const normalized = this.normalizePhoto(
+      photo,
+      `room-${roomIndex + 1}-chin-chin-photo-${photoIndex + 1}`,
+    );
+    const roomSlug = this.slugForLayoutId(roomLabel) || `room-${roomIndex + 1}`;
+    const photoSlug =
+      this.slugForLayoutId(normalized.id) ||
+      this.slugForLayoutId(normalized.fileName) ||
+      `photo-${photoIndex + 1}`;
+
+    return {
+      ...normalized,
+      id: `${roomSlug}-${roomIndex + 1}-${photoSlug}-${photoIndex + 1}`,
+    };
   }
 
   private async createOpenAiSuggestion(spaceJson: Prisma.JsonValue) {
