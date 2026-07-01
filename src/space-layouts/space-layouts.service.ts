@@ -1386,26 +1386,28 @@ export class SpaceLayoutsService {
         )
         .filter(Boolean),
     );
-    const duplicateRoom = incomingRooms.find((room) => {
+    const incomingNewRooms = incomingRooms.filter((room) => {
       if (typeof room !== "object" || !room || Array.isArray(room)) {
         return false;
       }
+
       const label = (room as Record<string, unknown>).roomLabel
         ?.toString()
         .trim()
         .toLowerCase();
-      return !!label && existingLabels.has(label);
+      return !label || !existingLabels.has(label);
     });
-    if (duplicateRoom) {
+    if (!incomingNewRooms.length) {
       console.log(
-        "[space-layouts] mergeAdditionalRoomLayout duplicate room label",
+        "[space-layouts] mergeAdditionalRoomLayout no new room labels",
         {
           venueId,
           currentProjectId,
+          incomingRoomCount: incomingRooms.length,
         },
       );
       throw new BadRequestException(
-        "Room name already exists in approved layout.",
+        "Additional room request does not contain a new room.",
       );
     }
 
@@ -1415,7 +1417,9 @@ export class SpaceLayoutsService {
       previousApprovedProjectId: approvedProject?.id,
       existingRoomCount: existingRooms.length,
       incomingRoomCount: incomingRooms.length,
-      mergedRoomCount: existingRooms.length + incomingRooms.length,
+      incomingNewRoomCount: incomingNewRooms.length,
+      ignoredExistingRoomCount: incomingRooms.length - incomingNewRooms.length,
+      mergedRoomCount: existingRooms.length + incomingNewRooms.length,
     });
 
     const normalizedExistingRooms = existingRooms.map((room) =>
@@ -1423,7 +1427,7 @@ export class SpaceLayoutsService {
     );
     const usedTableIds = this.collectLayoutTableIds(normalizedExistingRooms);
     const currentSpaceRooms = this.readSpaceRooms(projectSpace);
-    const normalizedIncomingRooms = incomingRooms.map((room, index) =>
+    const normalizedIncomingRooms = incomingNewRooms.map((room, index) =>
       this.prepareIncomingAdditionalRoom(
         room,
         normalizedExistingRooms.length + index,
