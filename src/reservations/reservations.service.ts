@@ -1245,6 +1245,12 @@ export class ReservationsService {
       );
     }
 
+    if (startAt.getTime() <= Date.now()) {
+      throw new BadRequestException(
+        "Reservation start time must be in the future.",
+      );
+    }
+
     const startMinutes = this.zagrebMinutesOfDay(startAt);
     const latestReservationStartMinutes =
       venue.reservationWindowEndMinutes -
