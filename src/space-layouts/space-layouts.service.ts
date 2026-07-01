@@ -1374,6 +1374,19 @@ export class SpaceLayoutsService {
       throw new BadRequestException("Additional room layout has no rooms.");
     }
 
+    const currentSpaceRooms = this.readSpaceRooms(projectSpace);
+    const requestedRoomLabels = new Set(
+      currentSpaceRooms
+        .map((room) =>
+          typeof room === "object" && room && !Array.isArray(room)
+            ? (room as Record<string, unknown>).roomLabel
+                ?.toString()
+                .trim()
+                .toLowerCase()
+            : "",
+        )
+        .filter(Boolean),
+    );
     const existingLabels = new Set(
       existingRooms
         .map((room) =>
@@ -1386,7 +1399,23 @@ export class SpaceLayoutsService {
         )
         .filter(Boolean),
     );
-    const incomingNewRooms = incomingRooms.filter((room) => {
+    const requestedIncomingRooms = requestedRoomLabels.size
+      ? incomingRooms.filter((room) => {
+          if (typeof room !== "object" || !room || Array.isArray(room)) {
+            return false;
+          }
+
+          const label = (room as Record<string, unknown>).roomLabel
+            ?.toString()
+            .trim()
+            .toLowerCase();
+          return !!label && requestedRoomLabels.has(label);
+        })
+      : [];
+    const candidateIncomingRooms = requestedIncomingRooms.length
+      ? requestedIncomingRooms
+      : incomingRooms;
+    const incomingNewRooms = candidateIncomingRooms.filter((room) => {
       if (typeof room !== "object" || !room || Array.isArray(room)) {
         return false;
       }
@@ -1403,6 +1432,7 @@ export class SpaceLayoutsService {
         {
           venueId,
           currentProjectId,
+          requestedRoomLabels: [...requestedRoomLabels],
           incomingRoomCount: incomingRooms.length,
         },
       );
@@ -1417,6 +1447,8 @@ export class SpaceLayoutsService {
       previousApprovedProjectId: approvedProject?.id,
       existingRoomCount: existingRooms.length,
       incomingRoomCount: incomingRooms.length,
+      requestedRoomLabels: [...requestedRoomLabels],
+      matchedRequestedRoomCount: requestedIncomingRooms.length,
       incomingNewRoomCount: incomingNewRooms.length,
       ignoredExistingRoomCount: incomingRooms.length - incomingNewRooms.length,
       mergedRoomCount: existingRooms.length + incomingNewRooms.length,
@@ -1426,7 +1458,6 @@ export class SpaceLayoutsService {
       JSON.parse(JSON.stringify(room)),
     );
     const usedTableIds = this.collectLayoutTableIds(normalizedExistingRooms);
-    const currentSpaceRooms = this.readSpaceRooms(projectSpace);
     const normalizedIncomingRooms = incomingNewRooms.map((room, index) =>
       this.prepareIncomingAdditionalRoom(
         room,
