@@ -1418,14 +1418,8 @@ export class SpaceLayoutsService {
       mergedRoomCount: existingRooms.length + incomingRooms.length,
     });
 
-    const approvedSpaceRooms = this.readSpaceRooms(
-      approvedProject?.space ?? null,
-    );
-    const normalizedExistingRooms = existingRooms.map((room, index) =>
-      this.syncRoomTablePhotoAssignments(
-        room,
-        this.photoIdsForIncomingRoom(approvedSpaceRooms, room, index),
-      ),
+    const normalizedExistingRooms = existingRooms.map((room) =>
+      JSON.parse(JSON.stringify(room)),
     );
     const usedTableIds = this.collectLayoutTableIds(normalizedExistingRooms);
     const currentSpaceRooms = this.readSpaceRooms(projectSpace);
