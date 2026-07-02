@@ -650,6 +650,13 @@ export class SpaceLayoutsService {
                   previousSavedLayout.requestedRoomLabel?.toString(),
               )
             : dto.layout;
+    const spaceForApproval = isAdditionalRoomRequest
+      ? await this.mergeAdditionalRoomSpace(
+          project.venueId,
+          project.id,
+          project.space,
+        )
+      : null;
 
     const adjustedBy = dto.adjustedBy?.trim() || "chin-chin-admin-panel";
     const versionedSavedLayout = this.createApprovedSavedLayoutVersion({
@@ -666,6 +673,9 @@ export class SpaceLayoutsService {
       data: {
         status: SpaceLayoutStatus.APPROVED,
         approvedAt: new Date(now),
+        ...(spaceForApproval
+          ? { space: spaceForApproval as Prisma.InputJsonValue }
+          : {}),
         savedLayout: versionedSavedLayout as Prisma.InputJsonValue,
         reviewSubmission: {
           ...reviewSubmission,
@@ -1484,6 +1494,87 @@ export class SpaceLayoutsService {
       .join(" ");
 
     return mergedLayout;
+  }
+
+  private async mergeAdditionalRoomSpace(
+    venueId: string,
+    currentProjectId: string,
+    projectSpace: Prisma.JsonValue | null,
+  ) {
+    const approvedProject = await this.prisma.spaceLayoutProject.findFirst({
+      where: {
+        venueId,
+        status: SpaceLayoutStatus.APPROVED,
+        id: { not: currentProjectId },
+      },
+      orderBy: { approvedAt: "desc" },
+    });
+    const approvedSpace = this.asJsonObject(approvedProject?.space ?? null);
+    const currentSpace = this.asJsonObject(projectSpace);
+
+    if (!approvedSpace || !currentSpace) {
+      return projectSpace;
+    }
+
+    const existingRooms = Array.isArray(approvedSpace.rooms)
+      ? approvedSpace.rooms
+      : [];
+    const incomingRooms = Array.isArray(currentSpace.rooms)
+      ? currentSpace.rooms
+      : [];
+    const existingLabels = new Set(
+      existingRooms
+        .map((room) =>
+          typeof room === "object" && room && !Array.isArray(room)
+            ? (room as Record<string, unknown>).roomLabel
+                ?.toString()
+                .trim()
+                .toLowerCase()
+            : "",
+        )
+        .filter(Boolean),
+    );
+    const incomingNewRooms = incomingRooms.filter((room) => {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        return false;
+      }
+
+      const label = (room as Record<string, unknown>).roomLabel
+        ?.toString()
+        .trim()
+        .toLowerCase();
+      return !label || !existingLabels.has(label);
+    });
+
+    const mergedSpace = JSON.parse(JSON.stringify(approvedSpace)) as Record<
+      string,
+      unknown
+    >;
+    mergedSpace.rooms = [
+      ...existingRooms.map((room) => JSON.parse(JSON.stringify(room))),
+      ...incomingNewRooms.map((room) => JSON.parse(JSON.stringify(room))),
+    ];
+    if (incomingNewRooms.length) {
+      mergedSpace.latestAddedRoomLabel =
+        (incomingNewRooms[0] as Record<string, unknown>).roomLabel
+          ?.toString()
+          .trim() || null;
+      mergedSpace.latestAddedRoomAt = new Date().toISOString();
+    }
+
+    console.log("[space-layouts] mergeAdditionalRoomSpace", {
+      venueId,
+      currentProjectId,
+      previousApprovedProjectId: approvedProject?.id,
+      existingRoomCount: existingRooms.length,
+      incomingRoomCount: incomingRooms.length,
+      incomingNewRoomCount: incomingNewRooms.length,
+      mergedRoomCount: Array.isArray(mergedSpace.rooms)
+        ? mergedSpace.rooms.length
+        : null,
+    });
+
+    return mergedSpace as Prisma.JsonValue;
   }
 
   private collectLayoutTableIds(rooms: unknown[]) {
