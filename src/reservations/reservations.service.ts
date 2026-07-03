@@ -1290,6 +1290,10 @@ export class ReservationsService {
     const savedLayout = this.asJsonObject(project?.savedLayout ?? null);
     const layout = this.asJsonObject(savedLayout?.layout ?? null);
     const rooms = Array.isArray(layout?.rooms) ? layout.rooms : [];
+    const temporaryRoomLabels = this.temporaryRoomLabelsForProject(
+      project?.space ?? null,
+      savedLayout,
+    );
 
     if (!project || !layout || !rooms.length) {
       throw new NotFoundException("Approved venue layout was not found.");
@@ -1335,13 +1339,58 @@ export class ReservationsService {
 
       selectionRooms.push({
         roomLabel,
-        isTemporarySpace: roomMap.isTemporarySpace === true,
+        isTemporarySpace:
+          roomMap.isTemporarySpace === true ||
+          temporaryRoomLabels.has(this.normalizeRoomLabel(roomLabel)),
         tableCount: roomTables.length,
         approvedChinChinTableIds,
       });
     }
 
     return selectionRooms;
+  }
+
+  private temporaryRoomLabelsForProject(
+    projectSpace: Prisma.JsonValue | null | undefined,
+    savedLayout: Record<string, unknown> | null,
+  ) {
+    const labels = new Set<string>();
+
+    const collectFromSpace = (value: unknown) => {
+      if (typeof value !== "object" || !value || Array.isArray(value)) {
+        return;
+      }
+
+      const rooms = (value as Record<string, unknown>).rooms;
+      if (!Array.isArray(rooms)) {
+        return;
+      }
+
+      for (const room of rooms) {
+        if (typeof room !== "object" || !room || Array.isArray(room)) {
+          continue;
+        }
+
+        const roomMap = room as Record<string, unknown>;
+        if (roomMap.isTemporarySpace !== true) {
+          continue;
+        }
+
+        const normalized = this.normalizeRoomLabel(roomMap.roomLabel);
+        if (normalized) {
+          labels.add(normalized);
+        }
+      }
+    };
+
+    collectFromSpace(projectSpace);
+    collectFromSpace(savedLayout?.space);
+
+    return labels;
+  }
+
+  private normalizeRoomLabel(value: unknown) {
+    return value?.toString().trim().toLowerCase() ?? "";
   }
 
   private parseSlot(
