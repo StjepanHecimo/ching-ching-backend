@@ -36,6 +36,13 @@ type ReservableTable = {
   reservable: boolean;
 };
 
+type ApprovedLiveSelectionRoom = {
+  roomLabel: string;
+  isTemporarySpace: boolean;
+  tableCount: number;
+  approvedChinChinTableIds: Set<string>;
+};
+
 type ReservationSlot = {
   startAt: Date;
   endAt: Date;
@@ -1203,6 +1210,13 @@ export class ReservationsService {
         ? this.uniqueNonEmptyStrings(dto.liveChinChinTableIds ?? [])
         : undefined;
 
+    if (liveChinChinTableIds !== undefined) {
+      await this.validateLiveChinChinTableSelection(
+        venueId,
+        liveChinChinTableIds,
+      );
+    }
+
     const venue = await this.prisma.venue.update({
       where: { id: venueId },
       data: {
@@ -1225,6 +1239,109 @@ export class ReservationsService {
       liveStartedAt: venue.liveStartedAt,
       liveEndedAt: venue.liveEndedAt,
     };
+  }
+
+  private async validateLiveChinChinTableSelection(
+    venueId: string,
+    tableIds: string[],
+  ) {
+    if (!tableIds.length) {
+      return;
+    }
+
+    const rooms = await this.getApprovedLiveSelectionRooms(venueId);
+    const approvedTableToRoom = new Map<string, ApprovedLiveSelectionRoom>();
+    for (const room of rooms) {
+      for (const tableId of room.approvedChinChinTableIds) {
+        approvedTableToRoom.set(tableId, room);
+      }
+    }
+
+    const selectedByRoom = new Map<ApprovedLiveSelectionRoom, number>();
+    for (const tableId of tableIds) {
+      const room = approvedTableToRoom.get(tableId);
+      if (!room) {
+        throw new BadRequestException(
+          "Live Chin-Chin table ids must belong to approved Chin-Chin tables with photos.",
+        );
+      }
+
+      selectedByRoom.set(room, (selectedByRoom.get(room) ?? 0) + 1);
+    }
+
+    for (const [room, selectedCount] of selectedByRoom.entries()) {
+      const maxChinChinTables =
+        Math.max(1, Math.floor(room.tableCount / 4)) +
+        (room.isTemporarySpace ? 1 : 0);
+      if (selectedCount > maxChinChinTables) {
+        throw new BadRequestException(
+          `${room.roomLabel}: maximum ${maxChinChinTables} live Chin-Chin tables are allowed for ${room.tableCount} tables.`,
+        );
+      }
+    }
+  }
+
+  private async getApprovedLiveSelectionRooms(venueId: string) {
+    const project = await this.prisma.spaceLayoutProject.findFirst({
+      where: { venueId, status: SpaceLayoutStatus.APPROVED },
+      orderBy: { approvedAt: "desc" },
+    });
+
+    const savedLayout = this.asJsonObject(project?.savedLayout ?? null);
+    const layout = this.asJsonObject(savedLayout?.layout ?? null);
+    const rooms = Array.isArray(layout?.rooms) ? layout.rooms : [];
+
+    if (!project || !layout || !rooms.length) {
+      throw new NotFoundException("Approved venue layout was not found.");
+    }
+
+    const selectionRooms: ApprovedLiveSelectionRoom[] = [];
+    for (let roomIndex = 0; roomIndex < rooms.length; roomIndex++) {
+      const room = rooms[roomIndex];
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        continue;
+      }
+
+      const roomMap = room as Record<string, unknown>;
+      if (this.isRoomHidden(roomMap)) {
+        continue;
+      }
+
+      const roomLabel =
+        roomMap.roomLabel?.toString().trim() || `Prostorija ${roomIndex + 1}`;
+      const roomTables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+      const approvedChinChinTableIds = new Set<string>();
+
+      for (const table of roomTables) {
+        if (typeof table !== "object" || !table || Array.isArray(table)) {
+          continue;
+        }
+
+        const tableMap = table as Record<string, unknown>;
+        const tableId = tableMap.id?.toString();
+        if (!tableId) {
+          continue;
+        }
+
+        const tablePhotoId = tableMap.tablePhotoId?.toString().trim() ?? "";
+        const isApprovedChinChinTable =
+          tableMap.tableRole === "CHIN_CHIN_TABLE" &&
+          tablePhotoId.length > 0 &&
+          !tablePhotoId.includes("change-request-photo");
+        if (isApprovedChinChinTable) {
+          approvedChinChinTableIds.add(tableId);
+        }
+      }
+
+      selectionRooms.push({
+        roomLabel,
+        isTemporarySpace: roomMap.isTemporarySpace === true,
+        tableCount: roomTables.length,
+        approvedChinChinTableIds,
+      });
+    }
+
+    return selectionRooms;
   }
 
   private parseSlot(
