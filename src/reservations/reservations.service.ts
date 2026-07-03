@@ -1190,6 +1190,10 @@ export class ReservationsService {
   }
 
   async updateVenueLiveStatus(venueId: string, dto: UpdateVenueLiveStatusDto) {
+    this.logger.log(
+      `[venue-live] update request venueId=${venueId} isLive=${dto.isLive} liveRoomLabel=${dto.liveRoomLabel ?? ""} ids=${JSON.stringify(dto.liveChinChinTableIds ?? [])}`,
+    );
+
     const existingVenue = await this.prisma.venue.findUnique({
       where: { id: venueId },
       select: { id: true, liveChinChinTableIds: true },
@@ -1210,6 +1214,10 @@ export class ReservationsService {
         ? this.uniqueNonEmptyStrings(dto.liveChinChinTableIds ?? [])
         : undefined;
 
+    this.logger.log(
+      `[venue-live] existing selection venueId=${venueId} ids=${JSON.stringify(this.jsonStringArray(existingVenue.liveChinChinTableIds))}`,
+    );
+
     if (liveChinChinTableIds !== undefined && dto.liveRoomLabel?.trim()) {
       liveChinChinTableIds = await this.mergeLiveRoomTableSelection(
         venueId,
@@ -1220,6 +1228,9 @@ export class ReservationsService {
     }
 
     if (liveChinChinTableIds !== undefined) {
+      this.logger.log(
+        `[venue-live] validating venueId=${venueId} finalIds=${JSON.stringify(liveChinChinTableIds)}`,
+      );
       await this.validateLiveChinChinTableSelection(
         venueId,
         liveChinChinTableIds,
@@ -1239,7 +1250,7 @@ export class ReservationsService {
       },
     });
 
-    return {
+    const result = {
       id: venue.id,
       isLive: venue.isLive,
       latitude: venue.latitude,
@@ -1248,6 +1259,12 @@ export class ReservationsService {
       liveStartedAt: venue.liveStartedAt,
       liveEndedAt: venue.liveEndedAt,
     };
+
+    this.logger.log(
+      `[venue-live] updated venueId=${venueId} isLive=${venue.isLive} storedIds=${JSON.stringify(this.jsonStringArray(venue.liveChinChinTableIds))}`,
+    );
+
+    return result;
   }
 
   private async mergeLiveRoomTableSelection(
@@ -1262,6 +1279,16 @@ export class ReservationsService {
     }
 
     const rooms = await this.getApprovedLiveSelectionRooms(venueId);
+    this.logger.log(
+      `[venue-live] merge room selection venueId=${venueId} roomLabel=${roomLabel} incomingIds=${JSON.stringify(roomLiveTableIds)} rooms=${JSON.stringify(
+        rooms.map((room) => ({
+          roomLabel: room.roomLabel,
+          isTemporarySpace: room.isTemporarySpace,
+          tableCount: room.tableCount,
+          approvedIds: [...room.approvedChinChinTableIds],
+        })),
+      )}`,
+    );
     const targetRoom = rooms.find(
       (room) => this.normalizeRoomLabel(room.roomLabel) === normalizedRoomLabel,
     );
@@ -1297,6 +1324,10 @@ export class ReservationsService {
       nextIds.add(tableId);
     }
 
+    this.logger.log(
+      `[venue-live] merged room selection venueId=${venueId} roomLabel=${roomLabel} previousIds=${JSON.stringify(existingLiveTableIds)} nextIds=${JSON.stringify([...nextIds])}`,
+    );
+
     return [...nextIds];
   }
 
@@ -1309,6 +1340,19 @@ export class ReservationsService {
     }
 
     const rooms = await this.getApprovedLiveSelectionRooms(venueId);
+    this.logger.log(
+      `[venue-live] validation rooms venueId=${venueId} ids=${JSON.stringify(tableIds)} rooms=${JSON.stringify(
+        rooms.map((room) => ({
+          roomLabel: room.roomLabel,
+          isTemporarySpace: room.isTemporarySpace,
+          tableCount: room.tableCount,
+          limit:
+            Math.max(1, Math.floor(room.tableCount / 4)) +
+            (room.isTemporarySpace ? 1 : 0),
+          approvedIds: [...room.approvedChinChinTableIds],
+        })),
+      )}`,
+    );
     const approvedTableToRoom = new Map<string, ApprovedLiveSelectionRoom>();
     for (const room of rooms) {
       for (const tableId of room.approvedChinChinTableIds) {
@@ -1320,6 +1364,9 @@ export class ReservationsService {
     for (const tableId of tableIds) {
       const room = approvedTableToRoom.get(tableId);
       if (!room) {
+        this.logger.warn(
+          `[venue-live] validation unknown table venueId=${venueId} tableId=${tableId}`,
+        );
         throw new BadRequestException(
           "Live Chin-Chin table ids must belong to approved Chin-Chin tables with photos.",
         );
@@ -1332,7 +1379,13 @@ export class ReservationsService {
       const maxChinChinTables =
         Math.max(1, Math.floor(room.tableCount / 4)) +
         (room.isTemporarySpace ? 1 : 0);
+      this.logger.log(
+        `[venue-live] validation room venueId=${venueId} roomLabel=${room.roomLabel} selected=${selectedCount} max=${maxChinChinTables} temporary=${room.isTemporarySpace}`,
+      );
       if (selectedCount > maxChinChinTables) {
+        this.logger.warn(
+          `[venue-live] validation limit exceeded venueId=${venueId} roomLabel=${room.roomLabel} selected=${selectedCount} max=${maxChinChinTables}`,
+        );
         throw new BadRequestException(
           `${room.roomLabel}: maximum ${maxChinChinTables} live Chin-Chin tables are allowed for ${room.tableCount} tables.`,
         );
@@ -1357,6 +1410,10 @@ export class ReservationsService {
     if (!project || !layout || !rooms.length) {
       throw new NotFoundException("Approved venue layout was not found.");
     }
+
+    this.logger.log(
+      `[venue-live] approved layout source venueId=${venueId} projectId=${project.id} rooms=${rooms.length} temporaryRoomLabels=${JSON.stringify([...temporaryRoomLabels])}`,
+    );
 
     const selectionRooms: ApprovedLiveSelectionRoom[] = [];
     for (let roomIndex = 0; roomIndex < rooms.length; roomIndex++) {
