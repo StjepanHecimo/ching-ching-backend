@@ -1474,6 +1474,7 @@ export class SpaceLayoutsService {
         normalizedExistingRooms.length + index,
         usedTableIds,
         this.photoIdsForIncomingRoom(currentSpaceRooms, room, index),
+        this.isTemporarySpaceForIncomingRoom(currentSpaceRooms, room, index),
       ),
     );
 
@@ -1608,6 +1609,7 @@ export class SpaceLayoutsService {
     roomIndex: number,
     usedTableIds: Set<string>,
     roomPhotoIds: string[],
+    isTemporarySpace: boolean,
   ) {
     const clonedRoom = JSON.parse(JSON.stringify(room)) as unknown;
     if (
@@ -1619,6 +1621,8 @@ export class SpaceLayoutsService {
     }
 
     const roomMap = clonedRoom as Record<string, unknown>;
+    roomMap.isTemporarySpace =
+      roomMap.isTemporarySpace === true || isTemporarySpace;
     const roomLabel =
       roomMap.roomLabel?.toString().trim() || `Prostorija ${roomIndex + 1}`;
     const roomSlug = this.slugForLayoutId(roomLabel) || `room-${roomIndex + 1}`;
@@ -1747,6 +1751,43 @@ export class SpaceLayoutsService {
     }
 
     return photoIds;
+  }
+
+  private isTemporarySpaceForIncomingRoom(
+    spaceRooms: unknown[],
+    incomingRoom: unknown,
+    incomingRoomIndex: number,
+  ) {
+    const incomingRoomMap =
+      typeof incomingRoom === "object" &&
+      incomingRoom &&
+      !Array.isArray(incomingRoom)
+        ? (incomingRoom as Record<string, unknown>)
+        : null;
+    const incomingLabel = incomingRoomMap?.roomLabel?.toString().trim() ?? "";
+    const normalizedIncomingLabel = incomingLabel.toLowerCase();
+
+    const matchingRoom =
+      spaceRooms.find((room) => {
+        if (typeof room !== "object" || !room || Array.isArray(room)) {
+          return false;
+        }
+
+        const label = (room as Record<string, unknown>).roomLabel
+          ?.toString()
+          .trim()
+          .toLowerCase();
+        return !!label && label === normalizedIncomingLabel;
+      }) ??
+      spaceRooms[incomingRoomIndex] ??
+      spaceRooms[0];
+
+    return (
+      typeof matchingRoom === "object" &&
+      !!matchingRoom &&
+      !Array.isArray(matchingRoom) &&
+      (matchingRoom as Record<string, unknown>).isTemporarySpace === true
+    );
   }
 
   private ensureIncomingTablePhotoAssignment(
@@ -2213,10 +2254,50 @@ export class SpaceLayoutsService {
     );
 
     return {
-      ...parsed,
+      ...this.applySpaceRoomMetadataToSuggestion(parsed, spaceJson),
       source: "openai",
       model,
     };
+  }
+
+  private applySpaceRoomMetadataToSuggestion(
+    suggestion: Record<string, unknown>,
+    spaceJson: Prisma.JsonValue,
+  ) {
+    const spaceRooms = this.readSpaceRooms(spaceJson);
+    if (!spaceRooms.length || !Array.isArray(suggestion.layoutOptions)) {
+      return suggestion;
+    }
+
+    const nextSuggestion = JSON.parse(JSON.stringify(suggestion)) as Record<
+      string,
+      unknown
+    >;
+    const layoutOptions = Array.isArray(nextSuggestion.layoutOptions)
+      ? nextSuggestion.layoutOptions
+      : [];
+
+    for (const option of layoutOptions) {
+      if (typeof option !== "object" || !option || Array.isArray(option)) {
+        continue;
+      }
+
+      const optionMap = option as Record<string, unknown>;
+      const rooms = Array.isArray(optionMap.rooms) ? optionMap.rooms : [];
+      for (let roomIndex = 0; roomIndex < rooms.length; roomIndex += 1) {
+        const room = rooms[roomIndex];
+        if (typeof room !== "object" || !room || Array.isArray(room)) {
+          continue;
+        }
+
+        const roomMap = room as Record<string, unknown>;
+        roomMap.isTemporarySpace =
+          roomMap.isTemporarySpace === true ||
+          this.isTemporarySpaceForIncomingRoom(spaceRooms, roomMap, roomIndex);
+      }
+    }
+
+    return nextSuggestion;
   }
 
   private createOpenAiRequestSummary(
@@ -2318,7 +2399,7 @@ export class SpaceLayoutsService {
             {
               type: "input_text",
               text:
-                "Inspect the attached floor plan/sketch/PDF before generating the layout. Generate exactly one practical, editable cafe floor-plan option. First crop mentally to the actual floor-plan walls and ignore empty page margins. Then extract the usable public room outline from the plan: include angled walls, major cutouts, entry/stair/service bands, and curved facade edges approximated with 10-18 outline points where needed. The outline must follow the visible outer wall/usable boundary, not the rectangular bounding box of the image. Keep any visible entry or marked main passage open. Croatian labels like ulaz, glavni ulaz, main entrance, entrance, prolaz, PROLAZ, glavni prolaz, drugi dio, and arrows mean access/continuation and must not be converted into blocking walls. Next extract conventional fixed objects into fixtures: columns/pillars as small square or circular fixtures, bar/counter as rectangle fixtures, stairs as stair fixtures, toilet/service rooms as fixtures, passages/doors as opening fixtures, and every visible drawn line as a wall line fixture. Strictly interpret simple sketch symbols: circles are tables, small square blocks are tables, and rectangles with text labels are the object written on them. A rectangle labelled sank, šank, or bar is the bar; a rectangle labelled wc, toilet, or toalet is the toilet/WC; a rectangle or stair-like mark labelled stepenice, stube, stairs, or staircase is a stairs fixture; a small square/circle/filled block labelled stup, kolona, column, or pillar is a column fixture; a label ZID/zid/wall means wall; a label PROLAZ/prolaz means an open passage. Treat a faint or edge-adjacent handwritten BAR label at the bottom as belonging to the bottom rectangle; return that bottom rectangle as a bar fixture with label BAR, not as an unlabeled blocked/service area. If a hand-drawn sketch labels an amenity, add it as a fixture only when visible/labelled: sank/šank/bar as a bar fixture, wc/toilet/toalet as a toilet fixture, stepenice/stube/stairs/staircase as a stairs fixture, stup/kolona/column/pillar as a column fixture, biljar/pool table as a feature fixture labelled biljar, and tv/television/televizor as a feature fixture labelled TV. Lines are the highest priority visual data. Preserve every visible architectural hand-drawn line segment as its own straight fixture with shape=line, even when it is not labelled. Use type=wall for solid wall/boundary lines. Do not classify lines as decoration, helper strokes, or optional separators. Every drawn boundary/divider/separator line must be returned. Solid lines are wall fixtures. Copy the line geometry as drawn: same approximate count, position, length, horizontal/vertical/angled direction, spacing, and start/end alignment. Convert slightly wavy hand-drawn strokes into straight lines following their main direction. Closed or partial boxes should be decomposed into their visible straight wall line segments. Do not replace line drawings with vague zones, broad rectangles, or simplified decorative lines. Do not model separe dividers as broad zones. Do not create large opaque rectangles over table grids just to represent seating/service areas. Never invent a new wall across a labelled path such as entrance, ulaz, glavni ulaz, main entrance, prolaz, PROLAZ, glavni prolaz, or drugi dio, but preserve all wall lines that are actually drawn around those paths. Then detect visible tables and align the output with requestedTableCount unless there is a physical conflict; if you reduce the count, explain why in notes. Every table must have a stable id like room-a-table-1 in visual reading order and a tableRole. Every table must include chinChinTier. Use chinChinTier=STANDARD for ordinary tables, standard plus-marked Chin-Chin tables, and any non-large table. A plus sign (+) drawn on or inside a table is the primary STANDARD Chin-Chin marker and this rule must stay active. A square/box drawn inside a table circle marks a LARGE premium Chin-Chin table for larger groups. For tables with a plus sign, set chinChinCandidate=true, tableRole=CHIN_CHIN_TABLE, chinChinTier=STANDARD, maxPartySize=4, and do not return the plus as a fixture; Flutter will render the usual crossed-glasses logo. For square-in-circle Chin-Chin tables, set chinChinCandidate=true, tableRole=CHIN_CHIN_TABLE, chinChinTier=LARGE, and maxPartySize at least 6. For all other tables set tableRole=ORDINARY_TABLE, chinChinTier=STANDARD, chinChinCandidate=false, tablePhotoId='', and tablePhotoStatus=NOT_REQUIRED. Use available room photos metadata only as photo id references: assign each marked Chin-Chin table one unique tablePhotoId from the room photos list in the same visual order and set tablePhotoStatus=APPROVED_WITH_PHOTO. If no photo id is available for a marked Chin-Chin table, set tablePhotoId='' and tablePhotoStatus=MISSING_PHOTO. Use the visible round/rectangular table outline to determine the table center, not the plus marker, square marker, or text label. In every area, place each table in the visual center of its own available free space/cell, with balanced clearance from all nearby walls, room outlines, columns, bars, fixed fixtures, booth dividers, partition lines, passages, and neighboring tables. Tables must be separated from one another and must never touch or overlap. If a table is inside a separe/booth cell, center the table inside that separe/booth cell. No table body may touch or overlap another table, a wall, partition, booth divider, column, bar, passage, or room outline. If the exact center is not visible on the sketch, infer a clean centered position from the surrounding free space and keep spacing consistent with neighboring tables. Also accept direct Chin-Chin labels attached to a table. Never mark more than one quarter of total tables as Chin-Chin; if the plan marks more, keep the clearest/best marked tables up to that limit and explain in notes. If the plan does not clearly mark Chin-Chin tables, set all chinChinCandidate=false, tableRole=ORDINARY_TABLE, chinChinTier=STANDARD, tablePhotoId='', tablePhotoStatus=NOT_REQUIRED, and chinChinCandidateCount=0. Keep tables inside the outline, keep tables clear of fixtures, leave service paths clear, and write the label/strategy/summary as a cafe layout. JSON space data:\n" +
+                "Inspect the attached floor plan/sketch/PDF before generating the layout. Generate exactly one practical, editable cafe floor-plan option. First crop mentally to the actual floor-plan walls and ignore empty page margins. Then extract the usable public room outline from the plan: include angled walls, major cutouts, entry/stair/service bands, and curved facade edges approximated with 10-18 outline points where needed. The outline must follow the visible outer wall/usable boundary, not the rectangular bounding box of the image. Keep any visible entry or marked main passage open. Croatian labels like ulaz, glavni ulaz, main entrance, entrance, prolaz, PROLAZ, glavni prolaz, drugi dio, and arrows mean access/continuation and must not be converted into blocking walls. Next extract conventional fixed objects into fixtures: columns/pillars as small square or circular fixtures, bar/counter as rectangle fixtures, stairs as stair fixtures, toilet/service rooms as fixtures, passages/doors as opening fixtures, and every visible drawn line as a wall line fixture. Strictly interpret simple sketch symbols: circles are tables, small square blocks are tables, and rectangles with text labels are the object written on them. A rectangle labelled sank, šank, or bar is the bar; a rectangle labelled wc, toilet, or toalet is the toilet/WC; a rectangle or stair-like mark labelled stepenice, stube, stairs, or staircase is a stairs fixture; a small square/circle/filled block labelled stup, kolona, column, or pillar is a column fixture; a label ZID/zid/wall means wall; a label PROLAZ/prolaz means an open passage. Treat a faint or edge-adjacent handwritten BAR label at the bottom as belonging to the bottom rectangle; return that bottom rectangle as a bar fixture with label BAR, not as an unlabeled blocked/service area. If a hand-drawn sketch labels an amenity, add it as a fixture only when visible/labelled: sank/šank/bar as a bar fixture, wc/toilet/toalet as a toilet fixture, stepenice/stube/stairs/staircase as a stairs fixture, stup/kolona/column/pillar as a column fixture, biljar/pool table as a feature fixture labelled biljar, and tv/television/televizor as a feature fixture labelled TV. Lines are the highest priority visual data. Preserve every visible architectural hand-drawn line segment as its own straight fixture with shape=line, even when it is not labelled. Use type=wall for solid wall/boundary lines. Do not classify lines as decoration, helper strokes, or optional separators. Every drawn boundary/divider/separator line must be returned. Solid lines are wall fixtures. Copy the line geometry as drawn: same approximate count, position, length, horizontal/vertical/angled direction, spacing, and start/end alignment. Convert slightly wavy hand-drawn strokes into straight lines following their main direction. Closed or partial boxes should be decomposed into their visible straight wall line segments. Do not replace line drawings with vague zones, broad rectangles, or simplified decorative lines. Do not model separe dividers as broad zones. Do not create large opaque rectangles over table grids just to represent seating/service areas. Never invent a new wall across a labelled path such as entrance, ulaz, glavni ulaz, main entrance, prolaz, PROLAZ, glavni prolaz, or drugi dio, but preserve all wall lines that are actually drawn around those paths. Then detect visible tables and align the output with requestedTableCount unless there is a physical conflict; if you reduce the count, explain why in notes. Every room must copy isTemporarySpace from the JSON space data. Every table must have a stable id like room-a-table-1 in visual reading order and a tableRole. Every table must include chinChinTier. Use chinChinTier=STANDARD for ordinary tables, standard plus-marked Chin-Chin tables, and any non-large table. A plus sign (+) drawn on or inside a table is the primary STANDARD Chin-Chin marker and this rule must stay active. A square/box drawn inside a table circle marks a LARGE premium Chin-Chin table for larger groups. For tables with a plus sign, set chinChinCandidate=true, tableRole=CHIN_CHIN_TABLE, chinChinTier=STANDARD, maxPartySize=4, and do not return the plus as a fixture; Flutter will render the usual crossed-glasses logo. For square-in-circle Chin-Chin tables, set chinChinCandidate=true, tableRole=CHIN_CHIN_TABLE, chinChinTier=LARGE, and maxPartySize at least 6. For all other tables set tableRole=ORDINARY_TABLE, chinChinTier=STANDARD, chinChinCandidate=false, tablePhotoId='', and tablePhotoStatus=NOT_REQUIRED. Use available room photos metadata only as photo id references: assign each marked Chin-Chin table one unique tablePhotoId from the room photos list in the same visual order and set tablePhotoStatus=APPROVED_WITH_PHOTO. If no photo id is available for a marked Chin-Chin table, set tablePhotoId='' and tablePhotoStatus=MISSING_PHOTO. Use the visible round/rectangular table outline to determine the table center, not the plus marker, square marker, or text label. In every area, place each table in the visual center of its own available free space/cell, with balanced clearance from all nearby walls, room outlines, columns, bars, fixed fixtures, booth dividers, partition lines, passages, and neighboring tables. Tables must be separated from one another and must never touch or overlap. If a table is inside a separe/booth cell, center the table inside that separe/booth cell. No table body may touch or overlap another table, a wall, partition, booth divider, column, bar, passage, or room outline. If the exact center is not visible on the sketch, infer a clean centered position from the surrounding free space and keep spacing consistent with neighboring tables. Also accept direct Chin-Chin labels attached to a table. Never mark more than one quarter of total tables as Chin-Chin, except rooms where isTemporarySpace=true may have one additional Chin-Chin table above the one-quarter limit; if the plan marks more, keep the clearest/best marked tables up to that limit and explain in notes. If the plan does not clearly mark Chin-Chin tables, set all chinChinCandidate=false, tableRole=ORDINARY_TABLE, chinChinTier=STANDARD, tablePhotoId='', tablePhotoStatus=NOT_REQUIRED, and chinChinCandidateCount=0. Keep tables inside the outline, keep tables clear of fixtures, leave service paths clear, and write the label/strategy/summary as a cafe layout. JSON space data:\n" +
                 JSON.stringify(promptSpaceJson),
             },
             {
@@ -2554,6 +2635,7 @@ export class SpaceLayoutsService {
                   additionalProperties: false,
                   required: [
                     "roomLabel",
+                    "isTemporarySpace",
                     "canvas",
                     "outline",
                     "fixtures",
@@ -2562,6 +2644,7 @@ export class SpaceLayoutsService {
                   ],
                   properties: {
                     roomLabel: stringSchema,
+                    isTemporarySpace: { type: "boolean" },
                     canvas: {
                       type: "object",
                       additionalProperties: false,
@@ -2839,6 +2922,7 @@ export class SpaceLayoutsService {
           rooms: [
             {
               roomLabel: space.roomLabel,
+              isTemporarySpace: space.isTemporarySpace === true,
               canvas: {
                 width: space.widthMeters,
                 length: space.lengthMeters,
@@ -2988,6 +3072,7 @@ export class SpaceLayoutsService {
       return {
         roomLabel: "Prostorija A",
         requestedTableCount: undefined,
+        isTemporarySpace: false,
         widthMeters: 10,
         lengthMeters: 8,
       };
@@ -3017,8 +3102,15 @@ export class SpaceLayoutsService {
       typeof sourceSpace.lengthMeters === "number"
         ? sourceSpace.lengthMeters
         : 8;
+    const isTemporarySpace = sourceSpace.isTemporarySpace === true;
 
-    return { roomLabel, requestedTableCount, widthMeters, lengthMeters };
+    return {
+      roomLabel,
+      requestedTableCount,
+      isTemporarySpace,
+      widthMeters,
+      lengthMeters,
+    };
   }
 
   private round(value: number) {
