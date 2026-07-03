@@ -1835,7 +1835,17 @@ export class SpaceLayoutsService {
     const isAdditionalRoomRequest =
       changeRequest?.type === "ADD_ROOM" ||
       savedLayout?.changeRequestType === "ADD_ROOM";
-    const roomCount = Array.isArray(layout?.rooms) ? layout.rooms.length : 0;
+    const layoutRooms = Array.isArray(layout?.rooms) ? layout.rooms : [];
+    const roomCount = layoutRooms.length;
+    const missingSpacePhotos = this.hasMissingLayoutTablePhotosInSpace(
+      layoutRooms,
+      project.space,
+    );
+    const needsSpaceFallback =
+      isAdditionalRoomRequest &&
+      !!layout &&
+      (this.readSpaceRooms(project.space).length < roomCount ||
+        missingSpacePhotos);
 
     console.log("[space-layouts] latest-approved fallback check", {
       projectId: project.id,
@@ -1844,27 +1854,119 @@ export class SpaceLayoutsService {
         changeRequest?.type ?? savedLayout?.changeRequestType ?? null,
       isAdditionalRoomRequest,
       roomCount,
-      willMergeFallback: isAdditionalRoomRequest && !!layout && roomCount <= 1,
+      spaceRoomCount: this.readSpaceRooms(project.space).length,
+      missingSpacePhotos,
+      willMergeLayoutFallback:
+        isAdditionalRoomRequest && !!layout && roomCount <= 1,
+      willMergeSpaceFallback: needsSpaceFallback,
     });
 
-    if (!isAdditionalRoomRequest || !layout || roomCount > 1) {
+    if (!isAdditionalRoomRequest || !layout) {
       return project;
     }
 
-    const mergedLayout = await this.mergeAdditionalRoomLayout(
-      project.venueId,
-      project.id,
-      layout,
-      project.space,
-    );
+    const mergedLayout =
+      roomCount <= 1
+        ? await this.mergeAdditionalRoomLayout(
+            project.venueId,
+            project.id,
+            layout,
+            project.space,
+          )
+        : layout;
+    const mergedSpace = needsSpaceFallback
+      ? await this.mergeAdditionalRoomSpace(
+          project.venueId,
+          project.id,
+          project.space,
+        )
+      : project.space;
 
     return {
       ...project,
+      space: mergedSpace,
       savedLayout: {
         ...(savedLayout ?? {}),
         layout: mergedLayout,
       } as Prisma.JsonValue,
     };
+  }
+
+  private hasMissingLayoutTablePhotosInSpace(
+    layoutRooms: unknown[],
+    space: Prisma.JsonValue | null,
+  ) {
+    const requiredPhotoIds = new Set<string>();
+    for (const room of layoutRooms) {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        continue;
+      }
+
+      const roomMap = room as Record<string, unknown>;
+      const tables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+      for (const table of tables) {
+        if (typeof table !== "object" || !table || Array.isArray(table)) {
+          continue;
+        }
+
+        const tableMap = table as Record<string, unknown>;
+        const photoId = tableMap.tablePhotoId?.toString().trim() ?? "";
+        if (photoId && !photoId.includes("change-request-photo")) {
+          requiredPhotoIds.add(photoId);
+        }
+      }
+    }
+
+    if (!requiredPhotoIds.size) {
+      return false;
+    }
+
+    const availablePhotoIds = this.collectSpacePhotoIds(space);
+    for (const photoId of requiredPhotoIds) {
+      if (!availablePhotoIds.has(photoId)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private collectSpacePhotoIds(space: Prisma.JsonValue | null) {
+    const photoIds = new Set<string>();
+
+    const collectPhoto = (value: unknown) => {
+      if (typeof value !== "object" || !value || Array.isArray(value)) {
+        return;
+      }
+
+      const id = (value as Record<string, unknown>).id?.toString().trim();
+      if (id) {
+        photoIds.add(id);
+      }
+    };
+
+    const collectPhotos = (value: unknown) => {
+      if (!Array.isArray(value)) {
+        return;
+      }
+
+      for (const photo of value) {
+        collectPhoto(photo);
+      }
+    };
+
+    const spaceMap = this.asJsonObject(space);
+    collectPhotos(spaceMap?.photos);
+    const rooms = Array.isArray(spaceMap?.rooms) ? spaceMap.rooms : [];
+    for (const room of rooms) {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        continue;
+      }
+
+      collectPhotos((room as Record<string, unknown>).photos);
+    }
+
+    return photoIds;
   }
 
   private recalculateLayoutSummary(layout: Record<string, unknown>) {
