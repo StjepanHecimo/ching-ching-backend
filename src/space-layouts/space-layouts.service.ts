@@ -1102,9 +1102,7 @@ export class SpaceLayoutsService {
     }
 
     if (!updated) {
-      throw new BadRequestException(
-        `Table ${tableId} was not found in the approved layout.`,
-      );
+      return clonedLayout;
     }
 
     const summary = this.asJsonObject(
