@@ -1795,6 +1795,9 @@ export class PaymentsService {
     }
 
     try {
+      this.logger.log(
+        `[email][customer-refund] sending reservationId=${payment.reservationId} to=${customerEmail} amountCents=${amountCents} currency=${payment.currency}`,
+      );
       await this.emailService.sendReservationRefundEmail({
         to: customerEmail,
         venueName: payment.reservation.venue.name,
@@ -1802,6 +1805,9 @@ export class PaymentsService {
         amountCents,
         currency: payment.currency,
       });
+      this.logger.log(
+        `[email][customer-refund] sent reservationId=${payment.reservationId} to=${customerEmail}`,
+      );
     } catch (error) {
       this.logger.warn(
         `Reservation ${payment.reservationId} admin refund email failed: ${
