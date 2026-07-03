@@ -1639,6 +1639,9 @@ export class PaymentsService {
     }
 
     try {
+      this.logger.log(
+        `[push][venue-owner] sending reservation request reservationId=${reservationId} ownerId=${reservation.venue.ownerId} venueId=${reservation.venue.id}`,
+      );
       await this.deviceTokensService.sendToUser({
         userId: reservation.venue.ownerId,
         app: DevicePushApp.VENUE_OWNER,
@@ -1650,6 +1653,9 @@ export class PaymentsService {
           venueId: reservation.venue.id,
         },
       });
+      this.logger.log(
+        `[push][venue-owner] sent reservation request reservationId=${reservationId} ownerId=${reservation.venue.ownerId}`,
+      );
     } catch (error) {
       this.logger.warn(
         `Reservation ${reservationId} was authorized, but venue push notification failed: ${
@@ -1723,10 +1729,16 @@ export class PaymentsService {
     },
   ) {
     if (!payment.reservation.venue.ownerId) {
+      this.logger.warn(
+        `[push][venue-owner] payment notification skipped paymentId=${payment.id} reservationId=${payment.reservationId}: no owner id`,
+      );
       return;
     }
 
     try {
+      this.logger.log(
+        `[push][venue-owner] sending payment action paymentId=${payment.id} reservationId=${payment.reservationId} ownerId=${payment.reservation.venue.ownerId} type=${notification.type} amountCents=${notification.amountCents}`,
+      );
       await this.deviceTokensService.sendToUser({
         userId: payment.reservation.venue.ownerId,
         app: DevicePushApp.VENUE_OWNER,
@@ -1740,6 +1752,9 @@ export class PaymentsService {
           amountCents: String(notification.amountCents),
         },
       });
+      this.logger.log(
+        `[push][venue-owner] sent payment action paymentId=${payment.id} reservationId=${payment.reservationId} type=${notification.type}`,
+      );
     } catch (error) {
       this.logger.warn(
         `Payment ${payment.id} venue notification failed: ${
