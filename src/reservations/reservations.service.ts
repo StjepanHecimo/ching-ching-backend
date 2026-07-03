@@ -2660,6 +2660,9 @@ export class ReservationsService {
     }
 
     try {
+      this.logger.log(
+        `[push][customer] sending reservationId=${reservation.id} customerId=${customerId} venueId=${reservation.venue.id} type=${notification.type} title=${notification.title}`,
+      );
       await this.deviceTokensService.sendToUser({
         userId: customerId,
         app: DevicePushApp.CUSTOMER,
@@ -2671,6 +2674,9 @@ export class ReservationsService {
           venueId: reservation.venue.id,
         },
       });
+      this.logger.log(
+        `[push][customer] sent reservationId=${reservation.id} customerId=${customerId} type=${notification.type}`,
+      );
     } catch (error) {
       this.logger.warn(
         `Reservation ${reservation.id} customer notification failed: ${
@@ -2821,6 +2827,9 @@ export class ReservationsService {
     notification: { title: string; body: string; type: string },
   ) {
     try {
+      this.logger.log(
+        `[push][venue-owner] sending reservationId=${reservation.id} ownerId=${reservation.venue.ownerId} venueId=${reservation.venueId} type=${notification.type} title=${notification.title}`,
+      );
       await this.deviceTokensService.sendToUser({
         userId: reservation.venue.ownerId,
         app: DevicePushApp.VENUE_OWNER,
@@ -2832,6 +2841,9 @@ export class ReservationsService {
           venueId: reservation.venueId,
         },
       });
+      this.logger.log(
+        `[push][venue-owner] sent reservationId=${reservation.id} ownerId=${reservation.venue.ownerId} type=${notification.type}`,
+      );
     } catch (error) {
       this.logger.warn(
         `Reservation ${reservation.id} venue notification failed: ${
