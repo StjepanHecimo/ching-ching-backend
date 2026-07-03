@@ -1192,7 +1192,7 @@ export class ReservationsService {
   async updateVenueLiveStatus(venueId: string, dto: UpdateVenueLiveStatusDto) {
     const existingVenue = await this.prisma.venue.findUnique({
       where: { id: venueId },
-      select: { id: true },
+      select: { id: true, liveChinChinTableIds: true },
     });
 
     if (!existingVenue) {
@@ -1205,10 +1205,19 @@ export class ReservationsService {
       );
     }
 
-    const liveChinChinTableIds =
+    let liveChinChinTableIds =
       dto.isLive || dto.liveChinChinTableIds !== undefined
         ? this.uniqueNonEmptyStrings(dto.liveChinChinTableIds ?? [])
         : undefined;
+
+    if (liveChinChinTableIds !== undefined && dto.liveRoomLabel?.trim()) {
+      liveChinChinTableIds = await this.mergeLiveRoomTableSelection(
+        venueId,
+        this.jsonStringArray(existingVenue.liveChinChinTableIds),
+        liveChinChinTableIds,
+        dto.liveRoomLabel,
+      );
+    }
 
     if (liveChinChinTableIds !== undefined) {
       await this.validateLiveChinChinTableSelection(
@@ -1239,6 +1248,56 @@ export class ReservationsService {
       liveStartedAt: venue.liveStartedAt,
       liveEndedAt: venue.liveEndedAt,
     };
+  }
+
+  private async mergeLiveRoomTableSelection(
+    venueId: string,
+    existingLiveTableIds: string[],
+    roomLiveTableIds: string[],
+    roomLabel: string,
+  ) {
+    const normalizedRoomLabel = this.normalizeRoomLabel(roomLabel);
+    if (!normalizedRoomLabel) {
+      return roomLiveTableIds;
+    }
+
+    const rooms = await this.getApprovedLiveSelectionRooms(venueId);
+    const targetRoom = rooms.find(
+      (room) => this.normalizeRoomLabel(room.roomLabel) === normalizedRoomLabel,
+    );
+
+    if (!targetRoom) {
+      throw new BadRequestException(
+        `Live room "${roomLabel}" was not found in the approved layout.`,
+      );
+    }
+
+    const tableRoomById = new Map<string, ApprovedLiveSelectionRoom>();
+    for (const room of rooms) {
+      for (const tableId of room.approvedChinChinTableIds) {
+        tableRoomById.set(tableId, room);
+      }
+    }
+
+    const nextIds = new Set<string>();
+    for (const tableId of existingLiveTableIds) {
+      const tableRoom = tableRoomById.get(tableId);
+      if (!tableRoom) {
+        continue;
+      }
+
+      if (
+        this.normalizeRoomLabel(tableRoom.roomLabel) !== normalizedRoomLabel
+      ) {
+        nextIds.add(tableId);
+      }
+    }
+
+    for (const tableId of roomLiveTableIds) {
+      nextIds.add(tableId);
+    }
+
+    return [...nextIds];
   }
 
   private async validateLiveChinChinTableSelection(

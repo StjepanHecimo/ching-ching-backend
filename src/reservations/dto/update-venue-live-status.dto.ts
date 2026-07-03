@@ -31,4 +31,8 @@ export class UpdateVenueLiveStatusDto {
   @IsArray()
   @IsString({ each: true })
   liveChinChinTableIds?: string[];
+
+  @IsOptional()
+  @IsString()
+  liveRoomLabel?: string;
 }
