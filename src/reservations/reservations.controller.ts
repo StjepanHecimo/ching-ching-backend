@@ -20,6 +20,7 @@ import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservatio
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
 import { DeclineReservationDto } from "./dto/decline-reservation.dto";
 import { ReservationsService } from "./reservations.service";
+import { CreateCustomerProblemReportDto } from "../payments/dto/create-customer-problem-report.dto";
 import { CreateVenueRefundRequestDto } from "../payments/dto/create-venue-refund-request.dto";
 import { PaymentsService } from "../payments/payments.service";
 
@@ -85,6 +86,20 @@ export class ReservationsController {
     return this.reservationsService.createCustomerReservation(
       request.user.userId,
       venueId,
+      dto,
+    );
+  }
+
+  @Post("customers/me/reservations/:reservationId/problem-report")
+  @UseGuards(JwtAuthGuard)
+  createCustomerProblemReport(
+    @Param("reservationId") reservationId: string,
+    @Body() dto: CreateCustomerProblemReportDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentsService.createCustomerProblemReport(
+      reservationId,
+      request.user.userId,
       dto,
     );
   }

@@ -109,6 +109,12 @@ enum VenueRefundRequestStatus {
   CLOSED_NO_REFUND
 }
 
+enum CustomerProblemReportStatus {
+  PENDING
+  REFUNDED_BY_CHIN_CHIN
+  CLOSED_NO_REFUND
+}
+
 enum LedgerEntryType {
   CUSTOMER_CAPTURE
   CHIN_CHIN_FEE
@@ -195,6 +201,7 @@ model User {
   paymentMethods          CustomerPaymentMethod[]
   ledgerEntries           LedgerEntry[]
   venueRefundRequests     VenueRefundRequest[]
+  customerProblemReports  CustomerProblemReport[]
   devicePushTokens        DevicePushToken[]
   pushNotificationLogs    PushNotificationLog[]
 
@@ -276,6 +283,7 @@ model Venue {
   reservationPenalties VenueReservationPenalty[]
   reservationPayments  ReservationPayment[]
   refundRequests       VenueRefundRequest[]
+  customerProblemReports CustomerProblemReport[]
   ledgerEntries        LedgerEntry[]
   payoutBatches        VenuePayoutBatch[]
 
@@ -371,6 +379,7 @@ model Reservation {
   payments      ReservationPayment[]
   ledgerEntries LedgerEntry[]
   refundRequests VenueRefundRequest[]
+  customerProblemReports CustomerProblemReport[]
 
   @@index([venueId])
   @@index([customerId])
@@ -414,6 +423,7 @@ model ReservationPayment {
   paymentMethod CustomerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
   ledgerEntries LedgerEntry[]
   refundRequests VenueRefundRequest[]
+  customerProblemReports CustomerProblemReport[]
 
   @@index([reservationId])
   @@index([venueId])
@@ -507,6 +517,35 @@ model VenueRefundRequest {
   @@index([requestedByOwnerId])
   @@index([status])
   @@map("venue_refund_requests")
+}
+
+model CustomerProblemReport {
+  id                 String                      @id @default(uuid())
+  reservationId      String
+  paymentId          String?
+  venueId            String
+  customerId         String?
+  status             CustomerProblemReportStatus @default(PENDING)
+  problemDescription String
+  photo              Json
+  resolutionAmountCents Int?
+  resolutionCurrency String?
+  adminNotes         String?
+  resolvedAt         DateTime?
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+
+  reservation Reservation         @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  payment     ReservationPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  venue       Venue               @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer    User?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([reservationId])
+  @@index([paymentId])
+  @@index([venueId])
+  @@index([customerId])
+  @@index([status])
+  @@map("customer_problem_reports")
 }
 
 model PaymentWebhookEvent {

@@ -8,6 +8,7 @@ import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
 import {
   CustomerPaymentMethodStatus,
+  CustomerProblemReportStatus,
   DevicePushApp,
   LedgerEntryDirection,
   LedgerEntryType,
@@ -22,6 +23,7 @@ import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
+import { CreateCustomerProblemReportDto } from "./dto/create-customer-problem-report.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
 import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
 import { CreateVenueRefundRequestDto } from "./dto/create-venue-refund-request.dto";
@@ -786,6 +788,208 @@ export class PaymentsService {
     });
 
     return this.serializeAdminVenueProblemReport(updated);
+  }
+
+  async createCustomerProblemReport(
+    reservationId: string,
+    customerUserId: string,
+    dto: CreateCustomerProblemReportDto,
+  ) {
+    const problemDescription = dto.problemDescription.trim();
+
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      include: { venue: true },
+    });
+
+    if (!reservation || reservation.customerId !== customerUserId) {
+      throw new NotFoundException("Reservation was not found for this user.");
+    }
+
+    const payment = await this.prisma.reservationPayment.findFirst({
+      where: { reservationId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const existingPending = await this.prisma.customerProblemReport.findFirst({
+      where: {
+        reservationId,
+        customerId: customerUserId,
+        status: CustomerProblemReportStatus.PENDING,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    const photo = {
+      fileName: dto.photo.fileName.trim(),
+      mimeType: dto.photo.mimeType.trim(),
+      dataUrl: dto.photo.dataUrl.trim(),
+    };
+
+    const report = existingPending
+      ? await this.prisma.customerProblemReport.update({
+          where: { id: existingPending.id },
+          data: {
+            paymentId: payment?.id,
+            venueId: reservation.venueId,
+            problemDescription,
+            photo,
+          },
+        })
+      : await this.prisma.customerProblemReport.create({
+          data: {
+            reservationId,
+            paymentId: payment?.id,
+            venueId: reservation.venueId,
+            customerId: customerUserId,
+            problemDescription,
+            photo,
+          },
+        });
+
+    return this.serializeCustomerProblemReport(report);
+  }
+
+  async listAdminCustomerProblemReports() {
+    const requests = await this.prisma.customerProblemReport.findMany({
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+      take: 250,
+      include: {
+        venue: true,
+        reservation: true,
+        payment: true,
+        customer: true,
+      },
+    });
+
+    return {
+      total: requests.length,
+      generatedAt: new Date(),
+      items: requests.map((request) =>
+        this.serializeAdminCustomerProblemReport(request),
+      ),
+    };
+  }
+
+  async sendCustomerProblemReportResponse(
+    requestId: string,
+    dto: ResolveVenueProblemReportDto,
+  ) {
+    const request = await this.prisma.customerProblemReport.findUnique({
+      where: { id: requestId },
+      include: {
+        venue: true,
+        reservation: true,
+        payment: true,
+        customer: true,
+      },
+    });
+
+    if (!request) {
+      throw new NotFoundException("Customer problem report was not found.");
+    }
+
+    const supportRefundCents =
+      dto.amountCents != null && dto.amountCents > 0 ? dto.amountCents : null;
+    const resolutionCurrency =
+      supportRefundCents != null
+        ? (dto.currency?.trim().toUpperCase() ??
+          request.payment?.currency ??
+          request.reservation.currency)
+        : null;
+    const adminNotes =
+      dto.adminNotes?.trim() ||
+      (supportRefundCents != null
+        ? "Prijava je pregledana i refundirana od strane Chin-Chin podrške."
+        : "Prijava je pregledana i zatvorena prema odgovoru Chin-Chin podrške.");
+
+    if (supportRefundCents != null) {
+      const payment = await this.prisma.reservationPayment.findFirst({
+        where: {
+          reservationId: request.reservationId,
+          status: {
+            in: [
+              ReservationPaymentStatus.CAPTURED,
+              ReservationPaymentStatus.PARTIALLY_REFUNDED,
+            ],
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        include: { reservation: { include: { venue: true } } },
+      });
+
+      if (!payment) {
+        throw new NotFoundException(
+          "Captured reservation payment was not found.",
+        );
+      }
+
+      const remainingRefundableCents = Math.max(
+        0,
+        payment.capturedCents - payment.refundedCents,
+      );
+      const amountCents = Math.min(
+        supportRefundCents,
+        remainingRefundableCents,
+      );
+      if (amountCents <= 0) {
+        throw new BadRequestException("Payment has no refundable amount left.");
+      }
+
+      await this.refundCapturedReservation(
+        request.reservationId,
+        amountCents,
+        `Customer problem report refund: ${adminNotes}`,
+      );
+      await this.prisma.reservation.update({
+        where: { id: request.reservationId },
+        data: {
+          status: ReservationStatus.CANCELLED,
+          cancelledAt: new Date(),
+          releasedAt: new Date(),
+          confirmationExpiresAt: null,
+        },
+      });
+      await this.notifyVenueAboutAdminPaymentAction(payment, {
+        title: "Rezervacija je refundirana",
+        body: `${this.customerDisplayName(payment)} · ${this.formatCents(amountCents, payment.currency)} refundirano nakon prijave problema.`,
+        type: "reservation_customer_problem_refunded",
+        amountCents,
+      });
+    }
+
+    await this.notifyCustomerProblemReportResolved({
+      id: request.id,
+      reservationId: request.reservationId,
+      resolutionAmountCents: supportRefundCents,
+      resolutionCurrency,
+      adminNotes,
+      venue: request.venue,
+      reservation: request.reservation,
+      customer: request.customer,
+    });
+
+    const updated = await this.prisma.customerProblemReport.update({
+      where: { id: requestId },
+      data: {
+        status:
+          supportRefundCents != null
+            ? CustomerProblemReportStatus.REFUNDED_BY_CHIN_CHIN
+            : CustomerProblemReportStatus.CLOSED_NO_REFUND,
+        resolutionAmountCents: supportRefundCents,
+        resolutionCurrency,
+        adminNotes,
+        resolvedAt: new Date(),
+      },
+      include: {
+        venue: true,
+        reservation: true,
+        payment: true,
+        customer: true,
+      },
+    });
+
+    return this.serializeAdminCustomerProblemReport(updated);
   }
 
   async adminManualRefund(reservationId: string, dto: AdminManualRefundDto) {
@@ -1707,6 +1911,50 @@ export class PaymentsService {
     });
   }
 
+  private async notifyCustomerProblemReportResolved(request: {
+    id: string;
+    reservationId: string;
+    resolutionAmountCents: number | null;
+    resolutionCurrency: string | null;
+    adminNotes: string | null;
+    venue: {
+      id: string;
+      name: string;
+    };
+    reservation: {
+      id: string;
+      currency: string;
+      customerEmail: string | null;
+      tableLabel: string | null;
+    };
+    customer: { email: string } | null;
+  }) {
+    const recipient =
+      request.reservation.customerEmail?.trim().toLowerCase() ||
+      request.customer?.email?.trim().toLowerCase();
+
+    if (!recipient) {
+      this.logger.warn(
+        `Customer problem report ${request.id} resolved, but customer email was not found.`,
+      );
+      return;
+    }
+
+    this.logger.log(
+      `Sending customer problem report ${request.id} response email to ${recipient}.`,
+    );
+    await this.emailService.sendCustomerProblemReportResolvedEmail({
+      to: recipient,
+      venueName: request.venue.name,
+      reservationId: request.reservationId,
+      tableLabel: request.reservation.tableLabel,
+      amountCents: request.resolutionAmountCents,
+      currency:
+        request.resolutionCurrency ?? request.reservation.currency ?? "EUR",
+      adminNotes: request.adminNotes,
+    });
+  }
+
   private async notifyVenueAboutAdminPaymentAction(
     payment: {
       id: string;
@@ -2591,6 +2839,106 @@ export class PaymentsService {
       reservation: request.reservation,
       payment: request.payment,
       requestedByOwner: request.requestedByOwner,
+    };
+  }
+
+  private serializeCustomerProblemReport(request: {
+    id: string;
+    reservationId: string;
+    paymentId: string | null;
+    venueId: string;
+    customerId: string | null;
+    status: CustomerProblemReportStatus;
+    problemDescription: string;
+    photo: Prisma.JsonValue;
+    resolutionAmountCents: number | null;
+    resolutionCurrency: string | null;
+    adminNotes: string | null;
+    resolvedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }) {
+    return {
+      id: request.id,
+      reservationId: request.reservationId,
+      paymentId: request.paymentId,
+      venueId: request.venueId,
+      customerId: request.customerId,
+      status: request.status,
+      problemDescription: request.problemDescription,
+      photo: request.photo,
+      resolutionAmountCents: request.resolutionAmountCents,
+      resolutionCurrency: request.resolutionCurrency,
+      adminNotes: request.adminNotes,
+      resolvedAt: request.resolvedAt,
+      createdAt: request.createdAt,
+      updatedAt: request.updatedAt,
+      reportSource: "CUSTOMER",
+    };
+  }
+
+  private serializeAdminCustomerProblemReport(request: {
+    id: string;
+    reservationId: string;
+    paymentId: string | null;
+    venueId: string;
+    customerId: string | null;
+    status: CustomerProblemReportStatus;
+    problemDescription: string;
+    photo: Prisma.JsonValue;
+    resolutionAmountCents: number | null;
+    resolutionCurrency: string | null;
+    adminNotes: string | null;
+    resolvedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+    venue: {
+      id: string;
+      name: string;
+      city: string | null;
+    };
+    reservation: {
+      id: string;
+      status: ReservationStatus;
+      type: ReservationType;
+      tableId: string;
+      tableLabel: string | null;
+      roomLabel: string | null;
+      customerName: string | null;
+      customerEmail: string | null;
+      customerPhone: string | null;
+      timeSlotStart: Date;
+      feeCents: number;
+      refundCents: number;
+      currency: string;
+    };
+    payment: {
+      id: string;
+      status: ReservationPaymentStatus;
+      amountCents: number;
+      capturedCents: number;
+      refundedCents: number;
+      currency: string;
+      providerPaymentId: string | null;
+    } | null;
+    customer: {
+      id: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      phoneNumber: string | null;
+    } | null;
+  }) {
+    return {
+      ...this.serializeCustomerProblemReport(request),
+      venue: {
+        id: request.venue.id,
+        name: request.venue.name,
+        city: request.venue.city,
+      },
+      reservation: request.reservation,
+      payment: request.payment,
+      customer: request.customer,
     };
   }
 

@@ -177,6 +177,22 @@ export class PaymentsController {
     );
   }
 
+  @Get("preview/admin/customer-problem-reports")
+  listAdminCustomerProblemReports() {
+    return this.paymentsService.listAdminCustomerProblemReports();
+  }
+
+  @Patch("preview/admin/customer-problem-reports/:requestId/response")
+  sendCustomerProblemReportResponse(
+    @Param("requestId") requestId: string,
+    @Body() dto: ResolveVenueProblemReportDto,
+  ) {
+    return this.paymentsService.sendCustomerProblemReportResponse(
+      requestId,
+      dto,
+    );
+  }
+
   @Post("preview/admin/reservations/:reservationId/refund")
   adminManualRefund(
     @Param("reservationId") reservationId: string,
