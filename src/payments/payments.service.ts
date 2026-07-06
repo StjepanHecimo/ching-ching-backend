@@ -820,11 +820,18 @@ export class PaymentsService {
       orderBy: { createdAt: "desc" },
     });
 
-    const photo = {
-      fileName: dto.photo.fileName.trim(),
-      mimeType: dto.photo.mimeType.trim(),
-      dataUrl: dto.photo.dataUrl.trim(),
-    };
+    const photo = dto.photo
+      ? {
+          fileName: dto.photo.fileName.trim(),
+          mimeType: dto.photo.mimeType.trim(),
+          dataUrl: dto.photo.dataUrl.trim(),
+        }
+      : {
+          fileName: "",
+          mimeType: "",
+          dataUrl: "",
+          testModeWithoutPhoto: true,
+        };
 
     const report = existingPending
       ? await this.prisma.customerProblemReport.update({

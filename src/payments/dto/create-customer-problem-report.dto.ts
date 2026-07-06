@@ -1,6 +1,7 @@
 import { Type } from "class-transformer";
 import {
   IsObject,
+  IsOptional,
   IsString,
   Length,
   MaxLength,
@@ -27,7 +28,8 @@ export class CreateCustomerProblemReportDto {
   problemDescription!: string;
 
   @IsObject()
+  @IsOptional()
   @ValidateNested()
   @Type(() => CustomerProblemReportPhotoDto)
-  photo!: CustomerProblemReportPhotoDto;
+  photo?: CustomerProblemReportPhotoDto;
 }
