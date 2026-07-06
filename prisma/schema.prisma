@@ -111,8 +111,10 @@ enum VenueRefundRequestStatus {
 
 enum CustomerProblemReportStatus {
   PENDING
+  RESPONSE_SENT
   REFUNDED_BY_CHIN_CHIN
   CLOSED_NO_REFUND
+  RESOLVED
 }
 
 enum LedgerEntryType {

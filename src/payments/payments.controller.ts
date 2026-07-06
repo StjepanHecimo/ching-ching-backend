@@ -193,6 +193,11 @@ export class PaymentsController {
     );
   }
 
+  @Patch("preview/admin/customer-problem-reports/:requestId/resolve")
+  markCustomerProblemReportResolved(@Param("requestId") requestId: string) {
+    return this.paymentsService.markCustomerProblemReportResolved(requestId);
+  }
+
   @Post("preview/admin/reservations/:reservationId/refund")
   adminManualRefund(
     @Param("reservationId") reservationId: string,

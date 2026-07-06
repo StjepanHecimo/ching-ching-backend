@@ -982,10 +982,42 @@ export class PaymentsService {
         status:
           supportRefundCents != null
             ? CustomerProblemReportStatus.REFUNDED_BY_CHIN_CHIN
-            : CustomerProblemReportStatus.CLOSED_NO_REFUND,
+            : CustomerProblemReportStatus.RESPONSE_SENT,
         resolutionAmountCents: supportRefundCents,
         resolutionCurrency,
         adminNotes,
+        resolvedAt: new Date(),
+      },
+      include: {
+        venue: true,
+        reservation: true,
+        payment: true,
+        customer: true,
+      },
+    });
+
+    return this.serializeAdminCustomerProblemReport(updated);
+  }
+
+  async markCustomerProblemReportResolved(requestId: string) {
+    const request = await this.prisma.customerProblemReport.findUnique({
+      where: { id: requestId },
+    });
+
+    if (!request) {
+      throw new NotFoundException("Customer problem report was not found.");
+    }
+
+    if (request.status === CustomerProblemReportStatus.PENDING) {
+      throw new BadRequestException(
+        "Customer problem report response must be sent before resolving.",
+      );
+    }
+
+    const updated = await this.prisma.customerProblemReport.update({
+      where: { id: requestId },
+      data: {
+        status: CustomerProblemReportStatus.RESOLVED,
         resolvedAt: new Date(),
       },
       include: {

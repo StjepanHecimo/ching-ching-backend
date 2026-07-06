@@ -1,0 +1,2 @@
+ALTER TYPE "CustomerProblemReportStatus" ADD VALUE IF NOT EXISTS 'RESPONSE_SENT';
+ALTER TYPE "CustomerProblemReportStatus" ADD VALUE IF NOT EXISTS 'RESOLVED';
