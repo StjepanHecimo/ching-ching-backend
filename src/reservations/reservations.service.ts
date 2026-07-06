@@ -8,6 +8,7 @@ import {
 import { Prisma } from "../../generated/prisma/client";
 import {
   DevicePushApp,
+  CustomerProblemReportStatus,
   ReservationStatus,
   ReservationType,
   SpaceLayoutStatus,
@@ -72,6 +73,14 @@ type ReservationWithVenueRefundRequests = ReservationWithVenue & {
     resolutionAmountCents: number | null;
     resolutionCurrency: string | null;
     resolvedAt: Date | null;
+  }[];
+  customerProblemReports?: {
+    id: string;
+    status: CustomerProblemReportStatus;
+    resolutionAmountCents: number | null;
+    resolutionCurrency: string | null;
+    resolvedAt: Date | null;
+    updatedAt: Date;
   }[];
 };
 
@@ -386,6 +395,10 @@ export class ReservationsService {
           where: {
             status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
           },
+          orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
+          take: 1,
+        },
+        customerProblemReports: {
           orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
           take: 1,
         },
@@ -2966,6 +2979,18 @@ export class ReservationsService {
               resolvedAt: reservation.refundRequests[0].resolvedAt,
             }
           : null,
+      customerProblemReport: reservation.customerProblemReports?.[0]
+        ? {
+            id: reservation.customerProblemReports[0].id,
+            status: reservation.customerProblemReports[0].status,
+            amountCents:
+              reservation.customerProblemReports[0].resolutionAmountCents ?? 0,
+            currency:
+              reservation.customerProblemReports[0].resolutionCurrency ??
+              reservation.currency,
+            resolvedAt: reservation.customerProblemReports[0].resolvedAt,
+          }
+        : null,
     };
   }
 
