@@ -7,10 +7,7 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
-import {
-  ReservationStatus,
-  SpaceLayoutStatus,
-} from "../../generated/prisma/enums";
+import { SpaceLayoutStatus } from "../../generated/prisma/enums";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
@@ -162,40 +159,6 @@ export class SpaceLayoutsService {
         });
       }
     });
-    const reservationRanges = this.currentVenueReservationRanges();
-    const countableStatuses = this.adminVenueReservationCountStatuses();
-    const [todayReservations, weekReservations] = await Promise.all([
-      this.prisma.reservation.groupBy({
-        by: ["venueId"],
-        where: {
-          venueId: { in: venueIds },
-          status: { in: countableStatuses },
-          timeSlotStart: {
-            gte: reservationRanges.todayStart,
-            lt: reservationRanges.todayEnd,
-          },
-        },
-        _count: { _all: true },
-      }),
-      this.prisma.reservation.groupBy({
-        by: ["venueId"],
-        where: {
-          venueId: { in: venueIds },
-          status: { in: countableStatuses },
-          timeSlotStart: {
-            gte: reservationRanges.weekStart,
-            lt: reservationRanges.weekEnd,
-          },
-        },
-        _count: { _all: true },
-      }),
-    ]);
-    const todayCountByVenue = new Map(
-      todayReservations.map((entry) => [entry.venueId, entry._count._all]),
-    );
-    const weekCountByVenue = new Map(
-      weekReservations.map((entry) => [entry.venueId, entry._count._all]),
-    );
 
     return venues.map((venue) => {
       const latestProject = venue.spaceLayoutProjects[0] ?? null;
@@ -214,8 +177,6 @@ export class SpaceLayoutsService {
           .length,
         roomCount: layoutStats.roomCount,
         totalTableCount: layoutStats.totalTableCount,
-        todayReservationCount: todayCountByVenue.get(venue.id) ?? 0,
-        weekReservationCount: weekCountByVenue.get(venue.id) ?? 0,
         owner: venue.owner,
         latestProject,
         updatedAt: venue.updatedAt,
@@ -3312,35 +3273,5 @@ export class SpaceLayoutsService {
     });
 
     return { roomCount, totalTableCount };
-  }
-
-  private currentVenueReservationRanges() {
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(todayStart);
-    todayEnd.setDate(todayStart.getDate() + 1);
-
-    const weekStart = new Date(todayStart);
-    const day = weekStart.getDay();
-    const diff = day === 0 ? -6 : 1 - day;
-    weekStart.setDate(weekStart.getDate() + diff);
-    const weekEnd = new Date(weekStart);
-    weekEnd.setDate(weekStart.getDate() + 7);
-
-    return { todayStart, todayEnd, weekStart, weekEnd };
-  }
-
-  private adminVenueReservationCountStatuses() {
-    return [
-      ReservationStatus.REQUESTED,
-      ReservationStatus.PENDING_VENUE_CONFIRMATION,
-      ReservationStatus.CONFIRMED,
-      ReservationStatus.RESERVED,
-      ReservationStatus.CHECK_IN_PENDING,
-      ReservationStatus.CHECKED_IN,
-      ReservationStatus.SEATED,
-      ReservationStatus.COMPLETED,
-    ];
   }
 }
