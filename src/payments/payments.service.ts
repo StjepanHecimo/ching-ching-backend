@@ -31,7 +31,7 @@ import { ResolveVenueProblemReportDto } from "./dto/resolve-venue-problem-report
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 
-const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 3000;
+const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 1500;
 const DEFAULT_FIRST_RESERVATION_COMMISSION_BPS = 1000;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 
@@ -1028,15 +1028,9 @@ export class PaymentsService {
       0,
       payment.capturedCents - payment.refundedCents,
     );
-    const venueRefundableCents =
-      dto.target === "VENUE"
-        ? this.calculateAllocation(remainingRefundableCents).venueShareCents
-        : remainingRefundableCents;
-    const maxRefundableCents =
-      dto.target === "VENUE" ? venueRefundableCents : remainingRefundableCents;
     const amountCents = Math.min(
-      dto.amountCents ?? maxRefundableCents,
-      maxRefundableCents,
+      dto.amountCents ?? remainingRefundableCents,
+      remainingRefundableCents,
     );
 
     if (amountCents <= 0) {
@@ -1077,32 +1071,60 @@ export class PaymentsService {
       };
     }
 
-    const adjustment = await this.prisma.ledgerEntry.create({
-      data: {
-        reservationId,
-        paymentId: payment.id,
-        venueId: payment.venueId,
-        customerId: payment.customerId,
-        type: LedgerEntryType.VENUE_PAYOUT_ADJUSTMENT,
-        direction: LedgerEntryDirection.CREDIT,
-        amountCents,
-        currency: payment.currency,
-        description: `Admin venue adjustment: ${reason}`,
+    const allocation = this.calculateAllocation(amountCents);
+    const adjustmentEntries = await this.prisma.ledgerEntry.createManyAndReturn(
+      {
+        data: [
+          {
+            reservationId,
+            paymentId: payment.id,
+            venueId: payment.venueId,
+            customerId: payment.customerId,
+            type: LedgerEntryType.CHIN_CHIN_FEE,
+            direction: LedgerEntryDirection.CREDIT,
+            amountCents: allocation.chinChinFeeCents,
+            currency: payment.currency,
+            description: `Admin venue adjustment Chin-Chin fee: ${reason}`,
+            metadata: {
+              policy: "ADMIN_VENUE_SUPPORT_REFUND_SPLIT",
+              grossAmountCents: amountCents,
+              commissionBps: this.commissionBps(),
+            } as Prisma.InputJsonValue,
+          },
+          {
+            reservationId,
+            paymentId: payment.id,
+            venueId: payment.venueId,
+            customerId: payment.customerId,
+            type: LedgerEntryType.VENUE_PAYOUT_ADJUSTMENT,
+            direction: LedgerEntryDirection.CREDIT,
+            amountCents: allocation.venueShareCents,
+            currency: payment.currency,
+            description: `Admin venue adjustment: ${reason}`,
+            metadata: {
+              policy: "ADMIN_VENUE_SUPPORT_REFUND_SPLIT",
+              grossAmountCents: amountCents,
+              commissionBps: this.commissionBps(),
+            } as Prisma.InputJsonValue,
+          },
+        ],
       },
-    });
+    );
 
     await this.notifyVenueAboutAdminPaymentAction(payment, {
       title: "Korekcija isplate",
-      body: `${this.formatCents(amountCents, payment.currency)} dodano je kao korekcija ugostiteljske isplate za ${payment.reservation.tableLabel ?? "Chin-Chin stol"}.`,
+      body: `${this.formatCents(allocation.venueShareCents, payment.currency)} dodano je kao korekcija ugostiteljske isplate za ${payment.reservation.tableLabel ?? "Chin-Chin stol"}.`,
       type: "venue_payout_adjusted_by_admin",
-      amountCents,
+      amountCents: allocation.venueShareCents,
     });
 
     return {
       target: dto.target,
       amountCents,
+      venueShareCents: allocation.venueShareCents,
+      chinChinFeeCents: allocation.chinChinFeeCents,
       reservationId,
-      adjustment,
+      adjustment: adjustmentEntries,
     };
   }
 
@@ -2335,8 +2357,7 @@ export class PaymentsService {
     if (payment.refundedCents > 0) {
       return {
         retainedCents,
-        chinChinFeeCents: 0,
-        venueShareCents: retainedCents,
+        ...this.calculateAllocation(retainedCents),
         policy: "PARTIAL_CUSTOMER_REFUND_VENUE_RETAINS",
       };
     }
