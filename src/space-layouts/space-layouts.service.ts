@@ -7,7 +7,10 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
-import { SpaceLayoutStatus } from "../../generated/prisma/enums";
+import {
+  ReservationStatus,
+  SpaceLayoutStatus,
+} from "../../generated/prisma/enums";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
@@ -136,9 +139,69 @@ export class SpaceLayoutsService {
         },
       },
     });
+    const venueIds = venues.map((venue) => venue.id);
+    const approvedProjects = await this.prisma.spaceLayoutProject.findMany({
+      where: {
+        venueId: { in: venueIds },
+        status: SpaceLayoutStatus.APPROVED,
+      },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        venueId: true,
+        savedLayout: true,
+      },
+    });
+    const latestApprovedByVenue = new Map<
+      string,
+      { savedLayout: Prisma.JsonValue | null }
+    >();
+    approvedProjects.forEach((project) => {
+      if (!latestApprovedByVenue.has(project.venueId)) {
+        latestApprovedByVenue.set(project.venueId, {
+          savedLayout: project.savedLayout,
+        });
+      }
+    });
+    const reservationRanges = this.currentVenueReservationRanges();
+    const countableStatuses = this.adminVenueReservationCountStatuses();
+    const [todayReservations, weekReservations] = await Promise.all([
+      this.prisma.reservation.groupBy({
+        by: ["venueId"],
+        where: {
+          venueId: { in: venueIds },
+          status: { in: countableStatuses },
+          timeSlotStart: {
+            gte: reservationRanges.todayStart,
+            lt: reservationRanges.todayEnd,
+          },
+        },
+        _count: { _all: true },
+      }),
+      this.prisma.reservation.groupBy({
+        by: ["venueId"],
+        where: {
+          venueId: { in: venueIds },
+          status: { in: countableStatuses },
+          timeSlotStart: {
+            gte: reservationRanges.weekStart,
+            lt: reservationRanges.weekEnd,
+          },
+        },
+        _count: { _all: true },
+      }),
+    ]);
+    const todayCountByVenue = new Map(
+      todayReservations.map((entry) => [entry.venueId, entry._count._all]),
+    );
+    const weekCountByVenue = new Map(
+      weekReservations.map((entry) => [entry.venueId, entry._count._all]),
+    );
 
     return venues.map((venue) => {
       const latestProject = venue.spaceLayoutProjects[0] ?? null;
+      const layoutStats = this.layoutStatsFromSavedLayout(
+        latestApprovedByVenue.get(venue.id)?.savedLayout ?? null,
+      );
       return {
         id: venue.id,
         name: venue.name,
@@ -147,6 +210,12 @@ export class SpaceLayoutsService {
         city: venue.city,
         country: venue.country,
         isLive: venue.isLive,
+        liveChinChinTableCount: this.jsonStringArray(venue.liveChinChinTableIds)
+          .length,
+        roomCount: layoutStats.roomCount,
+        totalTableCount: layoutStats.totalTableCount,
+        todayReservationCount: todayCountByVenue.get(venue.id) ?? 0,
+        weekReservationCount: weekCountByVenue.get(venue.id) ?? 0,
         owner: venue.owner,
         latestProject,
         updatedAt: venue.updatedAt,
@@ -3209,5 +3278,69 @@ export class SpaceLayoutsService {
       createdAt: project.createdAt,
       updatedAt: project.updatedAt,
     };
+  }
+
+  private jsonStringArray(value: Prisma.JsonValue | null | undefined) {
+    return Array.isArray(value)
+      ? value
+          .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+          .filter(Boolean)
+      : [];
+  }
+
+  private layoutStatsFromSavedLayout(
+    savedLayoutValue: Prisma.JsonValue | null | undefined,
+  ) {
+    const savedLayout = this.asJsonObject(savedLayoutValue ?? null);
+    const layout = this.asJsonObject(savedLayout?.layout ?? null);
+    const rooms = Array.isArray(layout?.rooms) ? layout.rooms : [];
+    let roomCount = 0;
+    let totalTableCount = 0;
+
+    rooms.forEach((room) => {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        return;
+      }
+      const roomMap = room as Record<string, unknown>;
+      if (this.isRoomHidden(roomMap)) {
+        return;
+      }
+      roomCount += 1;
+      totalTableCount += Array.isArray(roomMap.tables)
+        ? roomMap.tables.length
+        : 0;
+    });
+
+    return { roomCount, totalTableCount };
+  }
+
+  private currentVenueReservationRanges() {
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(todayStart);
+    todayEnd.setDate(todayStart.getDate() + 1);
+
+    const weekStart = new Date(todayStart);
+    const day = weekStart.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    weekStart.setDate(weekStart.getDate() + diff);
+    const weekEnd = new Date(weekStart);
+    weekEnd.setDate(weekStart.getDate() + 7);
+
+    return { todayStart, todayEnd, weekStart, weekEnd };
+  }
+
+  private adminVenueReservationCountStatuses() {
+    return [
+      ReservationStatus.REQUESTED,
+      ReservationStatus.PENDING_VENUE_CONFIRMATION,
+      ReservationStatus.CONFIRMED,
+      ReservationStatus.RESERVED,
+      ReservationStatus.CHECK_IN_PENDING,
+      ReservationStatus.CHECKED_IN,
+      ReservationStatus.SEATED,
+      ReservationStatus.COMPLETED,
+    ];
   }
 }
