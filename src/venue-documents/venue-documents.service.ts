@@ -1,6 +1,15 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from "@nestjs/common";
 import { Prisma } from "../../generated/prisma/client";
-import { VenueDocumentStatus } from "../../generated/prisma/enums";
+import {
+  DevicePushApp,
+  VenueDocumentStatus,
+} from "../../generated/prisma/enums";
+import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ReviewVenueDocumentsDto } from "./dto/review-venue-documents.dto";
 import { SubmitVenueDocumentsDto } from "./dto/submit-venue-documents.dto";
@@ -8,7 +17,12 @@ import { VenueDocumentFileDto } from "./dto/venue-document-file.dto";
 
 @Injectable()
 export class VenueDocumentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(VenueDocumentsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly deviceTokensService: DeviceTokensService,
+  ) {}
 
   async submitVenueDocuments(venueId: string, dto: SubmitVenueDocumentsDto) {
     const venue = await this.prisma.venue.findUnique({
@@ -54,7 +68,14 @@ export class VenueDocumentsService {
 
   async getReviewQueue() {
     const requests = await this.prisma.venueDocumentRequest.findMany({
-      where: { status: { in: [VenueDocumentStatus.PENDING_REVIEW, VenueDocumentStatus.CHANGES_REQUESTED] } },
+      where: {
+        status: {
+          in: [
+            VenueDocumentStatus.PENDING_REVIEW,
+            VenueDocumentStatus.CHANGES_REQUESTED,
+          ],
+        },
+      },
       orderBy: { updatedAt: "desc" },
       include: { owner: true, venue: true },
     });
@@ -63,7 +84,13 @@ export class VenueDocumentsService {
   }
 
   async approveRequest(id: string, dto: ReviewVenueDocumentsDto) {
-    return this.reviewRequest(id, VenueDocumentStatus.APPROVED, dto);
+    const request = await this.reviewRequest(
+      id,
+      VenueDocumentStatus.APPROVED,
+      dto,
+    );
+    await this.notifyVenueDocumentsApproved(request);
+    return request;
   }
 
   async requestChanges(id: string, dto: ReviewVenueDocumentsDto) {
@@ -75,7 +102,9 @@ export class VenueDocumentsService {
     status: VenueDocumentStatus,
     dto: ReviewVenueDocumentsDto,
   ) {
-    const existing = await this.prisma.venueDocumentRequest.findUnique({ where: { id } });
+    const existing = await this.prisma.venueDocumentRequest.findUnique({
+      where: { id },
+    });
     if (!existing) {
       throw new NotFoundException("Venue document request was not found.");
     }
@@ -93,9 +122,14 @@ export class VenueDocumentsService {
     return this.serializeRequest(request);
   }
 
-  private normalizeDocument(document: VenueDocumentFileDto, fallbackId: string) {
+  private normalizeDocument(
+    document: VenueDocumentFileDto,
+    fallbackId: string,
+  ) {
     if (!document.dataUrl.startsWith(`data:${document.mimeType};base64,`)) {
-      throw new BadRequestException("Document dataUrl does not match its mimeType.");
+      throw new BadRequestException(
+        "Document dataUrl does not match its mimeType.",
+      );
     }
 
     return {
@@ -135,6 +169,8 @@ export class VenueDocumentsService {
   }) {
     return {
       id: request.id,
+      ownerId: request.ownerId,
+      venueId: request.venueId,
       type: "document",
       status: request.status,
       documents: request.documents,
@@ -147,5 +183,38 @@ export class VenueDocumentsService {
       owner: request.owner,
       venue: request.venue,
     };
+  }
+
+  private async notifyVenueDocumentsApproved(request: {
+    id: string;
+    ownerId: string;
+    venueId: string;
+    venue: { id: string; name: string };
+  }) {
+    try {
+      this.logger.log(
+        `[push][venue-owner] sending document approval requestId=${request.id} ownerId=${request.ownerId} venueId=${request.venueId}`,
+      );
+      await this.deviceTokensService.sendToUser({
+        userId: request.ownerId,
+        app: DevicePushApp.VENUE_OWNER,
+        title: "Dokumenti su odobreni",
+        body: `${request.venue.name} ima odobrene dokumente. Live sesija je sada dostupna.`,
+        data: {
+          type: "venue_documents_approved",
+          venueId: request.venueId,
+          requestId: request.id,
+        },
+      });
+      this.logger.log(
+        `[push][venue-owner] sent document approval requestId=${request.id} ownerId=${request.ownerId}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Document approval push failed for request ${request.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 }
