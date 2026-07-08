@@ -13,6 +13,7 @@ import {
   ReservationType,
   SpaceLayoutStatus,
   UserRole,
+  VenueDocumentStatus,
   VenueRefundRequestStatus,
 } from "../../generated/prisma/enums";
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
@@ -1148,10 +1149,19 @@ export class ReservationsService {
   async getVenueLiveStatus(venueId: string) {
     const venue = await this.getVenueReservationState(venueId);
     const hasApprovedLayout = await this.venueHasApprovedLayout(venueId);
-    const isLive = hasApprovedLayout ? venue.isLive : false;
+    const hasApprovedDocuments = await this.venueHasApprovedDocuments(venueId);
+    const canGoLive = hasApprovedLayout && hasApprovedDocuments;
+    const isLive = canGoLive ? venue.isLive : false;
     return {
       id: venue.id,
       isLive,
+      documentsApproved: hasApprovedDocuments,
+      canGoLive,
+      liveBlockReason: !hasApprovedLayout
+        ? "LAYOUT_NOT_APPROVED"
+        : !hasApprovedDocuments
+          ? "DOCUMENTS_NOT_APPROVED"
+          : null,
       latitude: venue.latitude,
       longitude: venue.longitude,
       liveChinChinTableIds: isLive ? venue.liveChinChinTableIds : [],
@@ -1219,6 +1229,20 @@ export class ReservationsService {
     if (dto.isLive && !(await this.venueHasApprovedLayout(venueId))) {
       throw new BadRequestException(
         "Venue cannot go live before Chin-Chin approves the first space draft.",
+      );
+    }
+
+    const requiresApprovedDocuments =
+      dto.isLive ||
+      (dto.liveChinChinTableIds !== undefined &&
+        (dto.liveRoomLabel?.trim().length ?? 0) > 0);
+
+    if (
+      requiresApprovedDocuments &&
+      !(await this.venueHasApprovedDocuments(venueId))
+    ) {
+      throw new BadRequestException(
+        "Dokumenti moraju biti odobreni prije spremanja odabira ili pokretanja live sesije.",
       );
     }
 
@@ -1792,6 +1816,15 @@ export class ReservationsService {
     });
 
     return approvedProject !== null;
+  }
+
+  private async venueHasApprovedDocuments(venueId: string) {
+    const approvedRequest = await this.prisma.venueDocumentRequest.findFirst({
+      where: { venueId, status: VenueDocumentStatus.APPROVED },
+      select: { id: true },
+    });
+
+    return approvedRequest !== null;
   }
 
   private findBlockingReservations(
