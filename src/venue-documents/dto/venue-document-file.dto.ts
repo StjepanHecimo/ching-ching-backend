@@ -11,7 +11,7 @@ export class VenueDocumentFileDto {
   fileName!: string;
 
   @IsString()
-  @Matches(/^(application\/pdf|image\/(png|jpeg|webp))$/)
+  @Matches(/^(application\/pdf|image\/jpeg)$/)
   mimeType!: string;
 
   @IsString()

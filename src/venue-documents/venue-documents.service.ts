@@ -94,7 +94,13 @@ export class VenueDocumentsService {
   }
 
   async requestChanges(id: string, dto: ReviewVenueDocumentsDto) {
-    return this.reviewRequest(id, VenueDocumentStatus.CHANGES_REQUESTED, dto);
+    const request = await this.reviewRequest(
+      id,
+      VenueDocumentStatus.CHANGES_REQUESTED,
+      dto,
+    );
+    await this.notifyVenueDocumentsChangesRequested(request);
+    return request;
   }
 
   private async reviewRequest(
@@ -212,6 +218,39 @@ export class VenueDocumentsService {
     } catch (error) {
       this.logger.warn(
         `Document approval push failed for request ${request.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async notifyVenueDocumentsChangesRequested(request: {
+    id: string;
+    ownerId: string;
+    venueId: string;
+    venue: { id: string; name: string };
+  }) {
+    try {
+      this.logger.log(
+        `[push][venue-owner] sending document changes requestId=${request.id} ownerId=${request.ownerId} venueId=${request.venueId}`,
+      );
+      await this.deviceTokensService.sendToUser({
+        userId: request.ownerId,
+        app: DevicePushApp.VENUE_OWNER,
+        title: "Dokument nije odobren",
+        body: `${request.venue.name}: dokument nije odobren. Pošaljite ispravljeni PDF ili JPEG scan.`,
+        data: {
+          type: "venue_documents_changes_requested",
+          venueId: request.venueId,
+          requestId: request.id,
+        },
+      });
+      this.logger.log(
+        `[push][venue-owner] sent document changes requestId=${request.id} ownerId=${request.ownerId}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Document changes push failed for request ${request.id}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

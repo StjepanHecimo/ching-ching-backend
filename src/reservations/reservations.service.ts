@@ -1233,9 +1233,7 @@ export class ReservationsService {
     }
 
     const requiresApprovedDocuments =
-      dto.isLive ||
-      (dto.liveChinChinTableIds !== undefined &&
-        (dto.liveRoomLabel?.trim().length ?? 0) > 0);
+      dto.isLive || dto.liveChinChinTableIds !== undefined;
 
     if (
       requiresApprovedDocuments &&
