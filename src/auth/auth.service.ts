@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ConflictException,
+  HttpException,
+  HttpStatus,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -32,14 +34,25 @@ type TokenPair = {
 
 const DEFAULT_REFRESH_TOKEN_DAYS = 365;
 const ADMIN_ACCESS_TOKEN_TTL_SECONDS = 30 * 60;
+const ADMIN_LOGIN_ATTEMPT_LIMIT = 5;
+const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000;
 const ADMIN_PANEL_ROLES: UserRole[] = [
   UserRole.ADMIN,
   UserRole.ADMIN_ACCOUNTING,
   UserRole.CHIN_CHIN_SUPPORT,
 ];
 
+type AdminLoginAttempt = {
+  count: number;
+  firstAttemptAt: number;
+  lockedUntil?: number;
+};
+
 @Injectable()
 export class AuthService {
+  private readonly adminLoginAttempts = new Map<string, AdminLoginAttempt>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -390,13 +403,20 @@ export class AuthService {
     };
   }
 
-  async adminLogin(dto: LoginDto) {
+  async adminLogin(dto: LoginDto, ipAddress?: string) {
     const normalizedEmail = dto.email.trim().toLowerCase();
+    const attemptKeys = this.getAdminLoginAttemptKeys(
+      normalizedEmail,
+      ipAddress,
+    );
+    this.assertAdminLoginAllowed(attemptKeys);
+
     const user = await this.prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
 
     if (!user || !ADMIN_PANEL_ROLES.includes(user.role)) {
+      this.recordFailedAdminLogin(attemptKeys);
       throw new UnauthorizedException("Invalid email or password.");
     }
 
@@ -406,12 +426,16 @@ export class AuthService {
     );
 
     if (!passwordMatches) {
+      this.recordFailedAdminLogin(attemptKeys);
       throw new UnauthorizedException("Invalid email or password.");
     }
 
     if (user.status !== UserStatus.ACTIVE) {
+      this.recordFailedAdminLogin(attemptKeys);
       throw new UnauthorizedException("Admin account is not active.");
     }
+
+    this.clearAdminLoginAttempts(attemptKeys);
 
     const accessToken = await this.issueAdminAccessToken({
       id: user.id,
@@ -434,6 +458,57 @@ export class AuthService {
         role: user.role,
       },
     };
+  }
+
+  private getAdminLoginAttemptKeys(email: string, ipAddress?: string) {
+    return [
+      `email:${email}`,
+      ipAddress ? `ip:${ipAddress}` : null,
+    ].filter((key): key is string => Boolean(key));
+  }
+
+  private assertAdminLoginAllowed(keys: string[]) {
+    const now = Date.now();
+    for (const key of keys) {
+      const attempt = this.adminLoginAttempts.get(key);
+      if (!attempt) {
+        continue;
+      }
+      if (attempt.lockedUntil && attempt.lockedUntil > now) {
+        throw new HttpException(
+          "Too many admin login attempts. Try again later.",
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      if (attempt.lockedUntil && attempt.lockedUntil <= now) {
+        this.adminLoginAttempts.delete(key);
+      }
+    }
+  }
+
+  private recordFailedAdminLogin(keys: string[]) {
+    const now = Date.now();
+    for (const key of keys) {
+      const previous = this.adminLoginAttempts.get(key);
+      const isFreshWindow =
+        !previous || now - previous.firstAttemptAt > ADMIN_LOGIN_WINDOW_MS;
+      const next: AdminLoginAttempt = isFreshWindow
+        ? { count: 1, firstAttemptAt: now }
+        : {
+            ...previous,
+            count: previous.count + 1,
+          };
+
+      if (next.count >= ADMIN_LOGIN_ATTEMPT_LIMIT) {
+        next.lockedUntil = now + ADMIN_LOGIN_LOCK_MS;
+      }
+
+      this.adminLoginAttempts.set(key, next);
+    }
+  }
+
+  private clearAdminLoginAttempts(keys: string[]) {
+    keys.forEach((key) => this.adminLoginAttempts.delete(key));
   }
 
   async refresh(dto: RefreshTokenDto) {

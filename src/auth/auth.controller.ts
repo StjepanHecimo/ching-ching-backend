@@ -18,6 +18,13 @@ import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { AdminRolesGuard } from "./guards/admin-roles.guard";
 
+type RequestIpSource = {
+  headers: Record<string, string | string[] | undefined>;
+  socket: {
+    remoteAddress?: string;
+  };
+};
+
 @Controller("auth")
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
@@ -63,8 +70,8 @@ export class AuthController {
   }
 
   @Post("admin/login")
-  adminLogin(@Body() dto: LoginDto) {
-    return this.authService.adminLogin(dto);
+  adminLogin(@Body() dto: LoginDto, @Req() request: RequestIpSource) {
+    return this.authService.adminLogin(dto, getRequestIpAddress(request));
   }
 
   @Post("refresh")
@@ -83,4 +90,15 @@ export class AuthController {
   adminMe(@Req() request: AuthenticatedRequest) {
     return this.authService.me(request.user.userId);
   }
+}
+
+function getRequestIpAddress(request: RequestIpSource) {
+  const forwardedFor = request.headers["x-forwarded-for"];
+  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
+    return forwardedFor.split(",")[0]?.trim();
+  }
+  if (Array.isArray(forwardedFor) && forwardedFor[0]) {
+    return forwardedFor[0].split(",")[0]?.trim();
+  }
+  return request.socket.remoteAddress;
 }
