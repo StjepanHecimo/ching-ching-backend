@@ -14,7 +14,7 @@ jobs:
   deploy:
     name: Deploy to DigitalOcean
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     env:
       DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -51,6 +51,10 @@ jobs:
           ssh -i ~/.ssh/chin_chin_deploy_key \
             -p "$DEPLOY_PORT" \
             -o IdentitiesOnly=yes \
+            -o TCPKeepAlive=yes \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -o ConnectTimeout=30 \
             "$DEPLOY_USER@$DEPLOY_HOST" \
             "DEPLOY_PATH='$DEPLOY_PATH' HEALTH_URL='$HEALTH_URL' bash -s" <<'REMOTE'
           set -euo pipefail
