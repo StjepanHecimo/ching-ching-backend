@@ -3076,6 +3076,7 @@ export class ReservationsService {
   }) {
     const allocation = await this.paymentsService.previewReservationAllocation({
       id: reservation.id,
+      venueId: reservation.venueId,
       customerId: reservation.customerId,
       customerEmail: reservation.customerEmail,
       customerPhone: reservation.customerPhone,

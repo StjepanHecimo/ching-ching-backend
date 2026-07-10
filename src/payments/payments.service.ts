@@ -376,13 +376,14 @@ export class PaymentsService {
 
   async previewReservationAllocation(reservation: {
     id: string;
+    venueId: string;
     customerId: string | null;
     customerEmail: string | null;
     customerPhone: string | null;
     feeCents: number;
   }) {
     const isNewCustomerReservation =
-      await this.isBeforeFirstCompletedCustomerVisit(reservation);
+      await this.isFirstCustomerReservationAtVenue(reservation);
     const commissionBps = isNewCustomerReservation
       ? this.firstReservationCommissionBps()
       : this.commissionBps();
@@ -1392,6 +1393,7 @@ export class PaymentsService {
 
     const allocation = await this.previewReservationAllocation({
       id: payment.reservation.id,
+      venueId: payment.reservation.venueId,
       customerId: payment.reservation.customerId,
       customerEmail: payment.reservation.customerEmail,
       customerPhone: payment.reservation.customerPhone,
@@ -1613,6 +1615,7 @@ export class PaymentsService {
 
       const allocation = await this.previewReservationAllocation({
         id: payment.reservation.id,
+        venueId: payment.reservation.venueId,
         customerId: payment.reservation.customerId,
         customerEmail: payment.reservation.customerEmail,
         customerPhone: payment.reservation.customerPhone,
@@ -2633,8 +2636,9 @@ export class PaymentsService {
     return Math.max(0, Math.min(10000, Math.round(raw)));
   }
 
-  private async isBeforeFirstCompletedCustomerVisit(reservation: {
+  private async isFirstCustomerReservationAtVenue(reservation: {
     id: string;
+    venueId: string;
     customerId: string | null;
     customerEmail: string | null;
     customerPhone: string | null;
@@ -2655,28 +2659,17 @@ export class PaymentsService {
       return false;
     }
 
-    const completedVisit = await this.prisma.reservation.findFirst({
+    const previousReservationAtVenue = await this.prisma.reservation.findFirst({
       where: {
+        venueId: reservation.venueId,
         id: { not: reservation.id },
-        AND: [
-          { OR: identityFilters },
-          {
-            OR: [
-              { checkedInAt: { not: null } },
-              { seatedAt: { not: null } },
-              {
-                status: {
-                  in: [ReservationStatus.CHECKED_IN, ReservationStatus.SEATED],
-                },
-              },
-            ],
-          },
-        ],
+        OR: identityFilters,
       },
       select: { id: true },
+      orderBy: { createdAt: "asc" },
     });
 
-    return !completedVisit;
+    return !previousReservationAtVenue;
   }
 
   private normalizedProviderStatus(
