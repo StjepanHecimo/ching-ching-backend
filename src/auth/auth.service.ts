@@ -31,6 +31,12 @@ type TokenPair = {
 };
 
 const DEFAULT_REFRESH_TOKEN_DAYS = 365;
+const ADMIN_ACCESS_TOKEN_TTL_SECONDS = 30 * 60;
+const ADMIN_PANEL_ROLES: UserRole[] = [
+  UserRole.ADMIN,
+  UserRole.ADMIN_ACCOUNTING,
+  UserRole.CHIN_CHIN_SUPPORT,
+];
 
 @Injectable()
 export class AuthService {
@@ -384,6 +390,52 @@ export class AuthService {
     };
   }
 
+  async adminLogin(dto: LoginDto) {
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    if (!user || !ADMIN_PANEL_ROLES.includes(user.role)) {
+      throw new UnauthorizedException("Invalid email or password.");
+    }
+
+    const passwordMatches = await bcrypt.compare(
+      dto.password,
+      user.passwordHash,
+    );
+
+    if (!passwordMatches) {
+      throw new UnauthorizedException("Invalid email or password.");
+    }
+
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException("Admin account is not active.");
+    }
+
+    const accessToken = await this.issueAdminAccessToken({
+      id: user.id,
+      email: user.email,
+      role: user.role,
+    });
+    const expiresAt = new Date(
+      Date.now() + ADMIN_ACCESS_TOKEN_TTL_SECONDS * 1000,
+    ).toISOString();
+
+    return {
+      accessToken,
+      expiresAt,
+      expiresInSeconds: ADMIN_ACCESS_TOKEN_TTL_SECONDS,
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+      },
+    };
+  }
+
   async refresh(dto: RefreshTokenDto) {
     const payload = await this.verifyRefreshToken(dto.refreshToken);
     const tokenHash = this.hashToken(dto.refreshToken);
@@ -504,6 +556,25 @@ export class AuthService {
     );
 
     return { accessToken, refreshToken };
+  }
+
+  private async issueAdminAccessToken(user: {
+    id: string;
+    email: string;
+    role: string;
+  }) {
+    return this.jwtService.signAsync(
+      {
+        sub: user.id,
+        email: user.email,
+        role: user.role,
+        tokenType: "admin",
+      },
+      {
+        secret: this.configService.getOrThrow<string>("JWT_ACCESS_SECRET"),
+        expiresIn: `${ADMIN_ACCESS_TOKEN_TTL_SECONDS}s`,
+      },
+    );
   }
 
   private async verifyRefreshToken(token: string) {

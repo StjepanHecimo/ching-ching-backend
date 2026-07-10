@@ -11,7 +11,10 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AuthenticatedRequest } from "../auth/authenticated-request";
+import { AdminRoles } from "../auth/decorators/admin-roles.decorator";
+import { AdminRolesGuard } from "../auth/guards/admin-roles.guard";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { UserRole } from "../../generated/prisma/enums";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailable-slots-query.dto";
@@ -130,6 +133,8 @@ export class ReservationsController {
   }
 
   @Get("preview/admin/monitoring")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   listReservationMonitoring(
     @Query("status") status?: string,
     @Query("venueId") venueId?: string,
@@ -141,6 +146,8 @@ export class ReservationsController {
   }
 
   @Post("preview/admin/:id/cancel")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
   adminCancelReservation(
     @Param("id") id: string,
     @Body() dto: DeclineReservationDto,
@@ -149,16 +156,22 @@ export class ReservationsController {
   }
 
   @Delete("preview/admin/:id")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
   adminDeleteReservation(@Param("id") id: string) {
     return this.reservationsService.adminDeleteReservation(id);
   }
 
   @Post("preview/admin/:id/customer-check-in")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
   adminCustomerCheckInReservation(@Param("id") id: string) {
     return this.reservationsService.adminCustomerCheckInReservation(id);
   }
 
   @Post("preview/admin/:id/venue-check-in")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
   adminVenueCheckInReservation(@Param("id") id: string) {
     return this.reservationsService.adminVenueCheckInReservation(id);
   }

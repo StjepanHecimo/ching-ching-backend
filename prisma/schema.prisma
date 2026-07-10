@@ -17,6 +17,8 @@ enum UserRole {
   VENUE_OWNER
   STAFF
   ADMIN
+  ADMIN_ACCOUNTING
+  CHIN_CHIN_SUPPORT
 }
 
 enum UserStatus {
@@ -277,17 +279,17 @@ model Venue {
   createdAt                     DateTime  @default(now())
   updatedAt                     DateTime  @updatedAt
 
-  owner                User                      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  spaceLayoutProjects  SpaceLayoutProject[]
-  documentRequests     VenueDocumentRequest[]
-  reservations         Reservation[]
-  chinChinPanel        VenueChinChinPanel?
-  reservationPenalties VenueReservationPenalty[]
-  reservationPayments  ReservationPayment[]
-  refundRequests       VenueRefundRequest[]
+  owner                  User                      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  spaceLayoutProjects    SpaceLayoutProject[]
+  documentRequests       VenueDocumentRequest[]
+  reservations           Reservation[]
+  chinChinPanel          VenueChinChinPanel?
+  reservationPenalties   VenueReservationPenalty[]
+  reservationPayments    ReservationPayment[]
+  refundRequests         VenueRefundRequest[]
   customerProblemReports CustomerProblemReport[]
-  ledgerEntries        LedgerEntry[]
-  payoutBatches        VenuePayoutBatch[]
+  ledgerEntries          LedgerEntry[]
+  payoutBatches          VenuePayoutBatch[]
 
   @@index([ownerId])
   @@map("venues")
@@ -376,11 +378,11 @@ model Reservation {
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
 
-  venue         Venue                @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  customer      User?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  payments      ReservationPayment[]
-  ledgerEntries LedgerEntry[]
-  refundRequests VenueRefundRequest[]
+  venue                  Venue                   @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer               User?                   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  payments               ReservationPayment[]
+  ledgerEntries          LedgerEntry[]
+  refundRequests         VenueRefundRequest[]
   customerProblemReports CustomerProblemReport[]
 
   @@index([venueId])
@@ -419,12 +421,12 @@ model ReservationPayment {
   createdAt                 DateTime                 @default(now())
   updatedAt                 DateTime                 @updatedAt
 
-  reservation   Reservation            @relation(fields: [reservationId], references: [id], onDelete: Cascade)
-  venue         Venue                  @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  customer      User?                  @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  paymentMethod CustomerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-  ledgerEntries LedgerEntry[]
-  refundRequests VenueRefundRequest[]
+  reservation            Reservation             @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  venue                  Venue                   @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer               User?                   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  paymentMethod          CustomerPaymentMethod?  @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  ledgerEntries          LedgerEntry[]
+  refundRequests         VenueRefundRequest[]
   customerProblemReports CustomerProblemReport[]
 
   @@index([reservationId])
@@ -494,19 +496,19 @@ model LedgerEntry {
 }
 
 model VenueRefundRequest {
-  id                 String                   @id @default(uuid())
-  reservationId      String
-  paymentId          String?
-  venueId            String
-  requestedByOwnerId String?
-  status             VenueRefundRequestStatus @default(PENDING)
-  problemDescription String
+  id                    String                   @id @default(uuid())
+  reservationId         String
+  paymentId             String?
+  venueId               String
+  requestedByOwnerId    String?
+  status                VenueRefundRequestStatus @default(PENDING)
+  problemDescription    String
   resolutionAmountCents Int?
-  resolutionCurrency String?
-  adminNotes         String?
-  resolvedAt         DateTime?
-  createdAt          DateTime                 @default(now())
-  updatedAt          DateTime                 @updatedAt
+  resolutionCurrency    String?
+  adminNotes            String?
+  resolvedAt            DateTime?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
 
   reservation      Reservation         @relation(fields: [reservationId], references: [id], onDelete: Cascade)
   payment          ReservationPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
@@ -522,20 +524,20 @@ model VenueRefundRequest {
 }
 
 model CustomerProblemReport {
-  id                 String                      @id @default(uuid())
-  reservationId      String
-  paymentId          String?
-  venueId            String
-  customerId         String?
-  status             CustomerProblemReportStatus @default(PENDING)
-  problemDescription String
-  photo              Json
+  id                    String                      @id @default(uuid())
+  reservationId         String
+  paymentId             String?
+  venueId               String
+  customerId            String?
+  status                CustomerProblemReportStatus @default(PENDING)
+  problemDescription    String
+  photo                 Json
   resolutionAmountCents Int?
-  resolutionCurrency String?
-  adminNotes         String?
-  resolvedAt         DateTime?
-  createdAt          DateTime                    @default(now())
-  updatedAt          DateTime                    @updatedAt
+  resolutionCurrency    String?
+  adminNotes            String?
+  resolvedAt            DateTime?
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
 
   reservation Reservation         @relation(fields: [reservationId], references: [id], onDelete: Cascade)
   payment     ReservationPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)

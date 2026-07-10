@@ -16,6 +16,7 @@ import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
+import { AdminRolesGuard } from "./guards/admin-roles.guard";
 
 @Controller("auth")
 export class AuthController {
@@ -61,6 +62,11 @@ export class AuthController {
     return this.authService.login(dto);
   }
 
+  @Post("admin/login")
+  adminLogin(@Body() dto: LoginDto) {
+    return this.authService.adminLogin(dto);
+  }
+
   @Post("refresh")
   refresh(@Body() dto: RefreshTokenDto) {
     return this.authService.refresh(dto);
@@ -69,6 +75,12 @@ export class AuthController {
   @Get("me")
   @UseGuards(JwtAuthGuard)
   me(@Req() request: AuthenticatedRequest) {
+    return this.authService.me(request.user.userId);
+  }
+
+  @Get("admin/me")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  adminMe(@Req() request: AuthenticatedRequest) {
     return this.authService.me(request.user.userId);
   }
 }

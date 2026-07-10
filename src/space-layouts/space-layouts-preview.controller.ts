@@ -1,4 +1,9 @@
 import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
+import { UseGuards } from "@nestjs/common";
+import { UserRole } from "../../generated/prisma/enums";
+import { AdminRoles } from "../auth/decorators/admin-roles.decorator";
+import { AdminRolesGuard } from "../auth/guards/admin-roles.guard";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
 import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
 import { RequestTableAdditionPreviewDto } from "./dto/request-table-addition-preview.dto";
@@ -33,11 +38,15 @@ export class SpaceLayoutsPreviewController {
   }
 
   @Get("preview/review-queue")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   reviewQueuePreview() {
     return this.spaceLayoutsService.listReviewQueuePreview();
   }
 
   @Get("preview/admin/venues")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   adminVenuesPreview() {
     return this.spaceLayoutsService.listAdminVenuesPreview();
   }
@@ -59,6 +68,8 @@ export class SpaceLayoutsPreviewController {
   }
 
   @Patch("preview/projects/:id/approve-adjusted-layout")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   approveAdjustedLayoutPreview(
     @Param("id") id: string,
     @Body() dto: ApproveAdjustedLayoutPreviewDto,

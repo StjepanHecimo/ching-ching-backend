@@ -13,7 +13,10 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { AuthenticatedRequest } from "../auth/authenticated-request";
+import { AdminRoles } from "../auth/decorators/admin-roles.decorator";
+import { AdminRolesGuard } from "../auth/guards/admin-roles.guard";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
+import { UserRole } from "../../generated/prisma/enums";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
 import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
@@ -146,16 +149,26 @@ export class PaymentsController {
   }
 
   @Get("preview/admin/transactions")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(
+    UserRole.ADMIN,
+    UserRole.ADMIN_ACCOUNTING,
+    UserRole.CHIN_CHIN_SUPPORT,
+  )
   listAdminPaymentTransactions() {
     return this.paymentsService.listAdminPaymentTransactions();
   }
 
   @Get("preview/admin/problem-reports")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   listAdminVenueProblemReports() {
     return this.paymentsService.listAdminVenueProblemReports();
   }
 
   @Patch("preview/admin/problem-reports/:requestId/response")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   sendVenueProblemReportResponse(
     @Param("requestId") requestId: string,
     @Body() dto: ResolveVenueProblemReportDto,
@@ -167,6 +180,8 @@ export class PaymentsController {
   }
 
   @Patch("preview/admin/problem-reports/:requestId/refunded-by-chin-chin")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   markVenueProblemReportRefundedByChinChin(
     @Param("requestId") requestId: string,
     @Body() dto: ResolveVenueProblemReportDto,
@@ -178,11 +193,15 @@ export class PaymentsController {
   }
 
   @Get("preview/admin/customer-problem-reports")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   listAdminCustomerProblemReports() {
     return this.paymentsService.listAdminCustomerProblemReports();
   }
 
   @Patch("preview/admin/customer-problem-reports/:requestId/response")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   sendCustomerProblemReportResponse(
     @Param("requestId") requestId: string,
     @Body() dto: ResolveVenueProblemReportDto,
@@ -194,11 +213,15 @@ export class PaymentsController {
   }
 
   @Patch("preview/admin/customer-problem-reports/:requestId/resolve")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   markCustomerProblemReportResolved(@Param("requestId") requestId: string) {
     return this.paymentsService.markCustomerProblemReportResolved(requestId);
   }
 
   @Post("preview/admin/reservations/:reservationId/refund")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   adminManualRefund(
     @Param("reservationId") reservationId: string,
     @Body() dto: AdminManualRefundDto,
@@ -220,6 +243,8 @@ export class PaymentsController {
   }
 
   @Post("preview/admin/ledger/backfill-captured-payments")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
   backfillCapturedPaymentLedger() {
     return this.paymentsService.backfillCapturedPaymentLedger();
   }

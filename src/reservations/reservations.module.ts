@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
+import { AdminRolesGuard } from "../auth/guards/admin-roles.guard";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { DeviceTokensModule } from "../device-tokens/device-tokens.module";
 import { EmailModule } from "../email/email.module";
@@ -17,6 +18,6 @@ import { ReservationsService } from "./reservations.service";
     EmailModule,
   ],
   controllers: [ReservationsController],
-  providers: [ReservationsService, JwtAuthGuard],
+  providers: [ReservationsService, JwtAuthGuard, AdminRolesGuard],
 })
 export class ReservationsModule {}

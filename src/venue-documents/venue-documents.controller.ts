@@ -1,4 +1,16 @@
-import { Body, Controller, Get, Param, Patch, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Patch,
+  Post,
+  UseGuards,
+} from "@nestjs/common";
+import { UserRole } from "../../generated/prisma/enums";
+import { AdminRoles } from "../auth/decorators/admin-roles.decorator";
+import { AdminRolesGuard } from "../auth/guards/admin-roles.guard";
+import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ReviewVenueDocumentsDto } from "./dto/review-venue-documents.dto";
 import { SubmitVenueDocumentsDto } from "./dto/submit-venue-documents.dto";
 import { VenueDocumentsService } from "./venue-documents.service";
@@ -21,17 +33,29 @@ export class VenueDocumentsController {
   }
 
   @Get("preview/review-queue")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
   getReviewQueue() {
     return this.venueDocumentsService.getReviewQueue();
   }
 
   @Patch("preview/requests/:id/approve")
-  approveRequest(@Param("id") id: string, @Body() dto: ReviewVenueDocumentsDto) {
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
+  approveRequest(
+    @Param("id") id: string,
+    @Body() dto: ReviewVenueDocumentsDto,
+  ) {
     return this.venueDocumentsService.approveRequest(id, dto);
   }
 
   @Patch("preview/requests/:id/request-changes")
-  requestChanges(@Param("id") id: string, @Body() dto: ReviewVenueDocumentsDto) {
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
+  requestChanges(
+    @Param("id") id: string,
+    @Body() dto: ReviewVenueDocumentsDto,
+  ) {
     return this.venueDocumentsService.requestChanges(id, dto);
   }
 }
