@@ -93,6 +93,8 @@ const LIVE_RADIUS_METERS = 1000;
 const ARRIVAL_GRACE_MINUTES = 15;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const LIVE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 10;
+const ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES = 4 * 60;
+const ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 60;
 const RESERVATION_WINDOW_MIN_START_MINUTES = 12 * 60;
 const RESERVATION_WINDOW_MAX_END_MINUTES = 23 * 60;
 const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
@@ -911,7 +913,7 @@ export class ReservationsService {
       throw new BadRequestException(
         refreshed.type === ReservationType.LIVE
           ? "Live customer check-in is not open yet."
-          : "Customer check-in opens one hour before the reservation.",
+          : "Customer check-in opens four hours before the reservation and stays open for one hour.",
       );
     }
 
@@ -2009,11 +2011,20 @@ export class ReservationsService {
   }
 
   private customerCheckInOpensAt(startAt: Date) {
-    return new Date(startAt.getTime() - 60 * 60 * 1000);
+    return new Date(
+      startAt.getTime() -
+        ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES * 60 * 1000,
+    );
   }
 
   private customerCheckInClosesAt(startAt: Date) {
-    return startAt;
+    return new Date(
+      startAt.getTime() -
+        (ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES -
+          ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES) *
+          60 *
+          1000,
+    );
   }
 
   private customerCheckInWindowFor(startAt: Date, referenceAt: Date) {
