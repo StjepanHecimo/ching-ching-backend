@@ -206,6 +206,7 @@ model User {
   ledgerEntries           LedgerEntry[]
   venueRefundRequests     VenueRefundRequest[]
   customerProblemReports  CustomerProblemReport[]
+  paymentRefundEvents     ReservationPaymentRefund[]
   devicePushTokens        DevicePushToken[]
   pushNotificationLogs    PushNotificationLog[]
 
@@ -279,7 +280,7 @@ model Venue {
   createdAt                     DateTime  @default(now())
   updatedAt                     DateTime  @updatedAt
 
-  owner                  User                      @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner                  User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   spaceLayoutProjects    SpaceLayoutProject[]
   documentRequests       VenueDocumentRequest[]
   reservations           Reservation[]
@@ -289,6 +290,7 @@ model Venue {
   refundRequests         VenueRefundRequest[]
   customerProblemReports CustomerProblemReport[]
   ledgerEntries          LedgerEntry[]
+  paymentRefundEvents    ReservationPaymentRefund[]
   payoutBatches          VenuePayoutBatch[]
 
   @@index([ownerId])
@@ -378,12 +380,13 @@ model Reservation {
   createdAt             DateTime          @default(now())
   updatedAt             DateTime          @updatedAt
 
-  venue                  Venue                   @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  customer               User?                   @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  venue                  Venue                      @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer               User?                      @relation(fields: [customerId], references: [id], onDelete: SetNull)
   payments               ReservationPayment[]
   ledgerEntries          LedgerEntry[]
   refundRequests         VenueRefundRequest[]
   customerProblemReports CustomerProblemReport[]
+  refundEvents           ReservationPaymentRefund[]
 
   @@index([venueId])
   @@index([customerId])
@@ -421,13 +424,14 @@ model ReservationPayment {
   createdAt                 DateTime                 @default(now())
   updatedAt                 DateTime                 @updatedAt
 
-  reservation            Reservation             @relation(fields: [reservationId], references: [id], onDelete: Cascade)
-  venue                  Venue                   @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  customer               User?                   @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  paymentMethod          CustomerPaymentMethod?  @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-  ledgerEntries          LedgerEntry[]
-  refundRequests         VenueRefundRequest[]
-  customerProblemReports CustomerProblemReport[]
+  reservation               Reservation                @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  venue                     Venue                      @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer                  User?                      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  paymentMethod             CustomerPaymentMethod?     @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  ledgerEntries             LedgerEntry[]
+  refundRequests            VenueRefundRequest[]
+  customerProblemReports    CustomerProblemReport[]
+  reservationPaymentRefunds ReservationPaymentRefund[]
 
   @@index([reservationId])
   @@index([venueId])
@@ -436,6 +440,35 @@ model ReservationPayment {
   @@index([status])
   @@index([providerPaymentId])
   @@map("reservation_payments")
+}
+
+model ReservationPaymentRefund {
+  id                          String          @id @default(uuid())
+  reservationId               String
+  paymentId                   String
+  venueId                     String
+  customerId                  String?
+  provider                    PaymentProvider @default(WORLDLINE)
+  amountCents                 Int
+  currency                    String          @default("EUR")
+  reason                      String
+  providerPaymentId           String?
+  providerRefundTransactionId String?
+  providerStatus              String?
+  rawProviderData             Json?
+  createdAt                   DateTime        @default(now())
+
+  payment     ReservationPayment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  reservation Reservation        @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  venue       Venue              @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer    User?              @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([reservationId])
+  @@index([paymentId])
+  @@index([venueId])
+  @@index([providerPaymentId])
+  @@index([providerRefundTransactionId])
+  @@map("reservation_payment_refunds")
 }
 
 model CustomerPaymentMethod {

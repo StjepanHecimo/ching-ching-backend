@@ -2245,10 +2245,17 @@ export class ReservationsService {
       select: {
         id: true,
         type: true,
+        tableLabel: true,
         feeCents: true,
+        refundCents: true,
+        currency: true,
+        customerEmail: true,
         customerCheckedInAt: true,
         checkedInAt: true,
         seatedAt: true,
+        venue: {
+          select: { name: true },
+        },
       },
     });
 
@@ -2270,13 +2277,18 @@ export class ReservationsService {
     );
 
     await Promise.all(
-      expiredReservations.map((reservation) =>
-        this.paymentsService.refundCapturedReservation(
+      expiredReservations.map(async (reservation) => {
+        const refundCents = this.noShowRefundCents(reservation);
+        await this.paymentsService.refundCapturedReservation(
           reservation.id,
-          this.noShowRefundCents(reservation),
+          refundCents,
           "Reservation was released as no-show.",
-        ),
-      ),
+        );
+        await this.notifyCustomerNoShowRefundByEmail({
+          ...reservation,
+          refundCents,
+        });
+      }),
     );
   }
 
@@ -2816,6 +2828,36 @@ export class ReservationsService {
     } catch (error) {
       this.logger.warn(
         `Reservation ${reservation.id} refund email failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async notifyCustomerNoShowRefundByEmail(reservation: {
+    id: string;
+    customerEmail: string | null;
+    tableLabel: string | null;
+    refundCents: number;
+    currency: string;
+    venue: { name: string };
+  }) {
+    const customerEmail = reservation.customerEmail?.trim().toLowerCase();
+    if (!customerEmail || reservation.refundCents <= 0) {
+      return;
+    }
+
+    try {
+      await this.emailService.sendReservationRefundEmail({
+        to: customerEmail,
+        venueName: reservation.venue.name,
+        tableLabel: reservation.tableLabel,
+        amountCents: reservation.refundCents,
+        currency: reservation.currency,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Reservation ${reservation.id} no-show refund email failed: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

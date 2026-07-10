@@ -1524,6 +1524,11 @@ export class PaymentsService {
       payment.currency,
       payment.rawProviderData,
     );
+    const rawRefundProviderData = providerResult.rawProviderData;
+    const providerRefundTransactionId =
+      this.stringFrom(rawRefundProviderData.refundTransactionId) ??
+      providerResult.providerPaymentId;
+    const providerRefundStatus = this.stringFrom(rawRefundProviderData.status);
     const existingRawProviderData = this.recordFromJson(
       payment.rawProviderData,
     );
@@ -1542,8 +1547,25 @@ export class PaymentsService {
           refundedCents,
           rawProviderData: {
             ...existingRawProviderData,
-            refund: providerResult.rawProviderData,
+            refund: rawRefundProviderData,
           } as Prisma.InputJsonValue,
+        },
+      });
+
+      await tx.reservationPaymentRefund.create({
+        data: {
+          reservationId: payment.reservationId,
+          paymentId: payment.id,
+          venueId: payment.venueId,
+          customerId: payment.customerId,
+          provider: payment.provider,
+          amountCents: nextRefundCents,
+          currency: payment.currency,
+          reason,
+          providerPaymentId: payment.providerPaymentId ?? payment.id,
+          providerRefundTransactionId,
+          providerStatus: providerRefundStatus,
+          rawProviderData: rawRefundProviderData as Prisma.InputJsonValue,
         },
       });
 
