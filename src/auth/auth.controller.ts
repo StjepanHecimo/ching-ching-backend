@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  Patch,
   Post,
   Query,
   Req,
@@ -14,6 +15,7 @@ import { RefreshTokenDto } from "./dto/refresh-token.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
+import { UpdateCustomerProfileDto } from "./dto/update-customer-profile.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { AdminRolesGuard } from "./guards/admin-roles.guard";
@@ -83,6 +85,15 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   me(@Req() request: AuthenticatedRequest) {
     return this.authService.me(request.user.userId);
+  }
+
+  @Patch("me")
+  @UseGuards(JwtAuthGuard)
+  updateMe(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: UpdateCustomerProfileDto,
+  ) {
+    return this.authService.updateCustomerProfile(request.user.userId, dto);
   }
 
   @Get("admin/me")
