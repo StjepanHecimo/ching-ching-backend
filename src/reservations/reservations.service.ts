@@ -114,6 +114,51 @@ export class ReservationsService {
     private readonly emailService: EmailService,
   ) {}
 
+  async runScheduledReservationCleanup() {
+    const now = new Date();
+    const latestRelevantAdvanceStart = new Date(
+      now.getTime() +
+        ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES * 60 * 1000,
+    );
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        status: {
+          in: [
+            ReservationStatus.CONFIRMED,
+            ReservationStatus.RESERVED,
+            ReservationStatus.CHECK_IN_PENDING,
+            ReservationStatus.PENDING_VENUE_CONFIRMATION,
+            ReservationStatus.CHECKED_IN,
+            ReservationStatus.SEATED,
+          ],
+        },
+        OR: [
+          { confirmationExpiresAt: { lt: now } },
+          { arrivalDeadlineAt: { lt: now } },
+          { timeSlotEnd: { lt: now } },
+          {
+            type: ReservationType.ADVANCE,
+            timeSlotStart: { lte: latestRelevantAdvanceStart },
+          },
+        ],
+      },
+      select: { venueId: true },
+      distinct: ["venueId"],
+      take: 100,
+    });
+
+    if (!reservations.length) {
+      return 0;
+    }
+
+    await Promise.all(
+      reservations.map((reservation) =>
+        this.releaseExpiredReservationLocks(reservation.venueId),
+      ),
+    );
+    return reservations.length;
+  }
+
   async getVenueAvailability(
     venueId: string,
     query: ReservationAvailabilityQueryDto,
@@ -815,6 +860,7 @@ export class ReservationsService {
 
     if (updated.type === ReservationType.ADVANCE) {
       await this.notifyCustomerReservationConfirmedByEmail(updated);
+      await this.notifyDueCustomerCheckInReminders(updated.venueId);
     }
 
     return this.serializeReservation(updated);
@@ -2175,9 +2221,69 @@ export class ReservationsService {
   }
 
   private async releaseExpiredReservationLocks(venueId: string) {
+    await this.notifyDueCustomerCheckInReminders(venueId);
     await this.releaseExpiredVenueConfirmationRequests(venueId);
     await this.releaseExpiredArrivalLocks(venueId);
     await this.releaseExpiredNightLocks(venueId);
+  }
+
+  private async notifyDueCustomerCheckInReminders(venueId: string) {
+    const now = new Date();
+    const latestRelevantStart = new Date(
+      now.getTime() +
+        ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES * 60 * 1000,
+    );
+    const candidates = await this.prisma.reservation.findMany({
+      where: {
+        venueId,
+        type: ReservationType.ADVANCE,
+        status: {
+          in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
+        },
+        customerCheckedInAt: null,
+        checkInReminderSentAt: null,
+        timeSlotStart: {
+          gte: now,
+          lte: latestRelevantStart,
+        },
+      },
+      include: { venue: true },
+      take: 100,
+      orderBy: { timeSlotStart: "asc" },
+    });
+
+    for (const reservation of candidates) {
+      const { opensAt, closesAt } =
+        this.effectiveCustomerCheckInWindow(reservation);
+      if (
+        now.getTime() < opensAt.getTime() ||
+        now.getTime() > closesAt.getTime()
+      ) {
+        continue;
+      }
+
+      const locked = await this.prisma.reservation.updateMany({
+        where: {
+          id: reservation.id,
+          checkInReminderSentAt: null,
+          customerCheckedInAt: null,
+          status: {
+            in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
+          },
+        },
+        data: { checkInReminderSentAt: now },
+      });
+
+      if (locked.count !== 1) {
+        continue;
+      }
+
+      await this.notifyCustomer(reservation, {
+        title: "Potvrdi dolazak",
+        body: `Nemoj zaboraviti napraviti check-in za rezervaciju u ${reservation.venue.name}.`,
+        type: "reservation_check_in_reminder",
+      });
+    }
   }
 
   private async releaseExpiredVenueConfirmationRequests(venueId: string) {
@@ -2224,7 +2330,11 @@ export class ReservationsService {
 
   private async releaseExpiredArrivalLocks(venueId: string) {
     const now = new Date();
-    const expiredReservations = await this.prisma.reservation.findMany({
+    const latestRelevantAdvanceStart = new Date(
+      now.getTime() +
+        ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES * 60 * 1000,
+    );
+    const candidateReservations = await this.prisma.reservation.findMany({
       where: {
         venueId,
         OR: [
@@ -2232,6 +2342,10 @@ export class ReservationsService {
           {
             arrivalDeadlineAt: null,
             timeSlotEnd: { lt: now },
+          },
+          {
+            type: ReservationType.ADVANCE,
+            timeSlotStart: { lte: latestRelevantAdvanceStart },
           },
         ],
         status: {
@@ -2246,6 +2360,11 @@ export class ReservationsService {
         id: true,
         type: true,
         tableLabel: true,
+        timeSlotStart: true,
+        timeSlotEnd: true,
+        checkInOpensAt: true,
+        checkInClosesAt: true,
+        arrivalDeadlineAt: true,
         feeCents: true,
         refundCents: true,
         currency: true,
@@ -2253,10 +2372,33 @@ export class ReservationsService {
         customerCheckedInAt: true,
         checkedInAt: true,
         seatedAt: true,
+        createdAt: true,
         venue: {
           select: { name: true },
         },
       },
+    });
+    const expiredReservations = candidateReservations.filter((reservation) => {
+      if (
+        reservation.customerCheckedInAt ||
+        reservation.checkedInAt ||
+        reservation.seatedAt
+      ) {
+        return false;
+      }
+
+      if (reservation.type === ReservationType.ADVANCE) {
+        return (
+          this.effectiveCustomerCheckInWindow(reservation).closesAt.getTime() <=
+          now.getTime()
+        );
+      }
+
+      if (reservation.arrivalDeadlineAt) {
+        return reservation.arrivalDeadlineAt.getTime() < now.getTime();
+      }
+
+      return reservation.timeSlotEnd.getTime() < now.getTime();
     });
 
     if (!expiredReservations.length) {
@@ -2964,6 +3106,7 @@ export class ReservationsService {
     timeSlotEnd: Date;
     checkInOpensAt: Date | null;
     checkInClosesAt: Date | null;
+    checkInReminderSentAt?: Date | null;
     arrivalDeadlineAt: Date | null;
     confirmationExpiresAt: Date | null;
     confirmedAt: Date | null;
@@ -3011,6 +3154,7 @@ export class ReservationsService {
       checkInOpensAt: this.effectiveCustomerCheckInWindow(reservation).opensAt,
       checkInClosesAt:
         this.effectiveCustomerCheckInWindow(reservation).closesAt,
+      checkInReminderSentAt: reservation.checkInReminderSentAt ?? null,
       arrivalDeadlineAt: reservation.arrivalDeadlineAt,
       confirmationExpiresAt: reservation.confirmationExpiresAt,
       confirmedAt: reservation.confirmedAt,

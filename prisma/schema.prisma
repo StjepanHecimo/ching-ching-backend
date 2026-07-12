@@ -357,6 +357,7 @@ model Reservation {
   timeSlotEnd           DateTime
   checkInOpensAt        DateTime?
   checkInClosesAt       DateTime?
+  checkInReminderSentAt DateTime?
   arrivalDeadlineAt     DateTime?
   confirmationExpiresAt DateTime?
   confirmedAt           DateTime?

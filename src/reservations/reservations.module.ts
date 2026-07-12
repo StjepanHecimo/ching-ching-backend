@@ -6,6 +6,7 @@ import { DeviceTokensModule } from "../device-tokens/device-tokens.module";
 import { EmailModule } from "../email/email.module";
 import { PaymentsModule } from "../payments/payments.module";
 import { PrismaModule } from "../prisma/prisma.module";
+import { ReservationCleanupScheduler } from "./reservation-cleanup.scheduler";
 import { ReservationsController } from "./reservations.controller";
 import { ReservationsService } from "./reservations.service";
 
@@ -18,6 +19,11 @@ import { ReservationsService } from "./reservations.service";
     EmailModule,
   ],
   controllers: [ReservationsController],
-  providers: [ReservationsService, JwtAuthGuard, AdminRolesGuard],
+  providers: [
+    ReservationsService,
+    ReservationCleanupScheduler,
+    JwtAuthGuard,
+    AdminRolesGuard,
+  ],
 })
 export class ReservationsModule {}
