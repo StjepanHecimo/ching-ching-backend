@@ -19,6 +19,7 @@ import { RefreshTokenDto } from "./dto/refresh-token.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
+import { UpdateCustomerProfileDto } from "./dto/update-customer-profile.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
 
 type RefreshTokenPayload = {
@@ -461,10 +462,9 @@ export class AuthService {
   }
 
   private getAdminLoginAttemptKeys(email: string, ipAddress?: string) {
-    return [
-      `email:${email}`,
-      ipAddress ? `ip:${ipAddress}` : null,
-    ].filter((key): key is string => Boolean(key));
+    return [`email:${email}`, ipAddress ? `ip:${ipAddress}` : null].filter(
+      (key): key is string => Boolean(key),
+    );
   }
 
   private assertAdminLoginAllowed(keys: string[]) {
@@ -598,6 +598,78 @@ export class AuthService {
         city: venue.city,
         country: venue.country,
       })),
+    };
+  }
+
+  async updateCustomerProfile(userId: string, dto: UpdateCustomerProfileDto) {
+    const normalizedEmail = dto.email.trim().toLowerCase();
+    const phoneNumber = dto.phoneNumber.trim();
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, role: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException("User no longer exists.");
+    }
+    if (user.role !== UserRole.CUSTOMER) {
+      throw new BadRequestException(
+        "Only customer accounts can update customer profile.",
+      );
+    }
+
+    const emailChanged = normalizedEmail !== user.email.toLowerCase();
+    if (emailChanged) {
+      const existingUser = await this.prisma.user.findUnique({
+        where: { email: normalizedEmail },
+        select: { id: true },
+      });
+      if (existingUser && existingUser.id !== user.id) {
+        throw new ConflictException("Email is already registered.");
+      }
+    }
+
+    let verificationToken: string | null = null;
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          email: normalizedEmail,
+          phoneNumber,
+          ...(emailChanged ? { emailVerifiedAt: null } : {}),
+        },
+      });
+
+      if (emailChanged) {
+        verificationToken = this.createVerificationToken();
+        await tx.emailVerificationToken.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: new Date() },
+        });
+        await tx.emailVerificationToken.create({
+          data: {
+            userId: user.id,
+            tokenHash: this.hashToken(verificationToken),
+            expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+          },
+        });
+      }
+    });
+
+    if (verificationToken) {
+      await this.sendVerificationEmail(
+        normalizedEmail,
+        verificationToken,
+        UserRole.CUSTOMER,
+      );
+    }
+
+    return {
+      user: await this.me(user.id),
+      emailVerificationRequired: emailChanged,
+      message: emailChanged
+        ? "Profile updated. Email verification is required for the new email."
+        : "Profile updated.",
     };
   }
 
