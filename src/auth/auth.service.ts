@@ -9,18 +9,21 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
 import bcrypt from "bcrypt";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomInt } from "node:crypto";
 import { Prisma } from "../../generated/prisma/client";
 import { UserRole, UserStatus } from "../../generated/prisma/enums";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { SmsService } from "../sms/sms.service";
 import { LoginDto } from "./dto/login.dto";
 import { RefreshTokenDto } from "./dto/refresh-token.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
+import { RequestPhoneChangeDto } from "./dto/request-phone-change.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
 import { UpdateCustomerProfileDto } from "./dto/update-customer-profile.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
+import { VerifyPhoneChangeDto } from "./dto/verify-phone-change.dto";
 
 type RefreshTokenPayload = {
   sub: string;
@@ -38,6 +41,8 @@ const ADMIN_ACCESS_TOKEN_TTL_SECONDS = 30 * 60;
 const ADMIN_LOGIN_ATTEMPT_LIMIT = 5;
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000;
+const PHONE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
+const PHONE_VERIFICATION_ATTEMPT_LIMIT = 5;
 const ADMIN_PANEL_ROLES: UserRole[] = [
   UserRole.ADMIN,
   UserRole.ADMIN_ACCOUNTING,
@@ -59,6 +64,7 @@ export class AuthService {
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
+    private readonly smsService: SmsService,
   ) {}
 
   async registerVenueOwner(dto: RegisterVenueOwnerDto) {
@@ -603,12 +609,10 @@ export class AuthService {
 
   async updateCustomerProfile(userId: string, dto: UpdateCustomerProfileDto) {
     const normalizedEmail = dto.email?.trim().toLowerCase();
-    const phoneNumber = dto.phoneNumber?.trim();
     const firstName = dto.firstName?.trim();
     const lastName = dto.lastName?.trim();
     if (
       normalizedEmail === undefined &&
-      phoneNumber === undefined &&
       firstName === undefined &&
       lastName === undefined
     ) {
@@ -650,7 +654,6 @@ export class AuthService {
           ...(firstName !== undefined ? { firstName } : {}),
           ...(lastName !== undefined ? { lastName } : {}),
           ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
-          ...(phoneNumber !== undefined ? { phoneNumber } : {}),
           ...(emailChanged ? { emailVerifiedAt: null } : {}),
         },
       });
@@ -685,6 +688,110 @@ export class AuthService {
       message: emailChanged
         ? "Profile updated. Email verification is required for the new email."
         : "Profile updated.",
+    };
+  }
+
+  async requestCustomerPhoneChange(userId: string, dto: RequestPhoneChangeDto) {
+    const phoneNumber = dto.phoneNumber.trim();
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException("User no longer exists.");
+    }
+    if (user.role !== UserRole.CUSTOMER) {
+      throw new BadRequestException(
+        "Only customer accounts can update customer phone.",
+      );
+    }
+
+    const code = this.createPhoneVerificationCode();
+    const codeHash = this.hashPhoneVerificationCode(user.id, phoneNumber, code);
+    const expiresAt = new Date(Date.now() + PHONE_VERIFICATION_TTL_MS);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.phoneVerificationCode.updateMany({
+        where: { userId: user.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      await tx.phoneVerificationCode.create({
+        data: {
+          userId: user.id,
+          phoneNumber,
+          codeHash,
+          expiresAt,
+        },
+      });
+    });
+
+    const smsResult = await this.smsService.sendVerificationCode({
+      to: phoneNumber,
+      code,
+    });
+
+    return {
+      message: "Phone verification code was sent.",
+      expiresAt,
+      devVerificationCode: smsResult.delivered ? undefined : code,
+    };
+  }
+
+  async verifyCustomerPhoneChange(userId: string, dto: VerifyPhoneChangeDto) {
+    const phoneNumber = dto.phoneNumber.trim();
+    const code = dto.code.trim();
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException("User no longer exists.");
+    }
+    if (user.role !== UserRole.CUSTOMER) {
+      throw new BadRequestException(
+        "Only customer accounts can update customer phone.",
+      );
+    }
+
+    const storedCode = await this.prisma.phoneVerificationCode.findFirst({
+      where: { userId: user.id, phoneNumber, usedAt: null },
+      orderBy: { createdAt: "desc" },
+    });
+
+    if (!storedCode || storedCode.usedAt) {
+      throw new BadRequestException("Verification code is invalid.");
+    }
+    if (storedCode.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException("Verification code has expired.");
+    }
+    if (storedCode.attempts >= PHONE_VERIFICATION_ATTEMPT_LIMIT) {
+      throw new BadRequestException("Verification code has too many attempts.");
+    }
+    const codeHash = this.hashPhoneVerificationCode(user.id, phoneNumber, code);
+    if (storedCode.codeHash !== codeHash) {
+      await this.prisma.phoneVerificationCode.update({
+        where: { id: storedCode.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new BadRequestException("Verification code is invalid.");
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.phoneVerificationCode.update({
+        where: { id: storedCode.id },
+        data: { usedAt: new Date(), attempts: { increment: 1 } },
+      });
+      await tx.user.update({
+        where: { id: user.id },
+        data: { phoneNumber },
+      });
+    });
+
+    return {
+      user: await this.me(user.id),
+      message: "Phone number verified and updated.",
     };
   }
 
@@ -796,6 +903,18 @@ export class AuthService {
 
   private createVerificationToken() {
     return randomBytes(32).toString("hex");
+  }
+
+  private createPhoneVerificationCode() {
+    return randomInt(100000, 1000000).toString();
+  }
+
+  private hashPhoneVerificationCode(
+    userId: string,
+    phoneNumber: string,
+    code: string,
+  ) {
+    return this.hashToken(`${userId}:${phoneNumber}:${code}`);
   }
 
   private hashToken(token: string) {

@@ -14,9 +14,11 @@ import { LoginDto } from "./dto/login.dto";
 import { RefreshTokenDto } from "./dto/refresh-token.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
+import { RequestPhoneChangeDto } from "./dto/request-phone-change.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
 import { UpdateCustomerProfileDto } from "./dto/update-customer-profile.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
+import { VerifyPhoneChangeDto } from "./dto/verify-phone-change.dto";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { AdminRolesGuard } from "./guards/admin-roles.guard";
 
@@ -94,6 +96,27 @@ export class AuthController {
     @Body() dto: UpdateCustomerProfileDto,
   ) {
     return this.authService.updateCustomerProfile(request.user.userId, dto);
+  }
+
+  @Post("me/phone/request")
+  @UseGuards(JwtAuthGuard)
+  requestPhoneChange(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: RequestPhoneChangeDto,
+  ) {
+    return this.authService.requestCustomerPhoneChange(
+      request.user.userId,
+      dto,
+    );
+  }
+
+  @Post("me/phone/verify")
+  @UseGuards(JwtAuthGuard)
+  verifyPhoneChange(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: VerifyPhoneChangeDto,
+  ) {
+    return this.authService.verifyCustomerPhoneChange(request.user.userId, dto);
   }
 
   @Get("admin/me")
