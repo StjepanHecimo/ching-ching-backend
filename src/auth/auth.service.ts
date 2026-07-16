@@ -602,8 +602,19 @@ export class AuthService {
   }
 
   async updateCustomerProfile(userId: string, dto: UpdateCustomerProfileDto) {
-    const normalizedEmail = dto.email.trim().toLowerCase();
-    const phoneNumber = dto.phoneNumber.trim();
+    const normalizedEmail = dto.email?.trim().toLowerCase();
+    const phoneNumber = dto.phoneNumber?.trim();
+    const firstName = dto.firstName?.trim();
+    const lastName = dto.lastName?.trim();
+    if (
+      normalizedEmail === undefined &&
+      phoneNumber === undefined &&
+      firstName === undefined &&
+      lastName === undefined
+    ) {
+      throw new BadRequestException("No profile changes were provided.");
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, email: true, role: true },
@@ -618,7 +629,9 @@ export class AuthService {
       );
     }
 
-    const emailChanged = normalizedEmail !== user.email.toLowerCase();
+    const emailChanged =
+      normalizedEmail !== undefined &&
+      normalizedEmail !== user.email.toLowerCase();
     if (emailChanged) {
       const existingUser = await this.prisma.user.findUnique({
         where: { email: normalizedEmail },
@@ -634,8 +647,10 @@ export class AuthService {
       await tx.user.update({
         where: { id: user.id },
         data: {
-          email: normalizedEmail,
-          phoneNumber,
+          ...(firstName !== undefined ? { firstName } : {}),
+          ...(lastName !== undefined ? { lastName } : {}),
+          ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
+          ...(phoneNumber !== undefined ? { phoneNumber } : {}),
           ...(emailChanged ? { emailVerifiedAt: null } : {}),
         },
       });
@@ -658,7 +673,7 @@ export class AuthService {
 
     if (verificationToken) {
       await this.sendVerificationEmail(
-        normalizedEmail,
+        normalizedEmail!,
         verificationToken,
         UserRole.CUSTOMER,
       );
