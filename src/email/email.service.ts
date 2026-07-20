@@ -119,7 +119,9 @@ export class EmailService {
       html: this.reservationRefundHtml(input),
     });
 
-    this.logger.log(`Reservation refund email sent to ${input.to}`);
+    this.logger.log(
+      `Reservation refund email sent to ${input.to} from ${from}`,
+    );
   }
 
   async sendReservationConfirmedEmail(input: ReservationConfirmedEmailInput) {
@@ -155,7 +157,9 @@ export class EmailService {
       html: this.reservationConfirmedHtml(input),
     });
 
-    this.logger.log(`Reservation confirmed email sent to ${input.to}`);
+    this.logger.log(
+      `Reservation confirmed email sent to ${input.to} from ${from}`,
+    );
   }
 
   async sendVenueProblemReportResolvedEmail(
@@ -329,7 +333,7 @@ export class EmailService {
         this.configService.get<string>("SMTP_NO_REPLY_FROM_NAME") ??
           "Chin-Chin",
         this.configService.get<string>("SMTP_NO_REPLY_FROM_EMAIL") ??
-          "no-reply@chin-chin.local",
+          "no-reply@chin-chin.hr",
       )
     );
   }
