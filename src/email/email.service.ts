@@ -15,7 +15,7 @@ type ReservationRefundEmailInput = {
   tableLabel?: string | null;
   amountCents: number;
   currency?: string;
-  sender?: "INFO" | "SUPPORT";
+  sender?: "NO_REPLY" | "INFO" | "SUPPORT";
 };
 
 type ReservationConfirmedEmailInput = {
@@ -91,8 +91,7 @@ export class EmailService {
 
   async sendReservationRefundEmail(input: ReservationRefundEmailInput) {
     const transporter = this.getTransporter();
-    const from =
-      input.sender === "SUPPORT" ? this.supportFrom() : this.infoFrom();
+    const from = this.senderFrom(input.sender ?? "NO_REPLY");
 
     if (!transporter) {
       this.logReservationRefundFallback(input);
@@ -125,7 +124,7 @@ export class EmailService {
 
   async sendReservationConfirmedEmail(input: ReservationConfirmedEmailInput) {
     const transporter = this.getTransporter();
-    const from = this.infoFrom();
+    const from = this.noReplyFrom();
 
     if (!transporter) {
       this.logReservationConfirmedFallback(input);
@@ -323,6 +322,18 @@ export class EmailService {
     );
   }
 
+  private noReplyFrom() {
+    return (
+      this.configService.get<string>("EMAIL_NO_REPLY_FROM") ??
+      this.formatSender(
+        this.configService.get<string>("SMTP_NO_REPLY_FROM_NAME") ??
+          "Chin-Chin",
+        this.configService.get<string>("SMTP_NO_REPLY_FROM_EMAIL") ??
+          "no-reply@chin-chin.local",
+      )
+    );
+  }
+
   private supportFrom() {
     return (
       this.configService.get<string>("EMAIL_SUPPORT_FROM") ??
@@ -334,6 +345,16 @@ export class EmailService {
           "support@chin-chin.local",
       )
     );
+  }
+
+  private senderFrom(sender: "NO_REPLY" | "INFO" | "SUPPORT") {
+    if (sender === "SUPPORT") {
+      return this.supportFrom();
+    }
+    if (sender === "INFO") {
+      return this.infoFrom();
+    }
+    return this.noReplyFrom();
   }
 
   private formatSender(name: string, email: string) {
