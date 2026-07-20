@@ -166,6 +166,12 @@ export class SmsService {
       throw new BadGatewayException(this.infobipErrorMessage(responseText));
     }
 
+    const responseText = await response.text();
+    const status = this.infobipAcceptedMessageStatus(responseText);
+    this.logger.log(
+      `Infobip SMS accepted for ${this.maskPhone(input.to)}.${status ? ` ${status}` : ""}`,
+    );
+
     return { delivered: true, provider: "INFOBIP" as const };
   }
 
@@ -202,5 +208,33 @@ export class SmsService {
       // Keep the generic message below when Infobip returns non-JSON.
     }
     return "SMS verification message could not be sent.";
+  }
+
+  private infobipAcceptedMessageStatus(responseText: string) {
+    if (!responseText.trim()) {
+      return null;
+    }
+    try {
+      const body = JSON.parse(responseText) as {
+        messages?: Array<{
+          messageId?: unknown;
+          status?: { name?: unknown; description?: unknown };
+        }>;
+      };
+      const message = body.messages?.[0];
+      const statusName = message?.status?.name;
+      const statusDescription = message?.status?.description;
+      const messageId = message?.messageId;
+      const parts = [
+        typeof statusName === "string" ? `status=${statusName}` : null,
+        typeof statusDescription === "string"
+          ? `description=${statusDescription}`
+          : null,
+        typeof messageId === "string" ? `messageId=${messageId}` : null,
+      ].filter(Boolean);
+      return parts.length > 0 ? parts.join(" ") : null;
+    } catch {
+      return null;
+    }
   }
 }

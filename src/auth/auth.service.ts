@@ -42,6 +42,7 @@ const ADMIN_LOGIN_ATTEMPT_LIMIT = 5;
 const ADMIN_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000;
 const PHONE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
+const PHONE_VERIFICATION_RESEND_COOLDOWN_MS = 60 * 1000;
 const PHONE_VERIFICATION_ATTEMPT_LIMIT = 5;
 const ADMIN_PANEL_ROLES: UserRole[] = [
   UserRole.ADMIN,
@@ -591,6 +592,7 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       phoneNumber: user.phoneNumber,
+      phoneVerifiedAt: user.phoneVerifiedAt,
       age: user.age,
       gender: user.gender,
       role: user.role,
@@ -707,6 +709,24 @@ export class AuthService {
       );
     }
 
+    const latestCode = await this.prisma.phoneVerificationCode.findFirst({
+      where: { userId: user.id, phoneNumber, usedAt: null },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    });
+    if (latestCode) {
+      const elapsedMs = Date.now() - latestCode.createdAt.getTime();
+      if (elapsedMs < PHONE_VERIFICATION_RESEND_COOLDOWN_MS) {
+        const waitSeconds = Math.ceil(
+          (PHONE_VERIFICATION_RESEND_COOLDOWN_MS - elapsedMs) / 1000,
+        );
+        throw new HttpException(
+          `Pričekajte ${waitSeconds} sekundi prije ponovnog slanja koda.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
     const code = this.createPhoneVerificationCode();
     const codeHash = this.hashPhoneVerificationCode(user.id, phoneNumber, code);
     const expiresAt = new Date(Date.now() + PHONE_VERIFICATION_TTL_MS);
@@ -785,7 +805,7 @@ export class AuthService {
       });
       await tx.user.update({
         where: { id: user.id },
-        data: { phoneNumber },
+        data: { phoneNumber, phoneVerifiedAt: new Date() },
       });
     });
 
@@ -965,6 +985,7 @@ export class AuthService {
     firstName: string;
     lastName: string;
     phoneNumber: string | null;
+    phoneVerifiedAt?: Date | null;
     age: number | null;
     gender: string | null;
     role: string;
@@ -976,6 +997,7 @@ export class AuthService {
       firstName: user.firstName,
       lastName: user.lastName,
       phoneNumber: user.phoneNumber,
+      phoneVerifiedAt: user.phoneVerifiedAt ?? null,
       age: user.age,
       gender: user.gender,
       role: user.role,
