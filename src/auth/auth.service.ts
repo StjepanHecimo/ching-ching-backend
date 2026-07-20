@@ -144,6 +144,7 @@ export class AuthService {
     if (existingUser) {
       throw new ConflictException("Email is already registered.");
     }
+    await this.assertPhoneNumberAvailable(phoneNumber);
 
     const phoneVerification = await this.consumeRegistrationPhoneToken(
       phoneNumber,
@@ -201,6 +202,7 @@ export class AuthService {
 
   async requestRegistrationPhoneVerification(dto: RequestRegistrationPhoneDto) {
     const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
+    await this.assertPhoneNumberAvailable(phoneNumber);
     const latestCode =
       await this.prisma.registrationPhoneVerificationCode.findFirst({
         where: { phoneNumber, usedAt: null },
@@ -253,6 +255,7 @@ export class AuthService {
   async verifyRegistrationPhone(dto: VerifyRegistrationPhoneDto) {
     const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
     const code = dto.code.trim();
+    await this.assertPhoneNumberAvailable(phoneNumber);
     const storedCode =
       await this.prisma.registrationPhoneVerificationCode.findFirst({
         where: { phoneNumber, usedAt: null },
@@ -819,6 +822,7 @@ export class AuthService {
         "Only customer accounts can update customer phone.",
       );
     }
+    await this.assertPhoneNumberAvailable(phoneNumber, user.id);
 
     const latestCode = await this.prisma.phoneVerificationCode.findFirst({
       where: { userId: user.id, phoneNumber, usedAt: null },
@@ -885,6 +889,7 @@ export class AuthService {
         "Only customer accounts can update customer phone.",
       );
     }
+    await this.assertPhoneNumberAvailable(phoneNumber, user.id);
 
     const storedCode = await this.prisma.phoneVerificationCode.findFirst({
       where: { userId: user.id, phoneNumber, usedAt: null },
@@ -949,6 +954,26 @@ export class AuthService {
     }
 
     return storedToken;
+  }
+
+  private async assertPhoneNumberAvailable(
+    phoneNumber: string,
+    excludeUserId?: string,
+  ) {
+    const existingUser = await this.prisma.user.findFirst({
+      where: {
+        phoneNumber,
+        phoneVerifiedAt: { not: null },
+        ...(excludeUserId ? { id: { not: excludeUserId } } : {}),
+      },
+      select: { id: true },
+    });
+
+    if (existingUser) {
+      throw new ConflictException(
+        "Phone number is already verified on another account.",
+      );
+    }
   }
 
   private async issueTokenPair(user: {

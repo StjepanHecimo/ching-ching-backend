@@ -358,7 +358,11 @@ export class ReservationsService {
       );
     }
 
-    await this.assertSingleActiveCustomerReservationPerDay(dto, slot.startAt);
+    await this.assertSingleActiveCustomerReservationPerDay(
+      dto,
+      slot.startAt,
+      options?.customerId,
+    );
 
     const reservation = await this.prisma.reservation.create({
       data: {
@@ -1977,11 +1981,22 @@ export class ReservationsService {
   private async assertSingleActiveCustomerReservationPerDay(
     dto: CreateReservationDto,
     startAt: Date,
+    customerId?: string,
   ) {
+    const normalizedCustomerId = customerId?.trim();
     const normalizedEmail = dto.customerEmail?.trim().toLowerCase();
     const normalizedPhone = dto.customerPhone?.trim();
+    const customerFilters: Prisma.ReservationWhereInput[] = normalizedCustomerId
+      ? [
+          { customerId: normalizedCustomerId },
+          ...(normalizedPhone ? [{ customerPhone: normalizedPhone }] : []),
+        ]
+      : [
+          ...(normalizedEmail ? [{ customerEmail: normalizedEmail }] : []),
+          ...(normalizedPhone ? [{ customerPhone: normalizedPhone }] : []),
+        ];
 
-    if (!normalizedEmail && !normalizedPhone) {
+    if (!customerFilters.length) {
       return;
     }
 
@@ -1991,10 +2006,7 @@ export class ReservationsService {
 
     const existing = await this.prisma.reservation.findFirst({
       where: {
-        OR: [
-          ...(normalizedEmail ? [{ customerEmail: normalizedEmail }] : []),
-          ...(normalizedPhone ? [{ customerPhone: normalizedPhone }] : []),
-        ],
+        OR: customerFilters,
         timeSlotStart: {
           gte: dayStart,
           lt: dayEnd,
