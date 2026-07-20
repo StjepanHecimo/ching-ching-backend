@@ -15,6 +15,7 @@ type ReservationRefundEmailInput = {
   tableLabel?: string | null;
   amountCents: number;
   currency?: string;
+  sender?: "INFO" | "SUPPORT";
 };
 
 type ReservationConfirmedEmailInput = {
@@ -60,9 +61,7 @@ export class EmailService {
 
   async sendVerificationEmail(input: VerificationEmailInput) {
     const transporter = this.getTransporter();
-    const from =
-      this.configService.get<string>("EMAIL_FROM") ??
-      "Chin-Chin <no-reply@chin-chin.local>";
+    const from = this.infoFrom();
 
     if (!transporter) {
       this.logVerificationFallback(input);
@@ -93,8 +92,7 @@ export class EmailService {
   async sendReservationRefundEmail(input: ReservationRefundEmailInput) {
     const transporter = this.getTransporter();
     const from =
-      this.configService.get<string>("EMAIL_FROM") ??
-      "Chin-Chin <no-reply@chin-chin.local>";
+      input.sender === "SUPPORT" ? this.supportFrom() : this.infoFrom();
 
     if (!transporter) {
       this.logReservationRefundFallback(input);
@@ -127,9 +125,7 @@ export class EmailService {
 
   async sendReservationConfirmedEmail(input: ReservationConfirmedEmailInput) {
     const transporter = this.getTransporter();
-    const from =
-      this.configService.get<string>("EMAIL_FROM") ??
-      "Chin-Chin <no-reply@chin-chin.local>";
+    const from = this.infoFrom();
 
     if (!transporter) {
       this.logReservationConfirmedFallback(input);
@@ -167,9 +163,7 @@ export class EmailService {
     input: VenueProblemReportResolvedEmailInput,
   ) {
     const transporter = this.getTransporter();
-    const from =
-      this.configService.get<string>("EMAIL_FROM") ??
-      "Chin-Chin <no-reply@chin-chin.local>";
+    const from = this.supportFrom();
 
     if (!transporter) {
       this.logVenueProblemReportResolvedFallback(input);
@@ -214,9 +208,7 @@ export class EmailService {
     input: CustomerProblemReportResolvedEmailInput,
   ) {
     const transporter = this.getTransporter();
-    const from =
-      this.configService.get<string>("EMAIL_FROM") ??
-      "Chin-Chin <no-reply@chin-chin.local>";
+    const from = this.supportFrom();
 
     if (!transporter) {
       this.logCustomerProblemReportResolvedFallback(input);
@@ -263,9 +255,7 @@ export class EmailService {
 
   async sendVenueRoomDeletedEmail(input: VenueRoomDeletedEmailInput) {
     const transporter = this.getTransporter();
-    const from =
-      this.configService.get<string>("EMAIL_FROM") ??
-      "Chin-Chin <no-reply@chin-chin.local>";
+    const from = this.supportFrom();
 
     if (!transporter) {
       this.logVenueRoomDeletedFallback(input);
@@ -320,6 +310,34 @@ export class EmailService {
     });
 
     return this.transporter;
+  }
+
+  private infoFrom() {
+    return (
+      this.configService.get<string>("EMAIL_FROM") ??
+      this.formatSender(
+        this.configService.get<string>("SMTP_FROM_NAME") ?? "Chin-Chin",
+        this.configService.get<string>("SMTP_FROM_EMAIL") ??
+          "no-reply@chin-chin.local",
+      )
+    );
+  }
+
+  private supportFrom() {
+    return (
+      this.configService.get<string>("EMAIL_SUPPORT_FROM") ??
+      this.formatSender(
+        this.configService.get<string>("SMTP_SUPPORT_FROM_NAME") ??
+          "Chin-Chin Support",
+        this.configService.get<string>("SMTP_SUPPORT_FROM_EMAIL") ??
+          this.configService.get<string>("SMTP_FROM_EMAIL") ??
+          "support@chin-chin.local",
+      )
+    );
+  }
+
+  private formatSender(name: string, email: string) {
+    return `${name.trim()} <${email.trim()}>`;
   }
 
   private verificationHtml(input: VerificationEmailInput) {

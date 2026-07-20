@@ -2138,6 +2138,7 @@ export class PaymentsService {
         tableLabel: payment.reservation.tableLabel,
         amountCents,
         currency: payment.currency,
+        sender: "SUPPORT",
       });
       this.logger.log(
         `[email][customer-refund] sent reservationId=${payment.reservationId} to=${customerEmail}`,
