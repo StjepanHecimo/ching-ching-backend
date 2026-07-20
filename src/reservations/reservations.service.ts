@@ -27,6 +27,7 @@ import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailab
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
 import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservation-settings.dto";
+import { VenueReservationsQueryDto } from "./dto/venue-reservations-query.dto";
 
 type ReservableTable = {
   tableId: string;
@@ -95,6 +96,7 @@ const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const LIVE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 10;
 const ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES = 4 * 60;
 const ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 60;
+const MAX_ADVANCE_RESERVATION_DAYS = 7;
 const RESERVATION_WINDOW_MIN_START_MINUTES = 12 * 60;
 const RESERVATION_WINDOW_MAX_END_MINUTES = 23 * 60;
 const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
@@ -170,6 +172,7 @@ export class ReservationsService {
       query.type,
       slot.startAt,
     );
+    this.assertAdvanceReservationHorizon(reservationType, slot.startAt);
     const liveDistanceMeters = this.validateReservationRuleContext(
       venue,
       reservationType,
@@ -307,6 +310,7 @@ export class ReservationsService {
       dto.type,
       slot.startAt,
     );
+    this.assertAdvanceReservationHorizon(reservationType, slot.startAt);
     const liveDistanceMeters = this.validateReservationRuleContext(
       venue,
       reservationType,
@@ -435,12 +439,46 @@ export class ReservationsService {
     );
   }
 
-  async listVenueReservations(venueId: string) {
+  async listVenueReservations(
+    venueId: string,
+    query: VenueReservationsQueryDto = {},
+  ) {
     await this.releaseExpiredReservationLocks(venueId);
+
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+    if (from && Number.isNaN(from.getTime())) {
+      throw new BadRequestException("Invalid reservation range start.");
+    }
+    if (to && Number.isNaN(to.getTime())) {
+      throw new BadRequestException("Invalid reservation range end.");
+    }
+    if (from && to && to.getTime() <= from.getTime()) {
+      throw new BadRequestException(
+        "Reservation range end must be after its start.",
+      );
+    }
+
+    const where: Prisma.ReservationWhereInput = { venueId };
+    if (from || to) {
+      const timeSlotStart: Prisma.DateTimeFilter = {};
+      if (from) {
+        timeSlotStart.gte = from;
+      }
+      if (to) {
+        timeSlotStart.lt = to;
+      }
+
+      where.OR = [
+        { status: ReservationStatus.PENDING_VENUE_CONFIRMATION },
+        { timeSlotStart },
+      ];
+    }
+
     const reservations = await this.prisma.reservation.findMany({
-      where: { venueId },
-      orderBy: { timeSlotStart: "desc" },
-      take: 100,
+      where,
+      orderBy: { timeSlotStart: "asc" },
+      take: query.limit ?? 100,
       include: {
         venue: true,
         refundRequests: {
@@ -457,11 +495,104 @@ export class ReservationsService {
       },
     });
 
-    return Promise.all(
+    const items = await Promise.all(
       reservations.map((reservation) =>
         this.serializeVenueReservationRequest(reservation),
       ),
     );
+
+    return {
+      items,
+      from: from?.toISOString() ?? null,
+      to: to?.toISOString() ?? null,
+      includesPendingRequests: Boolean(from || to),
+    };
+  }
+
+  async listVenueReservationHistory(
+    venueId: string,
+    query: VenueReservationsQueryDto = {},
+  ) {
+    await this.releaseExpiredReservationLocks(venueId);
+
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+    if (from && Number.isNaN(from.getTime())) {
+      throw new BadRequestException("Invalid reservation history range start.");
+    }
+    if (to && Number.isNaN(to.getTime())) {
+      throw new BadRequestException("Invalid reservation history range end.");
+    }
+    if (from && to && to.getTime() <= from.getTime()) {
+      throw new BadRequestException(
+        "Reservation history range end must be after its start.",
+      );
+    }
+
+    const timeSlotStart: Prisma.DateTimeFilter = {};
+    if (from) {
+      timeSlotStart.gte = from;
+    }
+    if (to) {
+      timeSlotStart.lt = to;
+    }
+
+    const historyStatuses: ReservationStatus[] = [
+      ReservationStatus.DECLINED,
+      ReservationStatus.EXPIRED,
+      ReservationStatus.CANCELLED,
+      ReservationStatus.CANCELLED_BY_USER,
+      ReservationStatus.COMPLETED,
+      ReservationStatus.NO_SHOW,
+      ReservationStatus.RELEASED,
+    ];
+
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        venueId,
+        ...(from || to ? { timeSlotStart } : {}),
+        OR: [
+          { timeSlotStart: { lt: new Date() } },
+          { status: { in: historyStatuses } },
+          { refundCents: { gt: 0 } },
+          {
+            refundRequests: {
+              some: { status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN },
+            },
+          },
+          { customerProblemReports: { some: {} } },
+        ],
+      },
+      orderBy: [{ timeSlotStart: "desc" }, { createdAt: "desc" }],
+      take: Math.min(query.limit ?? 10, 10),
+      include: {
+        venue: true,
+        refundRequests: {
+          where: {
+            status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
+          },
+          orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
+          take: 1,
+        },
+        customerProblemReports: {
+          orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
+          take: 1,
+        },
+      },
+    });
+
+    const items = await Promise.all(
+      reservations.map((reservation) =>
+        this.serializeVenueReservationRequest(reservation),
+      ),
+    );
+
+    return {
+      items,
+      from: from?.toISOString() ?? null,
+      to: to?.toISOString() ?? null,
+      limit: Math.min(query.limit ?? 10, 10),
+    };
   }
 
   async listPendingVenueReservationRequests(venueId: string) {
@@ -2194,6 +2325,24 @@ export class ReservationsService {
     }
   }
 
+  private assertAdvanceReservationHorizon(
+    reservationType: "ADVANCE" | "LIVE",
+    startAt: Date,
+  ) {
+    if (reservationType !== "ADVANCE") {
+      return;
+    }
+
+    const latestAllowedStart = new Date(
+      Date.now() + MAX_ADVANCE_RESERVATION_DAYS * 24 * 60 * 60 * 1000,
+    );
+    if (startAt.getTime() > latestAllowedStart.getTime()) {
+      throw new BadRequestException(
+        "Advance reservations can be made up to 7 days in advance.",
+      );
+    }
+  }
+
   private formatMinutes(totalMinutes: number) {
     const hour = Math.floor(totalMinutes / 60)
       .toString()
@@ -3282,6 +3431,14 @@ export class ReservationsService {
       resolutionCurrency: string | null;
       resolvedAt: Date | null;
     }[];
+    customerProblemReports?: {
+      id: string;
+      status: CustomerProblemReportStatus;
+      resolutionAmountCents: number | null;
+      resolutionCurrency: string | null;
+      resolvedAt: Date | null;
+      updatedAt: Date;
+    }[];
   }) {
     const allocation = await this.paymentsService.previewReservationAllocation({
       id: reservation.id,
@@ -3313,6 +3470,18 @@ export class ReservationsService {
               resolvedAt: reservation.refundRequests[0].resolvedAt,
             }
           : null,
+      customerProblemReport: reservation.customerProblemReports?.[0]
+        ? {
+            id: reservation.customerProblemReports[0].id,
+            status: reservation.customerProblemReports[0].status,
+            amountCents:
+              reservation.customerProblemReports[0].resolutionAmountCents ?? 0,
+            currency:
+              reservation.customerProblemReports[0].resolutionCurrency ??
+              reservation.currency,
+            resolvedAt: reservation.customerProblemReports[0].resolvedAt,
+          }
+        : null,
     };
   }
 }

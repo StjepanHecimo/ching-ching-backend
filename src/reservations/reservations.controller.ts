@@ -22,6 +22,7 @@ import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
 import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservation-settings.dto";
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
 import { DeclineReservationDto } from "./dto/decline-reservation.dto";
+import { VenueReservationsQueryDto } from "./dto/venue-reservations-query.dto";
 import { ReservationsService } from "./reservations.service";
 import { CreateCustomerProblemReportDto } from "../payments/dto/create-customer-problem-report.dto";
 import { CreateVenueRefundRequestDto } from "../payments/dto/create-venue-refund-request.dto";
@@ -108,8 +109,19 @@ export class ReservationsController {
   }
 
   @Get("preview/venues/:venueId")
-  listVenueReservations(@Param("venueId") venueId: string) {
-    return this.reservationsService.listVenueReservations(venueId);
+  listVenueReservations(
+    @Param("venueId") venueId: string,
+    @Query() query: VenueReservationsQueryDto,
+  ) {
+    return this.reservationsService.listVenueReservations(venueId, query);
+  }
+
+  @Get("preview/venues/:venueId/history")
+  listVenueReservationHistory(
+    @Param("venueId") venueId: string,
+    @Query() query: VenueReservationsQueryDto,
+  ) {
+    return this.reservationsService.listVenueReservationHistory(venueId, query);
   }
 
   @Get("preview/venues/:venueId/requests")
