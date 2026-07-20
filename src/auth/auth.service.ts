@@ -692,7 +692,7 @@ export class AuthService {
   }
 
   async requestCustomerPhoneChange(userId: string, dto: RequestPhoneChangeDto) {
-    const phoneNumber = dto.phoneNumber.trim();
+    const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, role: true },
@@ -739,7 +739,7 @@ export class AuthService {
   }
 
   async verifyCustomerPhoneChange(userId: string, dto: VerifyPhoneChangeDto) {
-    const phoneNumber = dto.phoneNumber.trim();
+    const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
     const code = dto.code.trim();
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -907,6 +907,23 @@ export class AuthService {
 
   private createPhoneVerificationCode() {
     return randomInt(100000, 1000000).toString();
+  }
+
+  private normalizePhoneNumber(phoneNumber: string) {
+    const normalized = phoneNumber.trim().replace(/[\s().-]/g, "");
+    if (/^\+[1-9]\d{5,14}$/.test(normalized)) {
+      return normalized;
+    }
+    if (/^00[1-9]\d{5,14}$/.test(normalized)) {
+      return `+${normalized.slice(2)}`;
+    }
+    if (/^0\d{7,14}$/.test(normalized)) {
+      return `+385${normalized.slice(1)}`;
+    }
+
+    throw new BadRequestException(
+      "Phone number must be in a valid international format.",
+    );
   }
 
   private hashPhoneVerificationCode(
