@@ -24,6 +24,10 @@ export class RegisterCustomerDto {
   @Length(6, 30)
   phoneNumber!: string;
 
+  @IsString()
+  @Length(32, 256)
+  phoneVerificationToken!: string;
+
   @IsInt()
   @Min(16)
   @Max(100)

@@ -240,6 +240,25 @@ model DevicePushToken {
   @@map("device_push_tokens")
 }
 
+model RegistrationPhoneVerificationCode {
+  id          String    @id @default(uuid())
+  phoneNumber String
+  codeHash    String    @unique
+  tokenHash   String?   @unique
+  attempts    Int       @default(0)
+  expiresAt   DateTime
+  verifiedAt  DateTime?
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([phoneNumber])
+  @@index([expiresAt])
+  @@index([verifiedAt])
+  @@index([usedAt])
+  @@map("registration_phone_verification_codes")
+}
+
 model PushNotificationLog {
   id            String                 @id @default(uuid())
   userId        String

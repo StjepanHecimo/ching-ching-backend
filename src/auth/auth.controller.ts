@@ -14,11 +14,13 @@ import { LoginDto } from "./dto/login.dto";
 import { RefreshTokenDto } from "./dto/refresh-token.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
+import { RequestRegistrationPhoneDto } from "./dto/request-registration-phone.dto";
 import { RequestPhoneChangeDto } from "./dto/request-phone-change.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
 import { UpdateCustomerProfileDto } from "./dto/update-customer-profile.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { VerifyPhoneChangeDto } from "./dto/verify-phone-change.dto";
+import { VerifyRegistrationPhoneDto } from "./dto/verify-registration-phone.dto";
 import { JwtAuthGuard } from "./guards/jwt-auth.guard";
 import { AdminRolesGuard } from "./guards/admin-roles.guard";
 
@@ -41,6 +43,16 @@ export class AuthController {
   @Post("register-customer")
   registerCustomer(@Body() dto: RegisterCustomerDto) {
     return this.authService.registerCustomer(dto);
+  }
+
+  @Post("register-customer/phone/request")
+  requestRegistrationPhone(@Body() dto: RequestRegistrationPhoneDto) {
+    return this.authService.requestRegistrationPhoneVerification(dto);
+  }
+
+  @Post("register-customer/phone/verify")
+  verifyRegistrationPhone(@Body() dto: VerifyRegistrationPhoneDto) {
+    return this.authService.verifyRegistrationPhone(dto);
   }
 
   @Get("verify-email")

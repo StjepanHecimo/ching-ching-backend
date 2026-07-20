@@ -20,10 +20,12 @@ import { RefreshTokenDto } from "./dto/refresh-token.dto";
 import { RegisterCustomerDto } from "./dto/register-customer.dto";
 import { RegisterVenueOwnerDto } from "./dto/register-venue-owner.dto";
 import { RequestPhoneChangeDto } from "./dto/request-phone-change.dto";
+import { RequestRegistrationPhoneDto } from "./dto/request-registration-phone.dto";
 import { ResendVerificationDto } from "./dto/resend-verification.dto";
 import { UpdateCustomerProfileDto } from "./dto/update-customer-profile.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { VerifyPhoneChangeDto } from "./dto/verify-phone-change.dto";
+import { VerifyRegistrationPhoneDto } from "./dto/verify-registration-phone.dto";
 
 type RefreshTokenPayload = {
   sub: string;
@@ -134,6 +136,7 @@ export class AuthService {
 
   async registerCustomer(dto: RegisterCustomerDto) {
     const normalizedEmail = dto.email.trim().toLowerCase();
+    const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
     const existingUser = await this.prisma.user.findUnique({
       where: { email: normalizedEmail },
     });
@@ -142,6 +145,10 @@ export class AuthService {
       throw new ConflictException("Email is already registered.");
     }
 
+    const phoneVerification = await this.consumeRegistrationPhoneToken(
+      phoneNumber,
+      dto.phoneVerificationToken,
+    );
     const verificationToken = this.createVerificationToken();
     const tokenHash = this.hashToken(verificationToken);
     const passwordHash = await bcrypt.hash(this.createVerificationToken(), 12);
@@ -153,7 +160,8 @@ export class AuthService {
           passwordHash,
           firstName: dto.firstName.trim(),
           lastName: dto.lastName.trim(),
-          phoneNumber: dto.phoneNumber.trim(),
+          phoneNumber,
+          phoneVerifiedAt: phoneVerification.verifiedAt,
           age: dto.age,
           gender: dto.gender,
           role: UserRole.CUSTOMER,
@@ -166,6 +174,10 @@ export class AuthService {
           tokenHash,
           expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
         },
+      });
+      await tx.registrationPhoneVerificationCode.update({
+        where: { id: phoneVerification.id },
+        data: { usedAt: new Date() },
       });
 
       return createdUser;
@@ -185,6 +197,105 @@ export class AuthService {
 
   async verifyEmail(dto: VerifyEmailDto) {
     return this.verifyEmailToken(dto.token);
+  }
+
+  async requestRegistrationPhoneVerification(dto: RequestRegistrationPhoneDto) {
+    const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
+    const latestCode =
+      await this.prisma.registrationPhoneVerificationCode.findFirst({
+        where: { phoneNumber, usedAt: null },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true },
+      });
+
+    if (latestCode) {
+      const elapsedMs = Date.now() - latestCode.createdAt.getTime();
+      if (elapsedMs < PHONE_VERIFICATION_RESEND_COOLDOWN_MS) {
+        const waitSeconds = Math.ceil(
+          (PHONE_VERIFICATION_RESEND_COOLDOWN_MS - elapsedMs) / 1000,
+        );
+        throw new HttpException(
+          `Pričekajte ${waitSeconds} sekundi prije ponovnog slanja koda.`,
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+    }
+
+    const code = this.createPhoneVerificationCode();
+    const codeHash = this.hashRegistrationPhoneVerificationCode(
+      phoneNumber,
+      code,
+    );
+    const expiresAt = new Date(Date.now() + PHONE_VERIFICATION_TTL_MS);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.registrationPhoneVerificationCode.updateMany({
+        where: { phoneNumber, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      await tx.registrationPhoneVerificationCode.create({
+        data: { phoneNumber, codeHash, expiresAt },
+      });
+    });
+
+    const smsResult = await this.smsService.sendVerificationCode({
+      to: phoneNumber,
+      code,
+    });
+
+    return {
+      message: "Registration phone verification code was sent.",
+      expiresAt,
+      devVerificationCode: smsResult.delivered ? undefined : code,
+    };
+  }
+
+  async verifyRegistrationPhone(dto: VerifyRegistrationPhoneDto) {
+    const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
+    const code = dto.code.trim();
+    const storedCode =
+      await this.prisma.registrationPhoneVerificationCode.findFirst({
+        where: { phoneNumber, usedAt: null },
+        orderBy: { createdAt: "desc" },
+      });
+
+    if (!storedCode || storedCode.usedAt) {
+      throw new BadRequestException("Verification code is invalid.");
+    }
+    if (storedCode.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException("Verification code has expired.");
+    }
+    if (storedCode.attempts >= PHONE_VERIFICATION_ATTEMPT_LIMIT) {
+      throw new BadRequestException("Verification code has too many attempts.");
+    }
+
+    const codeHash = this.hashRegistrationPhoneVerificationCode(
+      phoneNumber,
+      code,
+    );
+    if (storedCode.codeHash !== codeHash) {
+      await this.prisma.registrationPhoneVerificationCode.update({
+        where: { id: storedCode.id },
+        data: { attempts: { increment: 1 } },
+      });
+      throw new BadRequestException("Verification code is invalid.");
+    }
+
+    const phoneVerificationToken = this.createVerificationToken();
+    await this.prisma.registrationPhoneVerificationCode.update({
+      where: { id: storedCode.id },
+      data: {
+        attempts: { increment: 1 },
+        verifiedAt: new Date(),
+        tokenHash: this.hashToken(phoneVerificationToken),
+      },
+    });
+
+    return {
+      message: "Phone number verified for registration.",
+      phoneNumber,
+      phoneVerificationToken,
+    };
   }
 
   async verifyEmailToken(token: string) {
@@ -815,6 +926,31 @@ export class AuthService {
     };
   }
 
+  private async consumeRegistrationPhoneToken(
+    phoneNumber: string,
+    token: string,
+  ) {
+    const tokenHash = this.hashToken(token.trim());
+    const storedToken =
+      await this.prisma.registrationPhoneVerificationCode.findUnique({
+        where: { tokenHash },
+      });
+
+    if (
+      !storedToken ||
+      storedToken.phoneNumber !== phoneNumber ||
+      !storedToken.verifiedAt ||
+      storedToken.usedAt
+    ) {
+      throw new BadRequestException("Phone verification is required.");
+    }
+    if (storedToken.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException("Phone verification has expired.");
+    }
+
+    return storedToken;
+  }
+
   private async issueTokenPair(user: {
     id: string;
     email: string;
@@ -952,6 +1088,13 @@ export class AuthService {
     code: string,
   ) {
     return this.hashToken(`${userId}:${phoneNumber}:${code}`);
+  }
+
+  private hashRegistrationPhoneVerificationCode(
+    phoneNumber: string,
+    code: string,
+  ) {
+    return this.hashToken(`registration:${phoneNumber}:${code}`);
   }
 
   private hashToken(token: string) {
