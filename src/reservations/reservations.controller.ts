@@ -131,16 +131,50 @@ export class ReservationsController {
     );
   }
 
+  @Get("preview/customers/reservations/history")
+  listCustomerReservationHistory(
+    @Query("customerEmail") customerEmail?: string,
+    @Query() query: VenueReservationsQueryDto = {},
+  ) {
+    return this.reservationsService.listCustomerReservations(
+      customerEmail,
+      query,
+      { historyOnly: true },
+    );
+  }
+
   @Get("preview/customers/reservations")
-  listCustomerReservations(@Query("customerEmail") customerEmail?: string) {
-    return this.reservationsService.listCustomerReservations(customerEmail);
+  listCustomerReservations(
+    @Query("customerEmail") customerEmail?: string,
+    @Query() query: VenueReservationsQueryDto = {},
+  ) {
+    return this.reservationsService.listCustomerReservations(
+      customerEmail,
+      query,
+    );
   }
 
   @Get("customers/me/reservations")
   @UseGuards(JwtAuthGuard)
-  listCurrentCustomerReservations(@Req() request: AuthenticatedRequest) {
+  listCurrentCustomerReservations(
+    @Query() query: VenueReservationsQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
     return this.reservationsService.listCustomerReservationsForUser(
       request.user.userId,
+      query,
+    );
+  }
+
+  @Get("customers/me/reservations/history")
+  @UseGuards(JwtAuthGuard)
+  listCurrentCustomerReservationHistory(
+    @Query() query: VenueReservationsQueryDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.reservationsService.listCustomerReservationHistoryForUser(
+      request.user.userId,
+      query,
     );
   }
 

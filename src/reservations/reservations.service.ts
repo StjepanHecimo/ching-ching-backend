@@ -651,15 +651,79 @@ export class ReservationsService {
     );
   }
 
-  async listCustomerReservations(customerEmail?: string) {
+  async listCustomerReservations(
+    customerEmail?: string,
+    query: VenueReservationsQueryDto = {},
+    options: { historyOnly?: boolean } = {},
+  ) {
     const normalizedEmail = customerEmail?.trim().toLowerCase();
-    const reservations = await this.prisma.reservation.findMany({
-      where: {
-        source: "user-app",
-        ...(normalizedEmail ? { customerEmail: normalizedEmail } : {}),
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+    if (from && Number.isNaN(from.getTime())) {
+      throw new BadRequestException("Invalid customer reservation range start.");
+    }
+    if (to && Number.isNaN(to.getTime())) {
+      throw new BadRequestException("Invalid customer reservation range end.");
+    }
+    if (from && to && to.getTime() <= from.getTime()) {
+      throw new BadRequestException(
+        "Customer reservation range end must be after its start.",
+      );
+    }
+
+    const timeSlotStart: Prisma.DateTimeFilter = {};
+    if (from) {
+      timeSlotStart.gte = from;
+    }
+    if (to) {
+      timeSlotStart.lt = to;
+    }
+
+    const historyConditions: Prisma.ReservationWhereInput[] = [
+      { timeSlotStart: { lt: new Date() } },
+      {
+        status: {
+          in: [
+            ReservationStatus.DECLINED,
+            ReservationStatus.EXPIRED,
+            ReservationStatus.CANCELLED,
+            ReservationStatus.CANCELLED_BY_USER,
+            ReservationStatus.COMPLETED,
+            ReservationStatus.NO_SHOW,
+            ReservationStatus.RELEASED,
+          ],
+        },
       },
-      orderBy: { timeSlotStart: "desc" },
-      take: 100,
+      { refundCents: { gt: 0 } },
+      {
+        refundRequests: {
+          some: { status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN },
+        },
+      },
+      { customerProblemReports: { some: {} } },
+    ];
+    const filters: Prisma.ReservationWhereInput[] = [];
+    if (from || to) {
+      filters.push({ timeSlotStart });
+    }
+    if (options.historyOnly) {
+      filters.push({ OR: historyConditions });
+    }
+
+    const where: Prisma.ReservationWhereInput = {
+      source: "user-app",
+      ...(normalizedEmail ? { customerEmail: normalizedEmail } : {}),
+      ...(filters.length ? { AND: filters } : {}),
+    };
+    const orderBy =
+      query.sort === "OLDEST"
+        ? [{ timeSlotStart: "asc" as const }, { createdAt: "asc" as const }]
+        : [{ timeSlotStart: "desc" as const }, { createdAt: "desc" as const }];
+
+    const reservations = await this.prisma.reservation.findMany({
+      where,
+      orderBy,
+      take: Math.min(query.limit ?? 100, 100),
       include: { venue: true },
     });
 
@@ -671,18 +735,19 @@ export class ReservationsService {
     );
 
     const refreshedReservations = await this.prisma.reservation.findMany({
-      where: {
-        source: "user-app",
-        ...(normalizedEmail ? { customerEmail: normalizedEmail } : {}),
-      },
-      orderBy: { timeSlotStart: "desc" },
-      take: 100,
+      where,
+      orderBy,
+      take: Math.min(query.limit ?? 100, 100),
       include: {
         venue: true,
         refundRequests: {
           where: {
             status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
           },
+          orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
+          take: 1,
+        },
+        customerProblemReports: {
           orderBy: [{ resolvedAt: "desc" }, { updatedAt: "desc" }],
           take: 1,
         },
@@ -696,7 +761,10 @@ export class ReservationsService {
     };
   }
 
-  async listCustomerReservationsForUser(customerId: string) {
+  async listCustomerReservationsForUser(
+    customerId: string,
+    query: VenueReservationsQueryDto = {},
+  ) {
     const customer = await this.prisma.user.findUnique({
       where: { id: customerId },
       select: { id: true, email: true, role: true },
@@ -711,7 +779,30 @@ export class ReservationsService {
       );
     }
 
-    return this.listCustomerReservations(customer.email);
+    return this.listCustomerReservations(customer.email, query);
+  }
+
+  async listCustomerReservationHistoryForUser(
+    customerId: string,
+    query: VenueReservationsQueryDto = {},
+  ) {
+    const customer = await this.prisma.user.findUnique({
+      where: { id: customerId },
+      select: { id: true, email: true, role: true },
+    });
+
+    if (!customer) {
+      throw new BadRequestException("Customer account was not found.");
+    }
+    if (customer.role !== UserRole.CUSTOMER) {
+      throw new BadRequestException(
+        "Only customer accounts can list customer reservations.",
+      );
+    }
+
+    return this.listCustomerReservations(customer.email, query, {
+      historyOnly: true,
+    });
   }
 
   async listReservationMonitoring(filters?: {
