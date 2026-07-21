@@ -54,7 +54,7 @@ export class VenueChinChinPanelEventDto {
 
 export class UpsertVenueChinChinPanelDto {
   @IsArray()
-  @ArrayMaxSize(3)
+  @ArrayMaxSize(12)
   @ValidateNested({ each: true })
   @Type(() => VenueChinChinPanelPromotionalDrinkDto)
   promotionalDrinks!: VenueChinChinPanelPromotionalDrinkDto[];
