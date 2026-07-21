@@ -59,7 +59,7 @@ export class UpsertVenueChinChinPanelDto {
 
   @IsOptional()
   @IsArray()
-  @ArrayMaxSize(8)
+  @ArrayMaxSize(12)
   @IsString({ each: true })
   @Length(1, 80, { each: true })
   draftBeers?: string[];
