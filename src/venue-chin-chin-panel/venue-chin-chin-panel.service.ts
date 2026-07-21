@@ -616,7 +616,7 @@ export class VenueChinChinPanelService {
     const promotionalDrinkInputs = dto.promotionalDrinks
       .map((drink) => this.parsePanelDrinkInput(drink, currency))
       .filter((drink): drink is DrinkPanelInput => drink !== null)
-      .slice(0, 3);
+      .slice(0, 12);
     if (!promotionalDrinkInputs.length) {
       throw new BadRequestException("Provide at least one promotional drink.");
     }
