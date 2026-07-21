@@ -31,11 +31,13 @@ type NormalizedDrink = {
   logoUrl: string | null;
   sourceText: string;
   promoPriceLabel?: string | null;
+  promoSizeLabel?: string | null;
 };
 
 type DrinkPanelInput = {
   name: string;
   promoPriceLabel?: string | null;
+  promoSizeLabel?: string | null;
 };
 
 type DrinkBrandLookup = {
@@ -965,6 +967,7 @@ export class VenueChinChinPanelService {
             item.promoPriceLabel?.toString().trim() ||
             item.priceLabel?.toString().trim() ||
             null,
+          promoSizeLabel: item.promoSizeLabel?.toString().trim() || null,
         };
       })
       .filter((entry): entry is NormalizedDrink => entry !== null);
@@ -997,7 +1000,9 @@ export class VenueChinChinPanelService {
     const promoPriceLabel = rawPrice
       ? this.formatPromoPriceLabel(rawPrice, currency)
       : null;
-    return { name, promoPriceLabel };
+    const rawSize = item.promoSizeLabel?.toString().trim() || "";
+    const promoSizeLabel = rawSize ? rawSize.slice(0, 40) : null;
+    return { name, promoPriceLabel, promoSizeLabel };
   }
 
   private formatPromoPriceLabel(rawPrice: string, currency: string) {
@@ -1240,6 +1245,7 @@ export class VenueChinChinPanelService {
     return drinks.map((drink) => ({
       ...this.normalizeDrinkFromBrands(drink.name, fallbackType, brands),
       promoPriceLabel: drink.promoPriceLabel ?? null,
+      promoSizeLabel: drink.promoSizeLabel ?? null,
     }));
   }
 
@@ -1269,6 +1275,7 @@ export class VenueChinChinPanelService {
       logoUrl: null,
       sourceText,
       promoPriceLabel: null,
+      promoSizeLabel: null,
     };
   }
 

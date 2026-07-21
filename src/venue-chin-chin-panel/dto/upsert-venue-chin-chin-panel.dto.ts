@@ -18,6 +18,11 @@ export class VenueChinChinPanelPromotionalDrinkDto {
   @IsString()
   @Length(1, 40)
   promoPriceLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  promoSizeLabel?: string;
 }
 
 export class VenueChinChinPanelEventDto {
