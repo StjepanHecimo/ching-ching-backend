@@ -547,23 +547,63 @@ export class ReservationsService {
       ReservationStatus.RELEASED,
     ];
 
-    const reservations = await this.prisma.reservation.findMany({
-      where: {
-        venueId,
-        ...(from || to ? { timeSlotStart } : {}),
+    const historyConditions: Prisma.ReservationWhereInput[] = [
+      { timeSlotStart: { lt: new Date() } },
+      { status: { in: historyStatuses } },
+      { refundCents: { gt: 0 } },
+      {
+        refundRequests: {
+          some: { status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN },
+        },
+      },
+      { customerProblemReports: { some: {} } },
+    ];
+
+    const statusConditions: Record<string, Prisma.ReservationWhereInput> = {
+      COMPLETED: { status: ReservationStatus.COMPLETED },
+      CANCELLED: {
+        status: {
+          in: [
+            ReservationStatus.CANCELLED,
+            ReservationStatus.CANCELLED_BY_USER,
+            ReservationStatus.DECLINED,
+            ReservationStatus.EXPIRED,
+            ReservationStatus.RELEASED,
+          ],
+        },
+      },
+      REFUNDED: {
         OR: [
-          { timeSlotStart: { lt: new Date() } },
-          { status: { in: historyStatuses } },
           { refundCents: { gt: 0 } },
           {
             refundRequests: {
               some: { status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN },
             },
           },
-          { customerProblemReports: { some: {} } },
         ],
       },
-      orderBy: [{ timeSlotStart: "desc" }, { createdAt: "desc" }],
+      NO_SHOW: { status: ReservationStatus.NO_SHOW },
+      REPORTED: { customerProblemReports: { some: {} } },
+    };
+    const statusCondition =
+      query.status && query.status !== "ALL"
+        ? statusConditions[query.status]
+        : null;
+    const orderBy =
+      query.sort === "OLDEST"
+        ? [{ timeSlotStart: "asc" as const }, { createdAt: "asc" as const }]
+        : [{ timeSlotStart: "desc" as const }, { createdAt: "desc" as const }];
+
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        venueId,
+        AND: [
+          { OR: historyConditions },
+          ...(from || to ? [{ timeSlotStart }] : []),
+          ...(statusCondition ? [statusCondition] : []),
+        ],
+      },
+      orderBy,
       take: Math.min(query.limit ?? 10, 10),
       include: {
         venue: true,

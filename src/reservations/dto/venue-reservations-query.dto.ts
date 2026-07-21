@@ -2,6 +2,7 @@ import { Type } from "class-transformer";
 import {
   IsDateString,
   IsInt,
+  IsIn,
   IsOptional,
   Max,
   Min,
@@ -22,4 +23,19 @@ export class VenueReservationsQueryDto {
   @Min(1)
   @Max(200)
   limit?: number;
+
+  @IsOptional()
+  @IsIn([
+    "ALL",
+    "COMPLETED",
+    "CANCELLED",
+    "REFUNDED",
+    "NO_SHOW",
+    "REPORTED",
+  ])
+  status?: string;
+
+  @IsOptional()
+  @IsIn(["NEWEST", "OLDEST"])
+  sort?: string;
 }
