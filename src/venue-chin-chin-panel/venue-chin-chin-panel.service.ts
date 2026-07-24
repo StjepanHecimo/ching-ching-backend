@@ -1248,8 +1248,11 @@ export class VenueChinChinPanelService {
     }
 
     const now = Date.now();
+    const maxVisibleStart = now + 7 * 24 * 60 * 60 * 1000;
     const visibleEvents = events.filter(
-      (event) => this.eventEndTimestamp(event) >= now,
+      (event) =>
+        this.eventEndTimestamp(event) >= now &&
+        this.eventTimestamp(event) <= maxVisibleStart,
     );
     if (!visibleEvents.length) {
       return null;
