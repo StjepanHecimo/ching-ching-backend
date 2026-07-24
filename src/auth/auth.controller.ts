@@ -40,6 +40,19 @@ export class AuthController {
     return this.authService.registerVenueOwner(dto);
   }
 
+  @Get("venue-address-suggestions")
+  venueAddressSuggestions(
+    @Query("input") input?: string,
+    @Query("sessionToken") sessionToken?: string,
+  ) {
+    return this.authService.venueAddressSuggestions(input ?? "", sessionToken);
+  }
+
+  @Get("venue-address-details")
+  venueAddressDetails(@Query("placeId") placeId?: string) {
+    return this.authService.venueAddressDetails(placeId ?? "");
+  }
+
   @Post("register-customer")
   registerCustomer(@Body() dto: RegisterCustomerDto) {
     return this.authService.registerCustomer(dto);

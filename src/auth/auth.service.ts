@@ -3,6 +3,7 @@ import {
   ConflictException,
   HttpException,
   HttpStatus,
+  ServiceUnavailableException,
   Injectable,
   UnauthorizedException,
 } from "@nestjs/common";
@@ -104,6 +105,8 @@ export class AuthService {
           address: dto.venueAddress?.trim(),
           city: dto.venueCity?.trim(),
           country: dto.venueCountry?.trim() ?? "HR",
+          latitude: dto.venueLatitude,
+          longitude: dto.venueLongitude,
         },
       });
 
@@ -132,6 +135,157 @@ export class AuthService {
       message: "Registration created. Email verification is required.",
       devVerificationToken: verificationToken,
     };
+  }
+
+  async venueAddressSuggestions(input: string, sessionToken?: string) {
+    const normalizedInput = input.trim();
+    if (normalizedInput.length < 3) {
+      return { suggestions: [] };
+    }
+
+    const apiKey = this.googleMapsServerApiKey();
+    if (!apiKey) {
+      throw new ServiceUnavailableException(
+        "Pretraga adrese trenutno nije dostupna.",
+      );
+    }
+
+    const response = await fetch(
+      "https://places.googleapis.com/v1/places:autocomplete",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask":
+            "suggestions.placePrediction.placeId,suggestions.placePrediction.text.text,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text",
+        },
+        body: JSON.stringify({
+          input: normalizedInput,
+          languageCode: "hr",
+          includedRegionCodes: ["hr"],
+          ...(sessionToken?.trim()
+            ? { sessionToken: sessionToken.trim() }
+            : {}),
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const details = await response.text();
+      this.logGooglePlacesError("autocomplete", response.status, details);
+      throw new BadRequestException("Pretraga adrese nije uspjela.");
+    }
+
+    const payload = (await response.json()) as {
+      suggestions?: Array<{
+        placePrediction?: {
+          placeId?: string;
+          text?: { text?: string };
+          structuredFormat?: {
+            mainText?: { text?: string };
+            secondaryText?: { text?: string };
+          };
+        };
+      }>;
+    };
+
+    return {
+      suggestions: (payload.suggestions ?? [])
+        .map((suggestion) => suggestion.placePrediction)
+        .filter((prediction): prediction is NonNullable<typeof prediction> => {
+          return Boolean(prediction?.placeId && prediction.text?.text);
+        })
+        .slice(0, 5)
+        .map((prediction) => ({
+          placeId: prediction.placeId,
+          label: prediction.text?.text,
+          mainText: prediction.structuredFormat?.mainText?.text,
+          secondaryText: prediction.structuredFormat?.secondaryText?.text,
+        })),
+    };
+  }
+
+  async venueAddressDetails(placeId: string) {
+    const normalizedPlaceId = placeId.trim().replace(/^places\//, "");
+    if (!normalizedPlaceId || !/^[A-Za-z0-9_-]+$/.test(normalizedPlaceId)) {
+      throw new BadRequestException("Identifikator adrese nije ispravan.");
+    }
+
+    const apiKey = this.googleMapsServerApiKey();
+    if (!apiKey) {
+      throw new ServiceUnavailableException(
+        "Pretraga adrese trenutno nije dostupna.",
+      );
+    }
+
+    const response = await fetch(
+      `https://places.googleapis.com/v1/places/${encodeURIComponent(normalizedPlaceId)}`,
+      {
+        headers: {
+          "X-Goog-Api-Key": apiKey,
+          "X-Goog-FieldMask":
+            "id,formattedAddress,shortFormattedAddress,addressComponents,location",
+        },
+      },
+    );
+
+    if (!response.ok) {
+      const details = await response.text();
+      this.logGooglePlacesError("details", response.status, details);
+      throw new BadRequestException("Detalji adrese nisu dostupni.");
+    }
+
+    const payload = (await response.json()) as {
+      id?: string;
+      formattedAddress?: string;
+      shortFormattedAddress?: string;
+      location?: { latitude?: number; longitude?: number };
+      addressComponents?: Array<{
+        types?: string[];
+        longText?: string;
+        shortText?: string;
+      }>;
+    };
+    const components = payload.addressComponents ?? [];
+    const cityComponent = components.find((component) =>
+      component.types?.some((type) =>
+        ["locality", "postal_town", "administrative_area_level_2"].includes(
+          type,
+        ),
+      ),
+    );
+    const countryComponent = components.find((component) =>
+      component.types?.includes("country"),
+    );
+
+    if (
+      typeof payload.location?.latitude !== "number" ||
+      typeof payload.location?.longitude !== "number"
+    ) {
+      throw new BadRequestException("Odabrana adresa nema lokaciju.");
+    }
+
+    return {
+      placeId: payload.id ?? normalizedPlaceId,
+      address: payload.shortFormattedAddress ?? payload.formattedAddress ?? "",
+      city: cityComponent?.longText ?? "",
+      country: countryComponent?.shortText ?? "HR",
+      latitude: payload.location.latitude,
+      longitude: payload.location.longitude,
+    };
+  }
+
+  private googleMapsServerApiKey() {
+    return this.configService.get<string>("GOOGLE_MAPS_SERVER_API_KEY")?.trim();
+  }
+
+  private logGooglePlacesError(operation: string, status: number, details: string) {
+    const safeDetails = details.replace(/"X-Goog-Api-Key"[^,}]*/gi, "");
+    console.error(`[AuthService] Google Places ${operation} failed`, {
+      status,
+      details: safeDetails.slice(0, 500),
+    });
   }
 
   async registerCustomer(dto: RegisterCustomerDto) {

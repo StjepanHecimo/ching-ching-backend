@@ -1496,9 +1496,43 @@ export class VenueChinChinPanelService {
     return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
   }
 
-  private eventEndTimestamp(event: { day: string; endsAt: string }) {
+  private eventEndTimestamp(event: {
+    day: string;
+    startsAt: string;
+    endsAt: string;
+  }) {
     const timestamp = new Date(`${event.day}T${event.endsAt}:00`).getTime();
-    return Number.isNaN(timestamp) ? Number.MAX_SAFE_INTEGER : timestamp;
+    if (Number.isNaN(timestamp)) {
+      return Number.MAX_SAFE_INTEGER;
+    }
+
+    const startMinutes = this.eventClockMinutes(event.startsAt);
+    const endMinutes = this.eventClockMinutes(event.endsAt);
+    if (
+      startMinutes !== null &&
+      endMinutes !== null &&
+      endMinutes <= startMinutes
+    ) {
+      return timestamp + 24 * 60 * 60 * 1000;
+    }
+
+    return timestamp;
+  }
+
+  private eventClockMinutes(value: string) {
+    const [hours, minutes] = value.split(":").map(Number);
+    if (
+      !Number.isInteger(hours) ||
+      !Number.isInteger(minutes) ||
+      hours < 0 ||
+      hours > 23 ||
+      minutes < 0 ||
+      minutes > 59
+    ) {
+      return null;
+    }
+
+    return hours * 60 + minutes;
   }
 
   private formatDateKey(date: Date) {

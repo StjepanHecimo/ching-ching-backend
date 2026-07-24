@@ -1,9 +1,12 @@
 import {
   IsEmail,
+  IsNumber,
   IsOptional,
   IsString,
   Length,
+  Max,
   MinLength,
+  Min,
 } from 'class-validator';
 
 export class RegisterVenueOwnerDto {
@@ -45,4 +48,16 @@ export class RegisterVenueOwnerDto {
   @IsString()
   @Length(2, 2)
   venueCountry?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-90)
+  @Max(90)
+  venueLatitude?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(-180)
+  @Max(180)
+  venueLongitude?: number;
 }
