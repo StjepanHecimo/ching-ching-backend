@@ -72,8 +72,10 @@ type NormalizedPanelEvent = {
   startsAt: string;
   endsAt: string;
   band: string;
+  eventName: string;
   content: NormalizedContent;
   description: string | null;
+  posterDataUrl: string | null;
 };
 
 type PanelEventInput = {
@@ -81,7 +83,9 @@ type PanelEventInput = {
   startsAt: string;
   endsAt: string;
   contentName: string;
+  eventName: string;
   description: string | null;
+  posterDataUrl: string | null;
 };
 
 type ContentAssetLookup = {
@@ -897,10 +901,12 @@ export class VenueChinChinPanelService {
               startsAt: panel.eventStartsAt,
               endsAt: "23:00",
               band: panel.eventBand,
+              eventName: panel.eventBand,
               content:
                 this.serializeContent(panel.eventContent) ??
                 this.normalizeContentFromSeed(panel.eventBand, "EVENT"),
               description: panel.eventDescription,
+              posterDataUrl: null,
             },
           ]
         : [];
@@ -1124,6 +1130,8 @@ export class VenueChinChinPanelService {
         const startsAt = item.startsAt?.toString().trim() || "";
         const endsAt = item.endsAt?.toString().trim() || "23:00";
         const band = item.band?.toString().trim() || "";
+        const eventName = item.eventName?.toString().trim() || band;
+        const posterDataUrl = item.posterDataUrl?.toString().trim() || null;
         const content = this.serializeContent(
           (item.content ?? null) as Prisma.JsonValue | null,
         );
@@ -1144,8 +1152,10 @@ export class VenueChinChinPanelService {
           startsAt,
           endsAt,
           band,
+          eventName,
           content,
           description: item.description?.toString() || null,
+          posterDataUrl,
         };
       })
       .filter((entry): entry is NormalizedPanelEvent => entry !== null);
@@ -1159,7 +1169,9 @@ export class VenueChinChinPanelService {
         startsAt: event.startsAt?.trim() ?? "",
         endsAt: event.endsAt?.trim() ?? "23:00",
         contentName: event.contentName?.trim() ?? "",
+        eventName: event.eventName?.trim() || event.contentName?.trim() || "",
         description: event.description?.trim() || null,
+        posterDataUrl: event.posterDataUrl?.trim() || null,
       }))
       .filter(
         (event) =>
@@ -1175,7 +1187,9 @@ export class VenueChinChinPanelService {
       startsAt: dto.eventStartsAt?.trim() ?? "",
       endsAt: dto.eventEndsAt?.trim() ?? "23:00",
       contentName: (dto.eventContentName ?? dto.eventBand ?? "").trim(),
+      eventName: (dto.eventContentName ?? dto.eventBand ?? "").trim(),
       description: dto.eventDescription?.trim() || null,
+      posterDataUrl: null,
     };
 
     return singleEvent.day &&
@@ -1211,8 +1225,10 @@ export class VenueChinChinPanelService {
         startsAt: event.startsAt,
         endsAt: event.endsAt,
         band: content.name,
+        eventName: event.eventName || content.name,
         content,
         description: event.description,
+        posterDataUrl: event.posterDataUrl,
       });
     }
 

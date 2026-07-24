@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsString,
   Length,
+  MaxLength,
   ValidateNested,
 } from "class-validator";
 import { Type } from "class-transformer";
@@ -45,6 +46,16 @@ export class VenueChinChinPanelEventDto {
   @IsString()
   @Length(2, 120)
   contentName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(2, 120)
+  eventName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(4_500_000)
+  posterDataUrl?: string;
 
   @IsOptional()
   @IsString()
