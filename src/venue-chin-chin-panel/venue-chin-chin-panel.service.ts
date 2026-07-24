@@ -887,8 +887,13 @@ export class VenueChinChinPanelService {
     const currency =
       panel.currency || this.currencyForCountry(panel.venue.country);
     const events = this.serializePanelEvents(panel.events);
+    const hasModernEventList = Array.isArray(panel.events);
     const fallbackEvent =
-      !events.length && panel.eventDay && panel.eventStartsAt && panel.eventBand
+      !hasModernEventList &&
+      !events.length &&
+      panel.eventDay &&
+      panel.eventStartsAt &&
+      panel.eventBand
         ? [
             {
               id: this.createEventId(
