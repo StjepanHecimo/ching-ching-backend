@@ -172,6 +172,13 @@ const DRINK_BRAND_SEEDS: DrinkBrandSeed[] = [
     logoAssetKey: "ozujsko",
   },
   {
+    name: "Karlovacko",
+    brandKey: "karlovacko",
+    type: "DRAFT_BEER",
+    aliases: ["karlovacko", "karlovačko"],
+    logoAssetKey: "karlovacko",
+  },
+  {
     name: "Staropramen",
     brandKey: "staropramen",
     type: "DRAFT_BEER",
