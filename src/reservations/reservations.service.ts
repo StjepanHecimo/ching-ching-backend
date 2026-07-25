@@ -1159,12 +1159,6 @@ export class ReservationsService {
       );
     }
 
-    if (!refreshed.customerCheckedInAt) {
-      throw new BadRequestException(
-        "Customer arrival confirmation is required before venue confirmation.",
-      );
-    }
-
     const checkedIn = await this.prisma.reservation.update({
       where: { id },
       data: {
@@ -2308,21 +2302,25 @@ export class ReservationsService {
     status: ReservationStatus;
     timeSlotStart: Date;
     timeSlotEnd: Date;
+    customerCheckedInAt?: Date | null;
   }) {
     if (
       reservation.status === ReservationStatus.CHECKED_IN ||
       reservation.status === ReservationStatus.SEATED
     ) {
-      return this.nightLockUntil(reservation.timeSlotStart);
+      return this.nightLockUntil(
+        reservation.timeSlotStart,
+        reservation.customerCheckedInAt,
+      );
     }
 
     return reservation.timeSlotEnd;
   }
 
-  private nightLockUntil(startAt: Date) {
+  private nightLockUntil(startAt: Date, customerCheckedInAt?: Date | null) {
     const lockEnd = new Date(startAt);
     lockEnd.setDate(lockEnd.getDate() + 1);
-    lockEnd.setHours(6, 0, 0, 0);
+    lockEnd.setHours(customerCheckedInAt ? 6 : 8, 0, 0, 0);
     return lockEnd;
   }
 
@@ -2495,6 +2493,7 @@ export class ReservationsService {
   private isNightLocked(reservation: {
     status: ReservationStatus;
     timeSlotStart: Date;
+    customerCheckedInAt?: Date | null;
   }) {
     if (
       reservation.status !== ReservationStatus.CHECKED_IN &&
@@ -2504,13 +2503,17 @@ export class ReservationsService {
     }
 
     return (
-      this.nightLockUntil(reservation.timeSlotStart).getTime() > Date.now()
+      this.nightLockUntil(
+        reservation.timeSlotStart,
+        reservation.customerCheckedInAt,
+      ).getTime() > Date.now()
     );
   }
 
   private lockedUntilForReservation(reservation: {
     status: ReservationStatus;
     timeSlotStart: Date;
+    customerCheckedInAt?: Date | null;
   }) {
     if (
       reservation.status !== ReservationStatus.CHECKED_IN &&
@@ -2519,7 +2522,10 @@ export class ReservationsService {
       return null;
     }
 
-    return this.nightLockUntil(reservation.timeSlotStart);
+    return this.nightLockUntil(
+      reservation.timeSlotStart,
+      reservation.customerCheckedInAt,
+    );
   }
 
   private async releaseExpiredReservationLocks(venueId: string) {
@@ -2771,14 +2777,17 @@ export class ReservationsService {
       select: {
         id: true,
         timeSlotStart: true,
+        customerCheckedInAt: true,
       },
     });
 
     const expiredIds = nightLockedReservations
       .filter(
         (reservation) =>
-          this.nightLockUntil(reservation.timeSlotStart).getTime() <=
-          now.getTime(),
+          this.nightLockUntil(
+            reservation.timeSlotStart,
+            reservation.customerCheckedInAt,
+          ).getTime() <= now.getTime(),
       )
       .map((reservation) => reservation.id);
 

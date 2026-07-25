@@ -285,6 +285,7 @@ model Venue {
   ownerId                       String
   name                          String
   slug                          String    @unique
+  businessOib                   String?
   address                       String?
   city                          String?
   country                       String    @default("HR")

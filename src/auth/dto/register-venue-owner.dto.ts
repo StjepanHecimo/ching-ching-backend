@@ -4,18 +4,14 @@ import {
   IsOptional,
   IsString,
   Length,
+  Matches,
   Max,
-  MinLength,
   Min,
-} from 'class-validator';
+} from "class-validator";
 
 export class RegisterVenueOwnerDto {
   @IsEmail()
   email!: string;
-
-  @IsString()
-  @MinLength(8)
-  password!: string;
 
   @IsString()
   @Length(2, 80)
@@ -33,6 +29,12 @@ export class RegisterVenueOwnerDto {
   @IsString()
   @Length(2, 120)
   venueName!: string;
+
+  @IsString()
+  @Matches(/^\d{11}$/, {
+    message: "venueBusinessOib must contain exactly 11 digits",
+  })
+  venueBusinessOib!: string;
 
   @IsOptional()
   @IsString()

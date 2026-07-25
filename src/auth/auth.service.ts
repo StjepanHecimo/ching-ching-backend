@@ -83,7 +83,7 @@ export class AuthService {
 
     const verificationToken = this.createVerificationToken();
     const tokenHash = this.hashToken(verificationToken);
-    const passwordHash = await bcrypt.hash(dto.password, 12);
+    const passwordHash = await bcrypt.hash(this.createVerificationToken(), 12);
     const venueSlug = this.slugify(dto.venueName);
 
     const result = await this.prisma.$transaction(async (tx) => {
@@ -102,6 +102,7 @@ export class AuthService {
           ownerId: user.id,
           name: dto.venueName.trim(),
           slug: venueSlug,
+          businessOib: dto.venueBusinessOib.trim(),
           address: dto.venueAddress?.trim(),
           city: dto.venueCity?.trim(),
           country: dto.venueCountry?.trim() ?? "HR",
@@ -280,7 +281,11 @@ export class AuthService {
     return this.configService.get<string>("GOOGLE_MAPS_SERVER_API_KEY")?.trim();
   }
 
-  private logGooglePlacesError(operation: string, status: number, details: string) {
+  private logGooglePlacesError(
+    operation: string,
+    status: number,
+    details: string,
+  ) {
     const safeDetails = details.replace(/"X-Goog-Api-Key"[^,}]*/gi, "");
     console.error(`[AuthService] Google Places ${operation} failed`, {
       status,
@@ -512,6 +517,7 @@ export class AuthService {
             id: user.venues[0].id,
             name: user.venues[0].name,
             slug: user.venues[0].slug,
+            businessOib: user.venues[0].businessOib,
             address: user.venues[0].address,
             city: user.venues[0].city,
             country: user.venues[0].country,
@@ -628,6 +634,7 @@ export class AuthService {
             id: user.venues[0].id,
             name: user.venues[0].name,
             slug: user.venues[0].slug,
+            businessOib: user.venues[0].businessOib,
             address: user.venues[0].address,
             city: user.venues[0].city,
             country: user.venues[0].country,
@@ -870,6 +877,7 @@ export class AuthService {
         id: venue.id,
         name: venue.name,
         slug: venue.slug,
+        businessOib: venue.businessOib,
         address: venue.address,
         city: venue.city,
         country: venue.country,
