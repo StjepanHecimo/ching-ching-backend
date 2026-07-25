@@ -34,6 +34,7 @@ import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 1500;
 const DEFAULT_FIRST_RESERVATION_COMMISSION_BPS = 1000;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
+const VENUE_NO_SHOW_REPORT_DELAY_MINUTES = 5;
 
 @Injectable()
 export class PaymentsService {
@@ -652,6 +653,21 @@ export class PaymentsService {
       throw new NotFoundException("Reservation was not found for this venue.");
     }
 
+    if (
+      reservation.type === ReservationType.LIVE &&
+      reservation.status === ReservationStatus.CHECK_IN_PENDING
+    ) {
+      const noShowReportAvailableAt = new Date(
+        reservation.timeSlotStart.getTime() +
+          VENUE_NO_SHOW_REPORT_DELAY_MINUTES * 60 * 1000,
+      );
+      if (noShowReportAvailableAt.getTime() > Date.now()) {
+        throw new BadRequestException(
+          "Live no-show reports can be submitted five minutes after the reservation time.",
+        );
+      }
+    }
+
     const payment = await this.prisma.reservationPayment.findFirst({
       where: {
         reservationId,
@@ -767,15 +783,52 @@ export class PaymentsService {
       requestedByOwner: request.requestedByOwner,
     });
 
-    const updated = await this.prisma.venueRefundRequest.update({
+    const resolvedAt = new Date();
+    await this.prisma.$transaction([
+      this.prisma.venueRefundRequest.update({
+        where: { id: requestId },
+        data: {
+          status: resolvedStatus,
+          resolutionAmountCents: supportRefundCents,
+          resolutionCurrency,
+          adminNotes,
+          resolvedAt,
+        },
+        include: {
+          venue: {
+            include: {
+              owner: true,
+            },
+          },
+          reservation: true,
+          payment: true,
+          requestedByOwner: true,
+        },
+      }),
+      ...(supportRefundCents != null
+        ? [
+            this.prisma.reservation.updateMany({
+              where: {
+                id: request.reservationId,
+                status: {
+                  in: [
+                    ReservationStatus.CONFIRMED,
+                    ReservationStatus.RESERVED,
+                    ReservationStatus.CHECK_IN_PENDING,
+                  ],
+                },
+              },
+              data: {
+                status: ReservationStatus.RELEASED,
+                releasedAt: resolvedAt,
+              },
+            }),
+          ]
+        : []),
+    ]);
+
+    const updated = await this.prisma.venueRefundRequest.findUnique({
       where: { id: requestId },
-      data: {
-        status: resolvedStatus,
-        resolutionAmountCents: supportRefundCents,
-        resolutionCurrency,
-        adminNotes,
-        resolvedAt: new Date(),
-      },
       include: {
         venue: {
           include: {
@@ -787,6 +840,10 @@ export class PaymentsService {
         requestedByOwner: true,
       },
     });
+
+    if (!updated) {
+      throw new NotFoundException("Problem report was not found.");
+    }
 
     return this.serializeAdminVenueProblemReport(updated);
   }

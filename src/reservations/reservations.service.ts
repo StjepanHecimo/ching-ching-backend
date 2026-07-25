@@ -93,7 +93,6 @@ const LARGE_TABLE_MIN_CAPACITY = 6;
 const LIVE_RADIUS_METERS = 1000;
 const ARRIVAL_GRACE_MINUTES = 15;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
-const LIVE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 10;
 const ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES = 4 * 60;
 const ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 60;
 const MAX_ADVANCE_RESERVATION_DAYS = 7;
@@ -1087,15 +1086,6 @@ export class ReservationsService {
     }
 
     const now = new Date();
-    const liveMinimumCheckInClosesAt = new Date(
-      now.getTime() + LIVE_CUSTOMER_CHECK_IN_WINDOW_MINUTES * 60 * 1000,
-    );
-    const liveCustomerCheckInClosesAt = new Date(
-      Math.max(
-        liveMinimumCheckInClosesAt.getTime(),
-        reservation.timeSlotStart.getTime(),
-      ),
-    );
     const isLiveReservation = reservation.type === ReservationType.LIVE;
     await this.paymentsService.captureForAcceptedReservation(reservation.id);
 
@@ -1109,8 +1099,8 @@ export class ReservationsService {
         confirmationExpiresAt: null,
         ...(isLiveReservation
           ? {
-              checkInOpensAt: now,
-              checkInClosesAt: liveCustomerCheckInClosesAt,
+              checkInOpensAt: reservation.timeSlotStart,
+              checkInClosesAt: null,
               customerCheckedInAt: now,
             }
           : {}),
@@ -1166,6 +1156,12 @@ export class ReservationsService {
     if (refreshed.timeSlotStart.getTime() > Date.now()) {
       throw new BadRequestException(
         "Reservation check-in is available from the reservation start time.",
+      );
+    }
+
+    if (!refreshed.customerCheckedInAt) {
+      throw new BadRequestException(
+        "Customer arrival confirmation is required before venue confirmation.",
       );
     }
 
@@ -2364,11 +2360,16 @@ export class ReservationsService {
   }
 
   private effectiveCustomerCheckInOpensAt(reservation: {
+    type?: ReservationType;
     timeSlotStart: Date;
     checkInOpensAt: Date | null;
     checkInClosesAt: Date | null;
     createdAt: Date;
   }) {
+    if (reservation.type === ReservationType.LIVE) {
+      return reservation.checkInOpensAt ?? reservation.timeSlotStart;
+    }
+
     const checkInClosesAt =
       reservation.checkInClosesAt ??
       this.customerCheckInClosesAt(reservation.timeSlotStart);
@@ -2386,11 +2387,19 @@ export class ReservationsService {
   }
 
   private effectiveCustomerCheckInClosesAt(reservation: {
+    type?: ReservationType;
     timeSlotStart: Date;
     checkInOpensAt: Date | null;
     checkInClosesAt: Date | null;
     createdAt: Date;
   }) {
+    if (reservation.type === ReservationType.LIVE) {
+      return (
+        reservation.checkInClosesAt ??
+        this.nightLockUntil(reservation.timeSlotStart)
+      );
+    }
+
     const checkInClosesAt =
       reservation.checkInClosesAt ??
       this.customerCheckInClosesAt(reservation.timeSlotStart);
@@ -2410,6 +2419,7 @@ export class ReservationsService {
   }
 
   private effectiveCustomerCheckInWindow(reservation: {
+    type?: ReservationType;
     timeSlotStart: Date;
     checkInOpensAt: Date | null;
     checkInClosesAt: Date | null;
@@ -2528,16 +2538,25 @@ export class ReservationsService {
     const candidates = await this.prisma.reservation.findMany({
       where: {
         venueId,
-        type: ReservationType.ADVANCE,
-        status: {
-          in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
-        },
-        customerCheckedInAt: null,
         checkInReminderSentAt: null,
-        timeSlotStart: {
-          gte: now,
-          lte: latestRelevantStart,
-        },
+        OR: [
+          {
+            type: ReservationType.ADVANCE,
+            status: {
+              in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
+            },
+            customerCheckedInAt: null,
+            timeSlotStart: {
+              gte: now,
+              lte: latestRelevantStart,
+            },
+          },
+          {
+            type: ReservationType.LIVE,
+            status: ReservationStatus.CHECK_IN_PENDING,
+            timeSlotStart: { lte: now },
+          },
+        ],
       },
       include: { venue: true },
       take: 100,
@@ -2558,10 +2577,19 @@ export class ReservationsService {
         where: {
           id: reservation.id,
           checkInReminderSentAt: null,
-          customerCheckedInAt: null,
-          status: {
-            in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
-          },
+          OR: [
+            {
+              type: ReservationType.ADVANCE,
+              customerCheckedInAt: null,
+              status: {
+                in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
+              },
+            },
+            {
+              type: ReservationType.LIVE,
+              status: ReservationStatus.CHECK_IN_PENDING,
+            },
+          ],
         },
         data: { checkInReminderSentAt: now },
       });
@@ -2572,7 +2600,7 @@ export class ReservationsService {
 
       await this.notifyCustomer(reservation, {
         title: "Potvrdi dolazak",
-        body: `Nemoj zaboraviti napraviti check-in za rezervaciju u ${reservation.venue.name}.`,
+        body: `Potvrdi dolazak kada stigneš u ${reservation.venue.name}.`,
         type: "reservation_check_in_reminder",
       });
     }
@@ -2671,11 +2699,16 @@ export class ReservationsService {
       },
     });
     const expiredReservations = candidateReservations.filter((reservation) => {
-      if (
-        reservation.customerCheckedInAt ||
-        reservation.checkedInAt ||
-        reservation.seatedAt
-      ) {
+      if (reservation.type === ReservationType.LIVE) {
+        return false;
+      }
+
+      if (reservation.checkedInAt || reservation.seatedAt) {
+        return false;
+      }
+
+      const hasCustomerCheckIn = Boolean(reservation.customerCheckedInAt);
+      if (reservation.type === ReservationType.ADVANCE && hasCustomerCheckIn) {
         return false;
       }
 
@@ -2935,6 +2968,10 @@ export class ReservationsService {
     checkedInAt?: Date | null;
     seatedAt?: Date | null;
   }) {
+    if (reservation.type === ReservationType.LIVE) {
+      return 0;
+    }
+
     const customerConfirmedArrival = Boolean(reservation.customerCheckedInAt);
     const venueConfirmedArrival = Boolean(
       reservation.checkedInAt || reservation.seatedAt,
