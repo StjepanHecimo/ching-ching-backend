@@ -47,6 +47,16 @@ const ADMIN_LOGIN_LOCK_MS = 15 * 60 * 1000;
 const PHONE_VERIFICATION_TTL_MS = 10 * 60 * 1000;
 const PHONE_VERIFICATION_RESEND_COOLDOWN_MS = 60 * 1000;
 const PHONE_VERIFICATION_ATTEMPT_LIMIT = 5;
+const ZAGREB_LOCATION_BIAS = {
+  circle: {
+    center: {
+      latitude: 45.815,
+      longitude: 15.9819,
+    },
+    radius: 50000,
+  },
+};
+const CROATIA_ADDRESS_HINT_PATTERN = /\b(zagreb|hrvatska|croatia)\b/i;
 const ADMIN_PANEL_ROLES: UserRole[] = [
   UserRole.ADMIN,
   UserRole.ADMIN_ACCOUNTING,
@@ -57,6 +67,15 @@ type AdminLoginAttempt = {
   count: number;
   firstAttemptAt: number;
   lockedUntil?: number;
+};
+
+type GooglePlaceAutocompletePrediction = {
+  placeId?: string;
+  text?: { text?: string };
+  structuredFormat?: {
+    mainText?: { text?: string };
+    secondaryText?: { text?: string };
+  };
 };
 
 @Injectable()
@@ -151,6 +170,36 @@ export class AuthService {
       );
     }
 
+    const autocompleteInputs =
+      this.venueAddressAutocompleteInputs(normalizedInput);
+
+    for (const autocompleteInput of autocompleteInputs) {
+      const suggestions = await this.fetchVenueAddressSuggestions(
+        autocompleteInput,
+        apiKey,
+        sessionToken,
+      );
+      if (suggestions.length > 0) {
+        return { suggestions };
+      }
+    }
+
+    return { suggestions: [] };
+  }
+
+  private venueAddressAutocompleteInputs(input: string) {
+    const inputs = [input];
+    if (!CROATIA_ADDRESS_HINT_PATTERN.test(input)) {
+      inputs.push(`${input} Hrvatska`);
+    }
+    return inputs;
+  }
+
+  private async fetchVenueAddressSuggestions(
+    input: string,
+    apiKey: string,
+    sessionToken?: string,
+  ) {
     const response = await fetch(
       "https://places.googleapis.com/v1/places:autocomplete",
       {
@@ -162,8 +211,9 @@ export class AuthService {
             "suggestions.placePrediction.placeId,suggestions.placePrediction.text.text,suggestions.placePrediction.structuredFormat.mainText.text,suggestions.placePrediction.structuredFormat.secondaryText.text",
         },
         body: JSON.stringify({
-          input: normalizedInput,
+          input,
           languageCode: "hr",
+          locationBias: ZAGREB_LOCATION_BIAS,
           includedRegionCodes: ["hr"],
           ...(sessionToken?.trim()
             ? { sessionToken: sessionToken.trim() }
@@ -191,20 +241,25 @@ export class AuthService {
       }>;
     };
 
-    return {
-      suggestions: (payload.suggestions ?? [])
-        .map((suggestion) => suggestion.placePrediction)
-        .filter((prediction): prediction is NonNullable<typeof prediction> => {
+    return (payload.suggestions ?? [])
+      .map((suggestion) => suggestion.placePrediction)
+      .filter(
+        (
+          prediction,
+        ): prediction is Required<
+          Pick<GooglePlaceAutocompletePrediction, "placeId">
+        > &
+          GooglePlaceAutocompletePrediction => {
           return Boolean(prediction?.placeId && prediction.text?.text);
-        })
-        .slice(0, 5)
-        .map((prediction) => ({
-          placeId: prediction.placeId,
-          label: prediction.text?.text,
-          mainText: prediction.structuredFormat?.mainText?.text,
-          secondaryText: prediction.structuredFormat?.secondaryText?.text,
-        })),
-    };
+        },
+      )
+      .slice(0, 5)
+      .map((prediction) => ({
+        placeId: prediction.placeId,
+        label: prediction.text?.text,
+        mainText: prediction.structuredFormat?.mainText?.text,
+        secondaryText: prediction.structuredFormat?.secondaryText?.text,
+      }));
   }
 
   async venueAddressDetails(placeId: string) {
