@@ -650,6 +650,85 @@ export class ReservationsService {
     );
   }
 
+  async listVenueReservedTableIds(
+    venueId: string,
+    query: VenueReservationsQueryDto = {},
+  ) {
+    await this.releaseExpiredReservationLocks(venueId);
+
+    const from = query.from ? new Date(query.from) : null;
+    const to = query.to ? new Date(query.to) : null;
+    if (from && Number.isNaN(from.getTime())) {
+      throw new BadRequestException("Invalid reservation range start.");
+    }
+    if (to && Number.isNaN(to.getTime())) {
+      throw new BadRequestException("Invalid reservation range end.");
+    }
+    if (from && to && to.getTime() <= from.getTime()) {
+      throw new BadRequestException(
+        "Reservation range end must be after its start.",
+      );
+    }
+
+    const timeSlotStart: Prisma.DateTimeFilter = {};
+    if (from) {
+      timeSlotStart.gte = from;
+    }
+    if (to) {
+      timeSlotStart.lt = to;
+    }
+
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        venueId,
+        status: {
+          in: [
+            ReservationStatus.PENDING_VENUE_CONFIRMATION,
+            ReservationStatus.CONFIRMED,
+            ReservationStatus.RESERVED,
+            ReservationStatus.CHECK_IN_PENDING,
+            ReservationStatus.CHECKED_IN,
+            ReservationStatus.SEATED,
+          ],
+        },
+        ...(from || to ? { timeSlotStart } : {}),
+      },
+      select: {
+        id: true,
+        tableId: true,
+        tableLabel: true,
+        customerName: true,
+        customerCheckedInAt: true,
+        status: true,
+        updatedAt: true,
+      },
+      orderBy: { updatedAt: "desc" },
+      take: query.limit ?? 200,
+    });
+
+    return {
+      reservedTableIds: Array.from(
+        new Set(
+          reservations
+            .map((reservation) => reservation.tableId.trim())
+            .filter(Boolean),
+        ),
+      ),
+      items: reservations.map((reservation) => ({
+        id: reservation.id,
+        tableId: reservation.tableId,
+        tableLabel: reservation.tableLabel,
+        customerName: reservation.customerName,
+        customerCheckedInAt:
+          reservation.customerCheckedInAt?.toISOString() ?? null,
+        status: reservation.status,
+      })),
+      updatedAt: reservations[0]?.updatedAt.toISOString() ?? null,
+      from: from?.toISOString() ?? null,
+      to: to?.toISOString() ?? null,
+    };
+  }
+
   async listCustomerReservations(
     customerEmail?: string,
     query: VenueReservationsQueryDto = {},
@@ -659,7 +738,9 @@ export class ReservationsService {
     const from = query.from ? new Date(query.from) : null;
     const to = query.to ? new Date(query.to) : null;
     if (from && Number.isNaN(from.getTime())) {
-      throw new BadRequestException("Invalid customer reservation range start.");
+      throw new BadRequestException(
+        "Invalid customer reservation range start.",
+      );
     }
     if (to && Number.isNaN(to.getTime())) {
       throw new BadRequestException("Invalid customer reservation range end.");

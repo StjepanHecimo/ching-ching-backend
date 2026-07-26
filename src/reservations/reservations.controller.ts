@@ -131,6 +131,14 @@ export class ReservationsController {
     );
   }
 
+  @Get("preview/venues/:venueId/reserved-table-ids")
+  listVenueReservedTableIds(
+    @Param("venueId") venueId: string,
+    @Query() query: VenueReservationsQueryDto,
+  ) {
+    return this.reservationsService.listVenueReservedTableIds(venueId, query);
+  }
+
   @Get("preview/customers/reservations/history")
   listCustomerReservationHistory(
     @Query("customerEmail") customerEmail?: string,
