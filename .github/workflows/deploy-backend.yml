@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to DigitalOcean
+    name: Deploy to Hetzner
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
