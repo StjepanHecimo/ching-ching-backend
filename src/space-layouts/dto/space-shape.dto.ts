@@ -62,6 +62,7 @@ export class SpaceShapeDto {
   features?: {
     hasToilet?: boolean;
     hasBar?: boolean;
+    hasStage?: boolean;
     hasBilliardsOrDarts?: boolean;
     hasTv?: boolean;
     hasDjMusicCorner?: boolean;

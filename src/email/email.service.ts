@@ -376,12 +376,17 @@ export class EmailService {
             <p style="font-size:16px;line-height:1.55;margin:0 0 24px;color:#6c4127;">
               Otvori Chin-Chin aplikaciju i nastavi tamo gdje si stao.
             </p>
-            <a href="${input.appVerificationLink}" style="display:inline-block;background:linear-gradient(135deg,#ff9f1c,#ff6b1a);color:#ffffff;padding:15px 24px;border-radius:12px;text-decoration:none;font-size:17px;font-weight:900;">
+            <a href="${input.appVerificationLink}" style="display:inline-block;background:#2d1a10;color:#ffffff !important;padding:15px 26px;border-radius:10px;text-decoration:none;font-size:17px;font-weight:900;border:2px solid #2d1a10;">
               Verificiraj email
             </a>
-            <p style="font-size:13px;line-height:1.5;margin:24px 0 0;color:#79533d;">
-              Ako se aplikacija ne otvori, koristi fallback link:<br />
-              <a href="${input.verificationLink}" style="color:#c65a00;text-decoration:underline;">Potvrdi preko browsera</a>
+            <p style="font-size:13px;line-height:1.5;margin:24px 0 8px;color:#79533d;">
+              Ako se aplikacija ne otvori, koristi fallback link:
+            </p>
+            <a href="${input.verificationLink}" style="display:inline-block;color:#2d1a10 !important;background:#ffffff;border:1px solid #d8a33b;border-radius:8px;padding:10px 14px;text-decoration:none;font-size:13px;font-weight:900;">
+              Potvrdi preko browsera
+            </a>
+            <p style="font-size:11px;line-height:1.45;margin:14px 0 0;color:#8a6047;word-break:break-all;">
+              ${input.verificationLink}
             </p>
           </div>
         </div>
