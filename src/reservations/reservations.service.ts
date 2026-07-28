@@ -1766,9 +1766,10 @@ export class ReservationsService {
           roomLabel: room.roomLabel,
           isTemporarySpace: room.isTemporarySpace,
           tableCount: room.tableCount,
-          limit:
-            Math.max(1, Math.floor(room.tableCount / 4)) +
-            (room.isTemporarySpace ? 1 : 0),
+          limit: Math.max(
+            1,
+            Math.floor(room.tableCount * (room.isTemporarySpace ? 0.5 : 0.4)),
+          ),
           approvedIds: [...room.approvedChinChinTableIds],
         })),
       )}`,
@@ -1796,9 +1797,10 @@ export class ReservationsService {
     }
 
     for (const [room, selectedCount] of selectedByRoom.entries()) {
-      const maxChinChinTables =
-        Math.max(1, Math.floor(room.tableCount / 4)) +
-        (room.isTemporarySpace ? 1 : 0);
+      const maxChinChinTables = Math.max(
+        1,
+        Math.floor(room.tableCount * (room.isTemporarySpace ? 0.5 : 0.4)),
+      );
       this.logger.log(
         `[venue-live] validation room venueId=${venueId} roomLabel=${room.roomLabel} selected=${selectedCount} max=${maxChinChinTables} temporary=${room.isTemporarySpace}`,
       );
