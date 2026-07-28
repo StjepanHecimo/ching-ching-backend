@@ -58,7 +58,7 @@ export class SpaceLayoutsService {
   async create(userId: string, dto: CreateSpaceLayoutDto) {
     await this.ensureVenueOwnership(userId, dto.venueId);
     const normalizedSpace = this.normalizeSetupSpace(dto);
-    this.ensureUsableSetupPhotos(dto, normalizedSpace.rooms.length);
+    this.ensureUsableSetupPhotos(dto);
     this.ensureUsableFloorPlanFile(dto.floorPlanFile);
     this.ensureUsableSpace(normalizedSpace.primaryRoom);
     this.ensureUsableVenueProfilePhotos(dto.venuePhotos);
@@ -193,7 +193,7 @@ export class SpaceLayoutsService {
 
   async generatePreview(dto: GenerateSpaceLayoutPreviewDto) {
     const normalizedSpace = this.normalizeSetupSpace(dto);
-    this.ensureUsableSetupPhotos(dto, normalizedSpace.rooms.length);
+    this.ensureUsableSetupPhotos(dto);
     this.ensureUsableFloorPlanFile(dto.floorPlanFile);
     this.ensureUsableSpace(normalizedSpace.primaryRoom);
 
@@ -286,7 +286,7 @@ export class SpaceLayoutsService {
   ) {
     await this.ensureVenueOwnership(userId, dto.venueId);
     const normalizedSpace = this.normalizeSetupSpace(dto);
-    this.ensureUsableSetupPhotos(dto, normalizedSpace.rooms.length);
+    this.ensureUsableSetupPhotos(dto);
     this.ensureUsableVenueProfilePhotos(dto.venuePhotos);
     this.ensureUsableFloorPlanFile(dto.floorPlanFile);
     this.ensureUsableSpace(normalizedSpace.primaryRoom);
@@ -918,7 +918,6 @@ export class SpaceLayoutsService {
       space?: SpaceShapeDto;
       photos?: LayoutPhotoDto[];
     },
-    normalizedRoomCount: number,
   ) {
     const rooms = dto.rooms?.length ? dto.rooms : dto.space ? [dto.space] : [];
 
@@ -935,12 +934,6 @@ export class SpaceLayoutsService {
     }
 
     const roomsWithPhotos = rooms.filter((room) => room.photos?.length);
-
-    if (roomsWithPhotos.length !== normalizedRoomCount) {
-      throw new BadRequestException(
-        "Provide at least one Chin-Chin table photo globally or at least one table photo for each room.",
-      );
-    }
 
     for (const room of roomsWithPhotos) {
       const allowedPhotos = this.maxAllowedChinChinPhotos([room]);
