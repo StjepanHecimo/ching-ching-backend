@@ -696,6 +696,7 @@ export class SpaceLayoutsService {
       adjustedBy,
       approvedAt: now,
       previousStatus: project.status,
+      adminTablePhotos: this.normalizeAdminTablePhotos(dto.adminTablePhotos),
     });
 
     const updatedProject = await this.prisma.spaceLayoutProject.update({
@@ -1327,6 +1328,7 @@ export class SpaceLayoutsService {
     adjustedBy,
     approvedAt,
     previousStatus,
+    adminTablePhotos,
   }: {
     previousSavedLayout: Record<string, unknown>;
     layout: Record<string, unknown>;
@@ -1334,6 +1336,7 @@ export class SpaceLayoutsService {
     adjustedBy: string;
     approvedAt: string;
     previousStatus: SpaceLayoutStatus;
+    adminTablePhotos: Array<Record<string, unknown>>;
   }) {
     const existingHistory = Array.isArray(previousSavedLayout.versionHistory)
       ? previousSavedLayout.versionHistory.filter(
@@ -1344,6 +1347,10 @@ export class SpaceLayoutsService {
         )
       : [];
     const nextVersion = existingHistory.length + 1;
+    const mergedPhotos = this.mergeSavedLayoutPhotos(
+      previousSavedLayout.photos,
+      adminTablePhotos,
+    );
     const versionEntry = {
       version: nextVersion,
       status: SpaceLayoutStatus.APPROVED,
@@ -1354,10 +1361,12 @@ export class SpaceLayoutsService {
       adjustedAt: approvedAt,
       approvedAt,
       layout,
+      photos: mergedPhotos,
     };
 
     return {
       ...previousSavedLayout,
+      photos: mergedPhotos,
       selectedLayoutOptionId: layoutId,
       editedBy: "admin",
       adjustedBy,
@@ -1367,6 +1376,61 @@ export class SpaceLayoutsService {
       layout,
       versionHistory: [...existingHistory, versionEntry],
     };
+  }
+
+  private normalizeAdminTablePhotos(photos?: Array<Record<string, unknown>>) {
+    if (!Array.isArray(photos)) {
+      return [];
+    }
+
+    const normalized: Array<Record<string, unknown>> = [];
+    const seen = new Set<string>();
+    for (const photo of photos) {
+      const id = photo.id?.toString().trim() ?? "";
+      const dataUrl = photo.dataUrl?.toString().trim() ?? "";
+      const remoteUrl = photo.remoteUrl?.toString().trim() ?? "";
+      if (!id || seen.has(id) || (!dataUrl && !remoteUrl)) {
+        continue;
+      }
+
+      seen.add(id);
+      normalized.push({
+        id,
+        fileName: photo.fileName?.toString().trim() || id,
+        mimeType: photo.mimeType?.toString().trim() || "image/jpeg",
+        ...(dataUrl ? { dataUrl } : {}),
+        ...(remoteUrl ? { remoteUrl } : {}),
+      });
+    }
+
+    return normalized;
+  }
+
+  private mergeSavedLayoutPhotos(
+    existingPhotos: unknown,
+    adminTablePhotos: Array<Record<string, unknown>>,
+  ) {
+    const merged: Array<Record<string, unknown>> = [];
+    const seen = new Set<string>();
+
+    const addPhoto = (photo: unknown) => {
+      if (typeof photo !== "object" || !photo || Array.isArray(photo)) {
+        return;
+      }
+      const id = (photo as Record<string, unknown>).id?.toString().trim();
+      if (!id || seen.has(id)) {
+        return;
+      }
+      seen.add(id);
+      merged.push(photo as Record<string, unknown>);
+    };
+
+    if (Array.isArray(existingPhotos)) {
+      existingPhotos.forEach(addPhoto);
+    }
+    adminTablePhotos.forEach(addPhoto);
+
+    return merged;
   }
 
   private async mergeAdditionalRoomLayout(

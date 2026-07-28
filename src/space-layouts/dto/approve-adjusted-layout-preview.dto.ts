@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsBoolean,
   IsObject,
   IsOptional,
@@ -23,4 +24,9 @@ export class ApproveAdjustedLayoutPreviewDto {
   @IsOptional()
   @IsBoolean()
   forceApprove?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsObject({ each: true })
+  adminTablePhotos?: Array<Record<string, unknown>>;
 }
