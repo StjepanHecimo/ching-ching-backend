@@ -5,6 +5,7 @@ import { AdminRoles } from "../auth/decorators/admin-roles.decorator";
 import { AdminRolesGuard } from "../auth/guards/admin-roles.guard";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
+import { CreateTablePhotoUploadUrlDto } from "./dto/create-table-photo-upload-url.dto";
 import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
 import { RequestTableAdditionPreviewDto } from "./dto/request-table-addition-preview.dto";
 import { RequestTableUpdatesPreviewDto } from "./dto/request-table-updates-preview.dto";
@@ -76,6 +77,14 @@ export class SpaceLayoutsPreviewController {
     @Body() dto: RequestTableUpdatesPreviewDto,
   ) {
     return this.spaceLayoutsService.requestTableUpdatesPreview(venueId, dto);
+  }
+
+  @Post("preview/venues/:venueId/table-photo-upload-url")
+  createTablePhotoUploadUrl(
+    @Param("venueId") venueId: string,
+    @Body() dto: CreateTablePhotoUploadUrlDto,
+  ) {
+    return this.spaceLayoutsService.createTablePhotoUploadUrl(venueId, dto);
   }
 
   @Post("preview/venues/:venueId/request-space-change")

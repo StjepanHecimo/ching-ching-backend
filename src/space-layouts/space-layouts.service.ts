@@ -6,6 +6,8 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "crypto";
 import { Prisma } from "../../generated/prisma/client";
 import { DevicePushApp, SpaceLayoutStatus } from "../../generated/prisma/enums";
@@ -13,6 +15,7 @@ import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
+import { CreateTablePhotoUploadUrlDto } from "./dto/create-table-photo-upload-url.dto";
 import { CreateSpaceLayoutDto } from "./dto/create-space-layout.dto";
 import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
 import { LayoutPhotoDto } from "./dto/layout-photo.dto";
@@ -63,6 +66,7 @@ type GeneratePreviewJob = {
 export class SpaceLayoutsService {
   private readonly logger = new Logger(SpaceLayoutsService.name);
   private readonly generatePreviewJobs = new Map<string, GeneratePreviewJob>();
+  private s3Client: S3Client | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -736,6 +740,56 @@ export class SpaceLayoutsService {
     };
   }
 
+  async createTablePhotoUploadUrl(
+    venueId: string,
+    dto: CreateTablePhotoUploadUrlDto,
+  ) {
+    const bucket = this.configService.get<string>("R2_BUCKET")?.trim();
+    const publicBaseUrl = this.configService
+      .get<string>("R2_PUBLIC_BASE_URL")
+      ?.trim()
+      .replace(/\/+$/, "");
+
+    if (!bucket || !publicBaseUrl) {
+      throw new InternalServerErrorException(
+        "R2 storage is not configured for table photo uploads.",
+      );
+    }
+
+    const photoId = `table-photo-${randomUUID()}`;
+    const extension = this.extensionFromMimeType(dto.mimeType);
+    const key = [
+      "venues",
+      this.slugForObjectKey(venueId),
+      "table-photos",
+      `${photoId}${extension}`,
+    ].join("/");
+
+    const uploadUrl = await getSignedUrl(
+      this.getS3Client(),
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: dto.mimeType,
+      }),
+      { expiresIn: 15 * 60 },
+    );
+    const remoteUrl = `${publicBaseUrl}/${key}`;
+
+    return {
+      uploadUrl,
+      method: "PUT",
+      expiresInSeconds: 15 * 60,
+      key,
+      photo: {
+        id: photoId,
+        fileName: dto.fileName.trim(),
+        mimeType: dto.mimeType,
+        remoteUrl,
+      },
+    };
+  }
+
   async requestSpaceChangePreview(
     venueId: string,
     dto: RequestSpaceChangePreviewDto,
@@ -1069,6 +1123,57 @@ export class SpaceLayoutsService {
   private formatTablePushLabel(tableId: string) {
     const match = tableId.match(/table-(\d+)$/i);
     return match ? `Table ${match[1]}` : tableId || "stol";
+  }
+
+  private getS3Client() {
+    if (this.s3Client) {
+      return this.s3Client;
+    }
+
+    const endpoint = this.configService.get<string>("R2_ENDPOINT")?.trim();
+    const accessKeyId = this.configService
+      .get<string>("R2_ACCESS_KEY_ID")
+      ?.trim();
+    const secretAccessKey = this.configService
+      .get<string>("R2_SECRET_ACCESS_KEY")
+      ?.trim();
+
+    if (!endpoint || !accessKeyId || !secretAccessKey) {
+      throw new InternalServerErrorException(
+        "R2 storage credentials are not configured.",
+      );
+    }
+
+    this.s3Client = new S3Client({
+      region: this.configService.get<string>("R2_REGION")?.trim() || "auto",
+      endpoint,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+      },
+    });
+    return this.s3Client;
+  }
+
+  private extensionFromMimeType(mimeType: string) {
+    if (mimeType === "image/png") {
+      return ".png";
+    }
+    if (mimeType === "image/webp") {
+      return ".webp";
+    }
+    return ".jpg";
+  }
+
+  private slugForObjectKey(value: string) {
+    return (
+      value
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "venue"
+    );
   }
 
   private async notifyVenueTableUpdatesApproved(
