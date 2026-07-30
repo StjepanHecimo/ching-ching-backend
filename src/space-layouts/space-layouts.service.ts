@@ -8,7 +8,8 @@ import {
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "crypto";
 import { Prisma } from "../../generated/prisma/client";
-import { SpaceLayoutStatus } from "../../generated/prisma/enums";
+import { DevicePushApp, SpaceLayoutStatus } from "../../generated/prisma/enums";
+import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
@@ -66,6 +67,7 @@ export class SpaceLayoutsService {
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
     private readonly emailService: EmailService,
+    private readonly deviceTokensService: DeviceTokensService,
   ) {}
 
   async create(userId: string, dto: CreateSpaceLayoutDto) {
@@ -864,7 +866,91 @@ export class SpaceLayoutsService {
       );
     }
 
+    await this.notifyVenueTablePhotoApproved(
+      project,
+      changeRequest,
+      previousSavedLayout,
+    );
+
     return this.serializeProject(updatedProject);
+  }
+
+  private async notifyVenueTablePhotoApproved(
+    project: {
+      id: string;
+      venueId: string;
+      venue?: {
+        name?: string | null;
+        ownerId?: string | null;
+        owner?: { id?: string | null } | null;
+      } | null;
+    },
+    changeRequest: Record<string, unknown> | null,
+    previousSavedLayout: Record<string, unknown>,
+  ) {
+    const changeRequestType =
+      changeRequest?.type?.toString() ??
+      previousSavedLayout.changeRequestType?.toString();
+
+    if (changeRequestType !== "ADD_CHIN_CHIN_TABLE") {
+      return;
+    }
+
+    const tablePhotoId =
+      changeRequest?.tablePhotoId?.toString().trim() ||
+      previousSavedLayout.requestedTablePhotoId?.toString().trim();
+    if (!tablePhotoId) {
+      return;
+    }
+
+    const ownerId =
+      project.venue?.ownerId?.trim() || project.venue?.owner?.id?.trim();
+    if (!ownerId) {
+      this.logger.warn(
+        `Table photo approval push skipped for project ${project.id}: venue owner id is missing.`,
+      );
+      return;
+    }
+
+    const tableId =
+      changeRequest?.tableId?.toString().trim() ||
+      previousSavedLayout.requestedTableId?.toString().trim() ||
+      "";
+    const tableLabel = this.formatTablePushLabel(tableId);
+    const venueName = project.venue?.name?.trim() || "Vaš objekt";
+
+    try {
+      this.logger.log(
+        `[push][venue-owner] sending table photo approval projectId=${project.id} ownerId=${ownerId} venueId=${project.venueId} tableId=${tableId}`,
+      );
+      await this.deviceTokensService.sendToUser({
+        userId: ownerId,
+        app: DevicePushApp.VENUE_OWNER,
+        title: "Slika stola je odobrena",
+        body: `${venueName}: slika za ${tableLabel} je odobrena.`,
+        data: {
+          type: "table_photo_approved",
+          venueId: project.venueId,
+          projectId: project.id,
+          tableId,
+          tablePhotoId,
+        },
+      });
+      this.logger.log(
+        `[push][venue-owner] sent table photo approval projectId=${project.id} ownerId=${ownerId} tableId=${tableId}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Table photo approval push failed for project ${project.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private formatTablePushLabel(tableId: string) {
+    const match = tableId.match(/table-(\d+)$/i);
+    return match ? `Table ${match[1]}` : tableId || "stol";
   }
 
   private async notifyVenueRoomDeleted(
