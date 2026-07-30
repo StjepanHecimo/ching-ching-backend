@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { randomUUID } from "crypto";
 import { Prisma } from "../../generated/prisma/client";
 import { SpaceLayoutStatus } from "../../generated/prisma/enums";
 import { EmailService } from "../email/email.service";
@@ -45,9 +46,21 @@ type LayoutTable = {
   chinChinCandidate: boolean;
 };
 
+type GeneratePreviewJobStatus = "pending" | "running" | "succeeded" | "failed";
+
+type GeneratePreviewJob = {
+  id: string;
+  status: GeneratePreviewJobStatus;
+  createdAt: string;
+  updatedAt: string;
+  result?: unknown;
+  error?: string;
+};
+
 @Injectable()
 export class SpaceLayoutsService {
   private readonly logger = new Logger(SpaceLayoutsService.name);
+  private readonly generatePreviewJobs = new Map<string, GeneratePreviewJob>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -198,6 +211,103 @@ export class SpaceLayoutsService {
     this.ensureUsableSpace(normalizedSpace.primaryRoom);
 
     return this.createSuggestion(normalizedSpace as Prisma.JsonValue);
+  }
+
+  startGeneratePreviewJob(dto: GenerateSpaceLayoutPreviewDto) {
+    const normalizedSpace = this.normalizeSetupSpace(dto);
+    this.ensureUsableSetupPhotos(dto);
+    this.ensureUsableFloorPlanFile(dto.floorPlanFile);
+    this.ensureUsableSpace(normalizedSpace.primaryRoom);
+    this.cleanupGeneratePreviewJobs();
+
+    const now = new Date().toISOString();
+    const job: GeneratePreviewJob = {
+      id: randomUUID(),
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.generatePreviewJobs.set(job.id, job);
+
+    void this.runGeneratePreviewJob(
+      job.id,
+      normalizedSpace as Prisma.JsonValue,
+    );
+
+    return {
+      jobId: job.id,
+      status: job.status,
+    };
+  }
+
+  getGeneratePreviewJob(jobId: string) {
+    const job = this.generatePreviewJobs.get(jobId);
+    if (!job) {
+      throw new NotFoundException("AI generation job was not found.");
+    }
+
+    return {
+      jobId: job.id,
+      status: job.status,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      ...(job.result ? { result: job.result } : {}),
+      ...(job.error ? { message: job.error } : {}),
+    };
+  }
+
+  private async runGeneratePreviewJob(
+    jobId: string,
+    normalizedSpace: Prisma.JsonValue,
+  ) {
+    this.updateGeneratePreviewJob(jobId, { status: "running" });
+
+    try {
+      const result = await this.createSuggestion(normalizedSpace);
+      this.updateGeneratePreviewJob(jobId, {
+        status: "succeeded",
+        result,
+      });
+    } catch (error) {
+      this.logger.error(
+        `AI generation job ${jobId} failed.`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      this.updateGeneratePreviewJob(jobId, {
+        status: "failed",
+        error:
+          error instanceof Error
+            ? error.message
+            : "AI generacija nije uspjela.",
+      });
+    }
+  }
+
+  private updateGeneratePreviewJob(
+    jobId: string,
+    patch: Partial<Omit<GeneratePreviewJob, "id" | "createdAt">>,
+  ) {
+    const current = this.generatePreviewJobs.get(jobId);
+    if (!current) {
+      return;
+    }
+
+    this.generatePreviewJobs.set(jobId, {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  private cleanupGeneratePreviewJobs() {
+    const maxAgeMs = 30 * 60 * 1000;
+    const now = Date.now();
+    for (const [jobId, job] of this.generatePreviewJobs) {
+      const createdAt = Date.parse(job.createdAt);
+      if (Number.isNaN(createdAt) || now - createdAt > maxAgeMs) {
+        this.generatePreviewJobs.delete(jobId);
+      }
+    }
   }
 
   async generateSuggestion(userId: string, id: string) {
@@ -912,13 +1022,11 @@ export class SpaceLayoutsService {
     }
   }
 
-  private ensureUsableSetupPhotos(
-    dto: {
-      rooms?: SpaceShapeDto[];
-      space?: SpaceShapeDto;
-      photos?: LayoutPhotoDto[];
-    },
-  ) {
+  private ensureUsableSetupPhotos(dto: {
+    rooms?: SpaceShapeDto[];
+    space?: SpaceShapeDto;
+    photos?: LayoutPhotoDto[];
+  }) {
     const rooms = dto.rooms?.length ? dto.rooms : dto.space ? [dto.space] : [];
 
     if (dto.photos?.length) {
@@ -953,10 +1061,7 @@ export class SpaceLayoutsService {
     const totalAllowed = rooms.reduce((total, room) => {
       const requestedTableCount = room.requestedTableCount ?? 0;
       const ratio = room.isTemporarySpace ? 0.5 : 0.4;
-      return (
-        total +
-        Math.max(1, Math.floor(requestedTableCount * ratio))
-      );
+      return total + Math.max(1, Math.floor(requestedTableCount * ratio));
     }, 0);
 
     return Math.max(1, totalAllowed);

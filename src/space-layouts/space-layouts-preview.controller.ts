@@ -20,6 +20,16 @@ export class SpaceLayoutsPreviewController {
     return this.spaceLayoutsService.generatePreview(dto);
   }
 
+  @Post("generate-preview/jobs")
+  startGeneratePreviewJob(@Body() dto: GenerateSpaceLayoutPreviewDto) {
+    return this.spaceLayoutsService.startGeneratePreviewJob(dto);
+  }
+
+  @Get("generate-preview/jobs/:jobId")
+  getGeneratePreviewJob(@Param("jobId") jobId: string) {
+    return this.spaceLayoutsService.getGeneratePreviewJob(jobId);
+  }
+
   @Post("submit-complete-preview")
   submitCompletePreview(@Body() dto: SubmitCompleteSpaceLayoutReviewDto) {
     return this.spaceLayoutsService.submitCompletePreviewForReview(dto);
