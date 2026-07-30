@@ -6,7 +6,7 @@ const express = require("express");
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  const bodyLimit = process.env.JSON_BODY_LIMIT ?? "20mb";
+  const bodyLimit = process.env.JSON_BODY_LIMIT ?? "50mb";
 
   app.use(express.json({ limit: bodyLimit }));
   app.use(express.urlencoded({ extended: true, limit: bodyLimit }));

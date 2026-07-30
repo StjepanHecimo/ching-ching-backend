@@ -18,6 +18,7 @@ import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-previ
 import { LayoutPhotoDto } from "./dto/layout-photo.dto";
 import { LayoutReferenceFileDto } from "./dto/layout-reference-file.dto";
 import { RequestTableAdditionPreviewDto } from "./dto/request-table-addition-preview.dto";
+import { RequestTableUpdatesPreviewDto } from "./dto/request-table-updates-preview.dto";
 import { RequestSpaceChangePreviewDto } from "./dto/request-space-change-preview.dto";
 import { SaveSpaceLayoutDto } from "./dto/save-space-layout.dto";
 import { SpaceShapeDto } from "./dto/space-shape.dto";
@@ -627,6 +628,114 @@ export class SpaceLayoutsService {
     };
   }
 
+  async requestTableUpdatesPreview(
+    venueId: string,
+    dto: RequestTableUpdatesPreviewDto,
+  ) {
+    const sourceProject =
+      (await this.prisma.spaceLayoutProject.findFirst({
+        where: { venueId, status: SpaceLayoutStatus.APPROVED },
+        orderBy: { approvedAt: "desc" },
+        include: { venue: true },
+      })) ??
+      (await this.prisma.spaceLayoutProject.findFirst({
+        where: { venueId },
+        orderBy: { updatedAt: "desc" },
+        include: { venue: true },
+      }));
+
+    if (!sourceProject) {
+      throw new NotFoundException("Space layout project was not found.");
+    }
+
+    const sourceSavedLayout = this.asJsonObject(sourceProject.savedLayout);
+    const sourceLayout = this.asJsonObject(sourceSavedLayout?.layout ?? null);
+    if (!sourceLayout) {
+      throw new BadRequestException(
+        "Approved layout is required before requesting table updates.",
+      );
+    }
+
+    let updatedLayout = sourceLayout as Record<string, unknown>;
+    const normalizedPhotos: Array<Record<string, unknown>> = [];
+    const updates = dto.updates.map((update, index) => {
+      const photo = update.photo
+        ? this.normalizePhoto(
+            update.photo,
+            `change-request-${update.tableId}-photo-${index + 1}`,
+          )
+        : null;
+      const chinChinTier =
+        update.chinChinTier ??
+        (update.seats && update.seats > 4 ? "LARGE" : "STANDARD");
+
+      updatedLayout = this.markTableAsChinChinCandidate(
+        updatedLayout,
+        update.tableId,
+        photo?.id ?? null,
+        chinChinTier,
+        update.seats,
+      );
+
+      if (photo) {
+        normalizedPhotos.push(photo);
+      }
+
+      return {
+        tableId: update.tableId,
+        tablePhotoId: photo?.id,
+        chinChinTier,
+        seats: update.seats,
+      };
+    });
+    const now = new Date().toISOString();
+    const photos = Array.isArray(sourceProject.photos)
+      ? [...sourceProject.photos, ...normalizedPhotos]
+      : normalizedPhotos;
+
+    const project = await this.prisma.spaceLayoutProject.create({
+      data: {
+        ownerId: sourceProject.ownerId,
+        venueId: sourceProject.venueId,
+        name: `${sourceProject.name ?? sourceProject.venue.name} - table updates request`,
+        status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW,
+        photos: photos as Prisma.InputJsonValue,
+        space: sourceProject.space as Prisma.InputJsonValue,
+        aiSuggestion: sourceProject.aiSuggestion as Prisma.InputJsonValue,
+        savedLayout: {
+          ...(sourceSavedLayout ?? {}),
+          selectedLayoutOptionId:
+            updatedLayout.id?.toString() ??
+            sourceSavedLayout?.selectedLayoutOptionId?.toString(),
+          editedBy: "flutter-editor",
+          changeRequestType: "UPDATE_CHIN_CHIN_TABLES",
+          requestedTableUpdates: updates,
+          ownerNotes: dto.ownerNotes?.trim(),
+          layout: updatedLayout,
+          sourceProjectId: sourceProject.id,
+          requestedAt: now,
+        } as Prisma.InputJsonValue,
+        reviewSubmission: {
+          submittedAt: now,
+          ownerNotes: dto.ownerNotes?.trim(),
+          review: { status: "pending" },
+          changeRequest: {
+            type: "UPDATE_CHIN_CHIN_TABLES",
+            sourceProjectId: sourceProject.id,
+            updates,
+            requestedAt: now,
+          },
+        } as Prisma.InputJsonValue,
+      },
+      include: { venue: true },
+    });
+
+    return {
+      ...this.serializeProject(project),
+      message: "Table updates request submitted for Chin-Chin review.",
+    };
+  }
+
   async requestSpaceChangePreview(
     venueId: string,
     dto: RequestSpaceChangePreviewDto,
@@ -892,6 +1001,15 @@ export class SpaceLayoutsService {
       changeRequest?.type?.toString() ??
       previousSavedLayout.changeRequestType?.toString();
 
+    if (changeRequestType === "UPDATE_CHIN_CHIN_TABLES") {
+      await this.notifyVenueTableUpdatesApproved(
+        project,
+        changeRequest,
+        previousSavedLayout,
+      );
+      return;
+    }
+
     if (changeRequestType !== "ADD_CHIN_CHIN_TABLE") {
       return;
     }
@@ -951,6 +1069,91 @@ export class SpaceLayoutsService {
   private formatTablePushLabel(tableId: string) {
     const match = tableId.match(/table-(\d+)$/i);
     return match ? `Table ${match[1]}` : tableId || "stol";
+  }
+
+  private async notifyVenueTableUpdatesApproved(
+    project: {
+      id: string;
+      venueId: string;
+      venue?: {
+        name?: string | null;
+        ownerId?: string | null;
+        owner?: { id?: string | null } | null;
+      } | null;
+    },
+    changeRequest: Record<string, unknown> | null,
+    previousSavedLayout: Record<string, unknown>,
+  ) {
+    const rawUpdates = Array.isArray(changeRequest?.updates)
+      ? changeRequest?.updates
+      : Array.isArray(previousSavedLayout.requestedTableUpdates)
+        ? previousSavedLayout.requestedTableUpdates
+        : [];
+    const updates = rawUpdates
+      .filter(
+        (update): update is Record<string, unknown> =>
+          typeof update === "object" &&
+          update !== null &&
+          !Array.isArray(update),
+      )
+      .map((update) => ({
+        tableId: update.tableId?.toString().trim() ?? "",
+        tablePhotoId: update.tablePhotoId?.toString().trim() ?? "",
+      }));
+    const photoUpdates = updates.filter((update) => update.tablePhotoId);
+    if (!photoUpdates.length) {
+      return;
+    }
+
+    const ownerId =
+      project.venue?.ownerId?.trim() || project.venue?.owner?.id?.trim();
+    if (!ownerId) {
+      this.logger.warn(
+        `Table updates approval push skipped for project ${project.id}: venue owner id is missing.`,
+      );
+      return;
+    }
+
+    const venueName = project.venue?.name?.trim() || "Vaš objekt";
+    const firstTableLabel = this.formatTablePushLabel(
+      photoUpdates[0]?.tableId ?? "",
+    );
+    const body =
+      photoUpdates.length === 1
+        ? `${venueName}: slika za ${firstTableLabel} je odobrena.`
+        : `${venueName}: odobrene su slike za ${photoUpdates.length} Chin-Chin stolova.`;
+
+    try {
+      this.logger.log(
+        `[push][venue-owner] sending table updates approval projectId=${project.id} ownerId=${ownerId} venueId=${project.venueId} photoUpdateCount=${photoUpdates.length}`,
+      );
+      await this.deviceTokensService.sendToUser({
+        userId: ownerId,
+        app: DevicePushApp.VENUE_OWNER,
+        title:
+          photoUpdates.length === 1
+            ? "Slika stola je odobrena"
+            : "Slike stolova su odobrene",
+        body,
+        data: {
+          type: "table_photos_approved",
+          venueId: project.venueId,
+          projectId: project.id,
+          tableId: photoUpdates[0]?.tableId ?? "",
+          tablePhotoId: photoUpdates[0]?.tablePhotoId ?? "",
+          tableCount: String(photoUpdates.length),
+        },
+      });
+      this.logger.log(
+        `[push][venue-owner] sent table updates approval projectId=${project.id} ownerId=${ownerId} photoUpdateCount=${photoUpdates.length}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Table updates approval push failed for project ${project.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private async notifyVenueRoomDeleted(
