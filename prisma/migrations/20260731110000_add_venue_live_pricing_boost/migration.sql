@@ -1,0 +1,2 @@
+ALTER TABLE "venues"
+ADD COLUMN "livePricingBoost" TEXT NOT NULL DEFAULT 'X1';

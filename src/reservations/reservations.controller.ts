@@ -18,6 +18,7 @@ import { UserRole } from "../../generated/prisma/enums";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailable-slots-query.dto";
+import { UpdateVenueLivePricingBoostDto } from "./dto/update-venue-live-pricing-boost.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
 import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservation-settings.dto";
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
@@ -257,6 +258,21 @@ export class ReservationsController {
     @Body() dto: UpdateVenueLiveStatusDto,
   ) {
     return this.reservationsService.updateVenueLiveStatus(venueId, dto);
+  }
+
+  @Patch("preview/admin/venues/:venueId/live-pricing-boost")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
+  updateVenueLivePricingBoost(
+    @Param("venueId") venueId: string,
+    @Body() dto: UpdateVenueLivePricingBoostDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.reservationsService.updateVenueLivePricingBoost(
+      request.user.userId,
+      venueId,
+      dto,
+    );
   }
 
   @Patch("preview/:id/status")

@@ -482,6 +482,9 @@ export class VenueChinChinPanelService {
           latitude: venue.latitude,
           longitude: venue.longitude,
           isLive,
+          livePricingBoost: this.normalizeLivePricingBoost(
+            venue.livePricingBoost,
+          ),
           liveChinChinTableIds: isLive ? liveChinChinTableIds : [],
           reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
           reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
@@ -583,6 +586,9 @@ export class VenueChinChinPanelService {
           latitude: venue.latitude,
           longitude: venue.longitude,
           isLive,
+          livePricingBoost: this.normalizeLivePricingBoost(
+            venue.livePricingBoost,
+          ),
           liveChinChinTableIds: isLive ? liveChinChinTableIds : [],
           reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
           reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
@@ -1902,5 +1908,10 @@ export class VenueChinChinPanelService {
           .filter((item): item is string => Boolean(item)),
       ),
     );
+  }
+
+  private normalizeLivePricingBoost(value: unknown) {
+    const boost = value?.toString().trim().toUpperCase();
+    return boost === "X2" || boost === "X3" ? boost : "X1";
   }
 }

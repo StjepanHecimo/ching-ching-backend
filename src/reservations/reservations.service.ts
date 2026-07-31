@@ -4,7 +4,9 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  UnauthorizedException,
 } from "@nestjs/common";
+import bcrypt from "bcrypt";
 import { Prisma } from "../../generated/prisma/client";
 import {
   DevicePushApp,
@@ -25,6 +27,7 @@ import { DeclineReservationDto } from "./dto/decline-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailable-slots-query.dto";
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
+import { UpdateVenueLivePricingBoostDto } from "./dto/update-venue-live-pricing-boost.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
 import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservation-settings.dto";
 import { VenueReservationsQueryDto } from "./dto/venue-reservations-query.dto";
@@ -60,6 +63,7 @@ type VenueReservationState = {
   latitude: number | null;
   longitude: number | null;
   liveChinChinTableIds: string[];
+  livePricingBoost: LivePricingBoost;
   reservationWindowStartMinutes: number;
   reservationWindowEndMinutes: number;
 };
@@ -86,9 +90,18 @@ type ReservationWithVenueRefundRequests = ReservationWithVenue & {
   }[];
 };
 
-const ADVANCE_BASE_PRICE_CENTS = 400;
-const LIVE_BASE_PRICE_CENTS = 500;
-const LARGE_TABLE_SURCHARGE_CENTS = 100;
+type LivePricingBoost = "X1" | "X2" | "X3";
+
+const ADVANCE_STANDARD_PRICE_CENTS = 500;
+const ADVANCE_LARGE_PRICE_CENTS = 800;
+const LIVE_PRICING_BOOSTS: Record<
+  LivePricingBoost,
+  { standardCents: number; largeCents: number }
+> = {
+  X1: { standardCents: 800, largeCents: 1100 },
+  X2: { standardCents: 1100, largeCents: 1300 },
+  X3: { standardCents: 1150, largeCents: 1400 },
+};
 const LARGE_TABLE_MIN_CAPACITY = 6;
 const LIVE_RADIUS_METERS = 1000;
 const ARRIVAL_GRACE_MINUTES = 15;
@@ -101,7 +114,6 @@ const RESERVATION_WINDOW_MAX_END_MINUTES = 23 * 60;
 const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 const LAST_RESERVATION_REQUEST_BUFFER_MINUTES = 15;
-const LIVE_PROMOTIONAL_PRICE_START_MINUTES = 18 * 60;
 const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 
 @Injectable()
@@ -218,8 +230,10 @@ export class ReservationsService {
           priceCents: this.calculateFeeCents(
             reservationType,
             table,
-            slot.startAt,
+            venue.livePricingBoost,
           ),
+          livePricingBoost:
+            reservationType === "LIVE" ? venue.livePricingBoost : null,
           currency: "EUR",
           available:
             table.reservable &&
@@ -383,7 +397,11 @@ export class ReservationsService {
         checkInClosesAt: slot.checkInClosesAt,
         arrivalDeadlineAt: slot.arrivalDeadlineAt,
         confirmationExpiresAt: null,
-        feeCents: this.calculateFeeCents(reservationType, table, slot.startAt),
+        feeCents: this.calculateFeeCents(
+          reservationType,
+          table,
+          venue.livePricingBoost,
+        ),
         refundCents: 0,
         currency: "EUR",
         userLatitude: dto.userLatitude,
@@ -1550,6 +1568,8 @@ export class ReservationsService {
       latitude: venue.latitude,
       longitude: venue.longitude,
       liveChinChinTableIds: isLive ? venue.liveChinChinTableIds : [],
+      livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
+      livePrices: this.livePricingForBoost(venue.livePricingBoost),
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
     };
@@ -1594,6 +1614,43 @@ export class ReservationsService {
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
       minReservationWindowStartMinutes: RESERVATION_WINDOW_MIN_START_MINUTES,
       maxReservationWindowEndMinutes: RESERVATION_WINDOW_MAX_END_MINUTES,
+    };
+  }
+
+  async updateVenueLivePricingBoost(
+    adminUserId: string,
+    venueId: string,
+    dto: UpdateVenueLivePricingBoostDto,
+  ) {
+    await this.assertAdminPassword(adminUserId, dto.adminPassword);
+
+    const existingVenue = await this.prisma.venue.findUnique({
+      where: { id: venueId },
+      select: { id: true },
+    });
+    if (!existingVenue) {
+      throw new NotFoundException("Venue was not found.");
+    }
+
+    const venue = await this.prisma.venue.update({
+      where: { id: venueId },
+      data: {
+        livePricingBoost: dto.livePricingBoost,
+      },
+      select: {
+        id: true,
+        livePricingBoost: true,
+        isLive: true,
+        liveChinChinTableIds: true,
+      },
+    });
+
+    return {
+      venueId: venue.id,
+      isLive: venue.isLive,
+      livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
+      livePrices: this.livePricingForBoost(venue.livePricingBoost),
+      liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
     };
   }
 
@@ -1676,6 +1733,8 @@ export class ReservationsService {
       latitude: venue.latitude,
       longitude: venue.longitude,
       liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
+      livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
+      livePrices: this.livePricingForBoost(venue.livePricingBoost),
       liveStartedAt: venue.liveStartedAt,
       liveEndedAt: venue.liveEndedAt,
     };
@@ -1995,6 +2054,7 @@ export class ReservationsService {
         latitude: true,
         longitude: true,
         liveChinChinTableIds: true,
+        livePricingBoost: true,
         reservationWindowStartMinutes: true,
         reservationWindowEndMinutes: true,
       },
@@ -2007,6 +2067,7 @@ export class ReservationsService {
     return {
       ...venue,
       liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
+      livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
       reservationWindowStartMinutes:
         venue.reservationWindowStartMinutes ??
         DEFAULT_RESERVATION_WINDOW_START_MINUTES,
@@ -2106,21 +2167,18 @@ export class ReservationsService {
   private calculateFeeCents(
     type: "ADVANCE" | "LIVE",
     table: ReservableTable,
-    startAt: Date,
+    livePricingBoost: LivePricingBoost,
   ) {
-    const startMinutes = this.zagrebMinutesOfDay(startAt);
-    const usesLivePromotionalPrice =
-      type === "LIVE" && startMinutes >= LIVE_PROMOTIONAL_PRICE_START_MINUTES;
-    const basePrice = usesLivePromotionalPrice
-      ? LIVE_BASE_PRICE_CENTS
-      : ADVANCE_BASE_PRICE_CENTS;
-    const surcharge =
+    const isLarge =
       table.chinChinTier === "LARGE" ||
-      table.maxPartySize >= LARGE_TABLE_MIN_CAPACITY
-        ? LARGE_TABLE_SURCHARGE_CENTS
-        : 0;
+      table.maxPartySize >= LARGE_TABLE_MIN_CAPACITY;
 
-    return basePrice + surcharge;
+    if (type === "LIVE") {
+      const livePrices = this.livePricingForBoost(livePricingBoost);
+      return isLarge ? livePrices.largeCents : livePrices.standardCents;
+    }
+
+    return isLarge ? ADVANCE_LARGE_PRICE_CENTS : ADVANCE_STANDARD_PRICE_CENTS;
   }
 
   private async getApprovedChinChinTables(venueId: string) {
@@ -2210,6 +2268,34 @@ export class ReservationsService {
     });
 
     return approvedRequest !== null;
+  }
+
+  private normalizeLivePricingBoost(value: unknown): LivePricingBoost {
+    const boost = value?.toString().trim().toUpperCase();
+    return boost === "X2" || boost === "X3" ? boost : "X1";
+  }
+
+  private livePricingForBoost(value: unknown) {
+    return LIVE_PRICING_BOOSTS[this.normalizeLivePricingBoost(value)];
+  }
+
+  private async assertAdminPassword(adminUserId: string, password: string) {
+    const admin = await this.prisma.user.findUnique({
+      where: { id: adminUserId },
+      select: {
+        id: true,
+        role: true,
+        passwordHash: true,
+      },
+    });
+
+    if (
+      !admin ||
+      admin.role !== UserRole.ADMIN ||
+      !(await bcrypt.compare(password, admin.passwordHash))
+    ) {
+      throw new UnauthorizedException("Admin password is not valid.");
+    }
   }
 
   private findBlockingReservations(

@@ -193,6 +193,9 @@ export class SpaceLayoutsService {
         city: venue.city,
         country: venue.country,
         isLive: venue.isLive,
+        livePricingBoost: this.normalizeLivePricingBoost(
+          venue.livePricingBoost,
+        ),
         liveChinChinTableCount: this.jsonStringArray(venue.liveChinChinTableIds)
           .length,
         roomCount: layoutStats.roomCount,
@@ -3863,6 +3866,11 @@ export class SpaceLayoutsService {
           .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
           .filter(Boolean)
       : [];
+  }
+
+  private normalizeLivePricingBoost(value: unknown) {
+    const boost = value?.toString().trim().toUpperCase();
+    return boost === "X2" || boost === "X3" ? boost : "X1";
   }
 
   private layoutStatsFromSavedLayout(
