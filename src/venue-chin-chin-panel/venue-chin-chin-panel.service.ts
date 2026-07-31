@@ -1,10 +1,13 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import { Prisma } from "../../generated/prisma/client";
-import { SpaceLayoutStatus } from "../../generated/prisma/enums";
+import { DevicePushApp, SpaceLayoutStatus } from "../../generated/prisma/enums";
+import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { UpsertVenueChinChinPanelDto } from "./dto/upsert-venue-chin-chin-panel.dto";
 
@@ -398,7 +401,13 @@ const CONTENT_ASSET_SEEDS: ContentAssetSeed[] = [
 
 @Injectable()
 export class VenueChinChinPanelService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(VenueChinChinPanelService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly deviceTokensService: DeviceTokensService,
+    private readonly configService: ConfigService,
+  ) {}
 
   async getForVenue(venueId: string) {
     const panel = await this.prisma.venueChinChinPanel.findUnique({
@@ -601,6 +610,66 @@ export class VenueChinChinPanelService {
     };
   }
 
+  async getFollowStatus(userId: string, venueId: string) {
+    await this.ensureVenueExists(venueId);
+
+    const follower = await this.prisma.venueFollower.findUnique({
+      where: {
+        userId_venueId: {
+          userId,
+          venueId,
+        },
+      },
+    });
+
+    return {
+      venueId,
+      isFollowing: follower !== null,
+      followedAt: follower?.createdAt.toISOString() ?? null,
+    };
+  }
+
+  async followVenue(userId: string, venueId: string) {
+    await this.ensureVenueExists(venueId);
+
+    const follower = await this.prisma.venueFollower.upsert({
+      where: {
+        userId_venueId: {
+          userId,
+          venueId,
+        },
+      },
+      create: {
+        userId,
+        venueId,
+      },
+      update: {},
+    });
+
+    return {
+      venueId,
+      isFollowing: true,
+      followedAt: follower.createdAt.toISOString(),
+    };
+  }
+
+  async unfollowVenue(userId: string, venueId: string) {
+    await this.ensureVenueExists(venueId);
+
+    await this.prisma.venueFollower.deleteMany({
+      where: {
+        userId,
+        venueId,
+      },
+    });
+
+    return {
+      venueId,
+      isFollowing: false,
+      followedAt: null,
+    };
+  }
+
   async listDrinkBrands() {
     await this.ensureDefaultDrinkBrands();
 
@@ -666,6 +735,21 @@ export class VenueChinChinPanelService {
       ? await this.normalizePanelEvents(eventInputs)
       : [];
     const primaryEvent = events[0] ?? null;
+    const previousPanel = await this.prisma.venueChinChinPanel.findUnique({
+      where: { venueId },
+      select: {
+        hasEvent: true,
+        events: true,
+        eventDay: true,
+        eventStartsAt: true,
+        eventBand: true,
+        eventContent: true,
+        eventDescription: true,
+      },
+    });
+    const previousEvents = previousPanel
+      ? this.extractStoredEventsForNotification(previousPanel)
+      : [];
 
     const panel = await this.prisma.venueChinChinPanel.upsert({
       where: { venueId },
@@ -699,7 +783,91 @@ export class VenueChinChinPanelService {
       include: { venue: true },
     });
 
+    await this.scheduleNotificationsForAddedEvents(
+      panel.venueId,
+      panel.venue.name,
+      previousEvents,
+      events,
+    );
+
     return this.serializePanel(panel);
+  }
+
+  async runScheduledEventNotifications() {
+    const dueNotifications = await this.prisma.venueEventNotification.findMany({
+      where: {
+        sentAt: null,
+        skippedAt: null,
+        scheduledFor: {
+          lte: new Date(),
+        },
+      },
+      orderBy: {
+        scheduledFor: "asc",
+      },
+      take: 25,
+      include: {
+        venue: {
+          select: {
+            id: true,
+            name: true,
+            followers: {
+              select: {
+                userId: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    let processed = 0;
+
+    for (const notification of dueNotifications) {
+      const followerUserIds = [
+        ...new Set(
+          notification.venue.followers.map((follower) => follower.userId),
+        ),
+      ];
+
+      if (!followerUserIds.length) {
+        await this.prisma.venueEventNotification.update({
+          where: { id: notification.id },
+          data: { skippedAt: new Date() },
+        });
+        processed += 1;
+        continue;
+      }
+
+      const body = this.eventNotificationBody({
+        venueName: notification.venue.name,
+        eventName: notification.eventName,
+        day: notification.eventDay,
+        startsAt: notification.eventStartsAt,
+      });
+
+      for (const userId of followerUserIds) {
+        await this.deviceTokensService.sendToUser({
+          userId,
+          app: DevicePushApp.CUSTOMER,
+          title: `Novi event u ${notification.venue.name}`,
+          body,
+          data: {
+            type: "VENUE_EVENT_CREATED",
+            venueId: notification.venueId,
+            eventId: notification.eventId,
+          },
+        });
+      }
+
+      await this.prisma.venueEventNotification.update({
+        where: { id: notification.id },
+        data: { sentAt: new Date() },
+      });
+      processed += 1;
+    }
+
+    return processed;
   }
 
   private serializeVenueProfile(venue: {
@@ -1166,6 +1334,142 @@ export class VenueChinChinPanelService {
       .filter((entry): entry is NormalizedPanelEvent => entry !== null);
   }
 
+  private extractStoredEventsForNotification(panel: {
+    hasEvent: boolean;
+    events: Prisma.JsonValue | null;
+    eventDay: string | null;
+    eventStartsAt: string | null;
+    eventBand: string | null;
+    eventContent: Prisma.JsonValue | null;
+    eventDescription: string | null;
+  }) {
+    if (!panel.hasEvent) {
+      return [];
+    }
+
+    const events = this.serializePanelEvents(panel.events);
+    if (events.length) {
+      return events;
+    }
+
+    if (!panel.eventDay || !panel.eventStartsAt || !panel.eventBand) {
+      return [];
+    }
+
+    const content =
+      this.serializeContent(panel.eventContent) ??
+      this.normalizeContentFromSeed(panel.eventBand, "EVENT");
+
+    return [
+      {
+        id: this.createEventId(
+          panel.eventDay,
+          panel.eventStartsAt,
+          "23:00",
+          content.contentKey ?? panel.eventBand,
+        ),
+        day: panel.eventDay,
+        startsAt: panel.eventStartsAt,
+        endsAt: "23:00",
+        band: panel.eventBand,
+        eventName: panel.eventBand,
+        content,
+        description: panel.eventDescription,
+        posterDataUrl: null,
+      },
+    ];
+  }
+
+  private async scheduleNotificationsForAddedEvents(
+    venueId: string,
+    venueName: string,
+    previousEvents: NormalizedPanelEvent[],
+    currentEvents: NormalizedPanelEvent[],
+  ) {
+    const addedEvents = this.addedEventsForNotification(
+      previousEvents,
+      currentEvents,
+    );
+    if (!addedEvents.length) {
+      return;
+    }
+
+    const scheduledFor = new Date(Date.now() + this.eventPushDelayMs());
+    for (const event of addedEvents) {
+      await this.prisma.venueEventNotification.upsert({
+        where: {
+          venueId_eventId: {
+            venueId,
+            eventId: event.id,
+          },
+        },
+        create: {
+          venueId,
+          eventId: event.id,
+          eventName: event.eventName,
+          eventDay: event.day,
+          eventStartsAt: event.startsAt,
+          eventEndsAt: event.endsAt,
+          scheduledFor,
+        },
+        update: {},
+      });
+    }
+
+    this.logger.log(
+      `[push][customer] scheduled ${addedEvents.length} event notification(s) venueId=${venueId} venue=${venueName} scheduledFor=${scheduledFor.toISOString()}`,
+    );
+  }
+
+  private addedEventsForNotification(
+    previousEvents: NormalizedPanelEvent[],
+    currentEvents: NormalizedPanelEvent[],
+  ) {
+    if (currentEvents.length <= previousEvents.length) {
+      return [];
+    }
+
+    const previousIds = new Set(previousEvents.map((event) => event.id));
+    return currentEvents
+      .filter((event) => !previousIds.has(event.id))
+      .slice(0, currentEvents.length - previousEvents.length);
+  }
+
+  private eventPushDelayMs() {
+    const configuredHours = Number(
+      this.configService.get<string>("VENUE_EVENT_PUSH_DELAY_HOURS"),
+    );
+    const delayHours =
+      Number.isFinite(configuredHours) && configuredHours > 0
+        ? configuredHours
+        : 2;
+    return Math.max(delayHours, 2) * 60 * 60 * 1000;
+  }
+
+  private eventNotificationBody(event: {
+    venueName: string;
+    eventName: string;
+    day: string;
+    startsAt: string;
+  }) {
+    const date = this.formatEventNotificationDate(event.day);
+    return `${event.eventName} u ${event.venueName}, ${date} u ${event.startsAt}.`;
+  }
+
+  private formatEventNotificationDate(day: string) {
+    const date = new Date(`${day}T12:00:00`);
+    if (Number.isNaN(date.getTime())) {
+      return day;
+    }
+
+    return new Intl.DateTimeFormat("hr-HR", {
+      timeZone: "Europe/Zagreb",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    }).format(date);
+  }
+
   private collectEventInputs(dto: UpsertVenueChinChinPanelDto) {
     const events = Array.isArray(dto.events) ? dto.events : [];
     const eventInputs = events
@@ -1203,6 +1507,17 @@ export class VenueChinChinPanelService {
       singleEvent.contentName
       ? [singleEvent]
       : [];
+  }
+
+  private async ensureVenueExists(venueId: string) {
+    const venue = await this.prisma.venue.findUnique({
+      where: { id: venueId },
+      select: { id: true },
+    });
+
+    if (!venue) {
+      throw new NotFoundException("Venue was not found.");
+    }
   }
 
   private async normalizePanelEvents(

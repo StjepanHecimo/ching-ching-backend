@@ -1034,6 +1034,12 @@ export class SpaceLayoutsService {
       changeRequest,
       previousSavedLayout,
     );
+    await this.notifyVenueSpaceApproved(
+      project,
+      changeRequest,
+      previousSavedLayout,
+      isDeleteRoomRequest || isHideRoomRequest,
+    );
 
     return this.serializeProject(updatedProject);
   }
@@ -1088,8 +1094,6 @@ export class SpaceLayoutsService {
       changeRequest?.tableId?.toString().trim() ||
       previousSavedLayout.requestedTableId?.toString().trim() ||
       "";
-    const tableLabel = this.formatTablePushLabel(tableId);
-    const venueName = project.venue?.name?.trim() || "Vaš objekt";
 
     try {
       this.logger.log(
@@ -1098,8 +1102,8 @@ export class SpaceLayoutsService {
       await this.deviceTokensService.sendToUser({
         userId: ownerId,
         app: DevicePushApp.VENUE_OWNER,
-        title: "Slika stola je odobrena",
-        body: `${venueName}: slika za ${tableLabel} je odobrena.`,
+        title: "Vaše slike stolova su odobrene.",
+        body: "Vaše slike stolova su odobrene.",
         data: {
           type: "table_photo_approved",
           venueId: project.venueId,
@@ -1118,11 +1122,6 @@ export class SpaceLayoutsService {
         }`,
       );
     }
-  }
-
-  private formatTablePushLabel(tableId: string) {
-    const match = tableId.match(/table-(\d+)$/i);
-    return match ? `Table ${match[1]}` : tableId || "stol";
   }
 
   private getS3Client() {
@@ -1219,15 +1218,6 @@ export class SpaceLayoutsService {
       return;
     }
 
-    const venueName = project.venue?.name?.trim() || "Vaš objekt";
-    const firstTableLabel = this.formatTablePushLabel(
-      photoUpdates[0]?.tableId ?? "",
-    );
-    const body =
-      photoUpdates.length === 1
-        ? `${venueName}: slika za ${firstTableLabel} je odobrena.`
-        : `${venueName}: odobrene su slike za ${photoUpdates.length} Chin-Chin stolova.`;
-
     try {
       this.logger.log(
         `[push][venue-owner] sending table updates approval projectId=${project.id} ownerId=${ownerId} venueId=${project.venueId} photoUpdateCount=${photoUpdates.length}`,
@@ -1235,11 +1225,8 @@ export class SpaceLayoutsService {
       await this.deviceTokensService.sendToUser({
         userId: ownerId,
         app: DevicePushApp.VENUE_OWNER,
-        title:
-          photoUpdates.length === 1
-            ? "Slika stola je odobrena"
-            : "Slike stolova su odobrene",
-        body,
+        title: "Vaše slike stolova su odobrene.",
+        body: "Vaše slike stolova su odobrene.",
         data: {
           type: "table_photos_approved",
           venueId: project.venueId,
@@ -1255,6 +1242,67 @@ export class SpaceLayoutsService {
     } catch (error) {
       this.logger.warn(
         `Table updates approval push failed for project ${project.id}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async notifyVenueSpaceApproved(
+    project: {
+      id: string;
+      venueId: string;
+      venue?: {
+        ownerId?: string | null;
+        owner?: { id?: string | null } | null;
+      } | null;
+    },
+    changeRequest: Record<string, unknown> | null,
+    previousSavedLayout: Record<string, unknown>,
+    isRoomRemovalRequest: boolean,
+  ) {
+    const changeRequestType =
+      changeRequest?.type?.toString() ??
+      previousSavedLayout.changeRequestType?.toString();
+    const isTablePhotoRequest =
+      changeRequestType === "ADD_CHIN_CHIN_TABLE" ||
+      changeRequestType === "UPDATE_CHIN_CHIN_TABLES";
+    const isProfileRequest = changeRequestType === "PROFILE_IMAGES";
+
+    if (isTablePhotoRequest || isProfileRequest || isRoomRemovalRequest) {
+      return;
+    }
+
+    const ownerId =
+      project.venue?.ownerId?.trim() || project.venue?.owner?.id?.trim();
+    if (!ownerId) {
+      this.logger.warn(
+        `Space approval push skipped for project ${project.id}: venue owner id is missing.`,
+      );
+      return;
+    }
+
+    try {
+      this.logger.log(
+        `[push][venue-owner] sending space approval projectId=${project.id} ownerId=${ownerId} venueId=${project.venueId}`,
+      );
+      await this.deviceTokensService.sendToUser({
+        userId: ownerId,
+        app: DevicePushApp.VENUE_OWNER,
+        title: "Vaš prostor je odobren.",
+        body: "Vaš prostor je odobren.",
+        data: {
+          type: "space_layout_approved",
+          venueId: project.venueId,
+          projectId: project.id,
+        },
+      });
+      this.logger.log(
+        `[push][venue-owner] sent space approval projectId=${project.id} ownerId=${ownerId}`,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Space approval push failed for project ${project.id}: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );

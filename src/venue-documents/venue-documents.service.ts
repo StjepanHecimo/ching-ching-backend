@@ -204,8 +204,8 @@ export class VenueDocumentsService {
       await this.deviceTokensService.sendToUser({
         userId: request.ownerId,
         app: DevicePushApp.VENUE_OWNER,
-        title: "Dokumenti su odobreni",
-        body: `${request.venue.name} ima odobrene dokumente. Live sesija je sada dostupna.`,
+        title: "Vaš dokument je odobren.",
+        body: "Vaš dokument je odobren.",
         data: {
           type: "venue_documents_approved",
           venueId: request.venueId,

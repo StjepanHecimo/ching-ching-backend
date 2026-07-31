@@ -211,6 +211,7 @@ model User {
   paymentRefundEvents     ReservationPaymentRefund[]
   devicePushTokens        DevicePushToken[]
   pushNotificationLogs    PushNotificationLog[]
+  followedVenues          VenueFollower[]
 
   @@index([status])
   @@map("users")
@@ -314,9 +315,48 @@ model Venue {
   ledgerEntries          LedgerEntry[]
   paymentRefundEvents    ReservationPaymentRefund[]
   payoutBatches          VenuePayoutBatch[]
+  followers              VenueFollower[]
+  eventNotifications     VenueEventNotification[]
 
   @@index([ownerId])
   @@map("venues")
+}
+
+model VenueFollower {
+  id        String   @id @default(uuid())
+  userId    String
+  venueId   String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, venueId])
+  @@index([userId])
+  @@index([venueId])
+  @@map("venue_followers")
+}
+
+model VenueEventNotification {
+  id            String    @id @default(uuid())
+  venueId       String
+  eventId       String
+  eventName     String
+  eventDay      String
+  eventStartsAt String
+  eventEndsAt   String
+  scheduledFor  DateTime
+  sentAt        DateTime?
+  skippedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@unique([venueId, eventId])
+  @@index([scheduledFor, sentAt, skippedAt])
+  @@index([venueId])
+  @@map("venue_event_notifications")
 }
 
 model SpaceLayoutProject {
