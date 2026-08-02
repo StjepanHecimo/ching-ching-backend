@@ -8,6 +8,7 @@ import {
   Post,
   Query,
   Req,
+  Sse,
   UseGuards,
 } from "@nestjs/common";
 import { AuthenticatedRequest } from "../auth/authenticated-request";
@@ -138,6 +139,11 @@ export class ReservationsController {
     @Query() query: VenueReservationsQueryDto,
   ) {
     return this.reservationsService.listVenueReservedTableIds(venueId, query);
+  }
+
+  @Sse("preview/venues/:venueId/live-sync")
+  streamVenueLiveSync(@Param("venueId") venueId: string) {
+    return this.reservationsService.streamVenueLiveSync(venueId);
   }
 
   @Get("preview/customers/reservations/history")

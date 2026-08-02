@@ -3,10 +3,12 @@ import {
   ConflictException,
   Injectable,
   Logger,
+  MessageEvent,
   NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
 import bcrypt from "bcrypt";
+import { Observable, Subject } from "rxjs";
 import { Prisma } from "../../generated/prisma/client";
 import {
   DevicePushApp,
@@ -119,6 +121,10 @@ const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 @Injectable()
 export class ReservationsService {
   private readonly logger = new Logger(ReservationsService.name);
+  private readonly venueLiveSyncSubjects = new Map<
+    string,
+    Subject<MessageEvent>
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -414,6 +420,8 @@ export class ReservationsService {
       },
       include: { venue: true },
     });
+
+    void this.emitVenueLiveSync(venueId, "reservation_created");
 
     return this.serializeReservation(reservation);
   }
@@ -747,6 +755,12 @@ export class ReservationsService {
     };
   }
 
+  streamVenueLiveSync(venueId: string): Observable<MessageEvent> {
+    const subject = this.venueLiveSyncSubject(venueId);
+    void this.emitVenueLiveSync(venueId, "connected");
+    return subject.asObservable();
+  }
+
   async listCustomerReservations(
     customerEmail?: string,
     query: VenueReservationsQueryDto = {},
@@ -986,6 +1000,8 @@ export class ReservationsService {
       type: "reservation_cancelled_by_admin",
     });
 
+    void this.emitVenueLiveSync(updated.venueId, "reservation_cancelled");
+
     return this.serializeReservation(updated);
   }
 
@@ -1006,6 +1022,8 @@ export class ReservationsService {
         where: { id },
       }),
     ]);
+
+    void this.emitVenueLiveSync(reservation.venueId, "reservation_deleted");
 
     return {
       deletedId: id,
@@ -1056,6 +1074,8 @@ export class ReservationsService {
       type: "venue_check_in_confirmed",
     });
 
+    void this.emitVenueLiveSync(checkedIn.venueId, "customer_check_in");
+
     return this.serializeReservation(checkedIn);
   }
 
@@ -1101,6 +1121,8 @@ export class ReservationsService {
       body: `${checkedIn.customerName ?? "Chin-Chin korisnik"} je potvrdio dolazak za ${checkedIn.tableLabel ?? "Chin-Chin stol"}.`,
       type: "customer_check_in_confirmed",
     });
+
+    void this.emitVenueLiveSync(checkedIn.venueId, "venue_check_in");
 
     return this.serializeReservation(checkedIn);
   }
@@ -1164,6 +1186,7 @@ export class ReservationsService {
         reservation.id,
         "Venue confirmation window expired.",
       );
+      void this.emitVenueLiveSync(expired.venueId, "reservation_expired");
       return this.serializeReservation(expired);
     }
 
@@ -1218,6 +1241,8 @@ export class ReservationsService {
       await this.notifyDueCustomerCheckInReminders(updated.venueId);
     }
 
+    void this.emitVenueLiveSync(updated.venueId, "reservation_accepted");
+
     return this.serializeReservation(updated);
   }
 
@@ -1267,6 +1292,8 @@ export class ReservationsService {
       },
       include: { venue: true },
     });
+
+    void this.emitVenueLiveSync(checkedIn.venueId, "reservation_checked_in");
 
     return this.serializeReservation(checkedIn);
   }
@@ -1337,6 +1364,8 @@ export class ReservationsService {
       type: "customer_check_in_confirmed",
     });
 
+    void this.emitVenueLiveSync(checkedIn.venueId, "customer_check_in");
+
     return this.serializeReservation(checkedIn);
   }
 
@@ -1378,6 +1407,8 @@ export class ReservationsService {
       body: `${updated.venue.name} je odbio rezervaciju. Pokušajte s drugim stolom.`,
       type: "reservation_declined",
     });
+
+    void this.emitVenueLiveSync(updated.venueId, "reservation_declined");
 
     return this.serializeReservation(updated);
   }
@@ -1436,6 +1467,8 @@ export class ReservationsService {
       body: `${updated.customerName ?? "Chin-Chin korisnik"} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
       type: "reservation_cancelled_by_customer",
     });
+
+    void this.emitVenueLiveSync(updated.venueId, "reservation_cancelled");
 
     return this.serializeReservation(updated);
   }
@@ -1513,6 +1546,8 @@ export class ReservationsService {
       now,
     );
 
+    void this.emitVenueLiveSync(updated.venueId, "reservation_cancelled");
+
     return {
       reservation: this.serializeReservation(updated),
       penalty: {
@@ -1545,6 +1580,8 @@ export class ReservationsService {
       },
       include: { venue: true },
     });
+
+    void this.emitVenueLiveSync(updated.venueId, "reservation_status_updated");
 
     return this.serializeReservation(updated);
   }
@@ -1608,6 +1645,8 @@ export class ReservationsService {
       },
     });
 
+    void this.emitVenueLiveSync(venue.id, "reservation_settings_updated");
+
     return {
       venueId: venue.id,
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
@@ -1644,6 +1683,8 @@ export class ReservationsService {
         liveChinChinTableIds: true,
       },
     });
+
+    void this.emitVenueLiveSync(venue.id, "live_pricing_boost_updated");
 
     return {
       venueId: venue.id,
@@ -1743,7 +1784,53 @@ export class ReservationsService {
       `[venue-live] updated venueId=${venueId} isLive=${venue.isLive} storedIds=${JSON.stringify(this.jsonStringArray(venue.liveChinChinTableIds))}`,
     );
 
+    void this.emitVenueLiveSync(venueId, "live_status_updated");
+
     return result;
+  }
+
+  private venueLiveSyncSubject(venueId: string) {
+    const existing = this.venueLiveSyncSubjects.get(venueId);
+    if (existing) {
+      return existing;
+    }
+
+    const subject = new Subject<MessageEvent>();
+    this.venueLiveSyncSubjects.set(venueId, subject);
+    return subject;
+  }
+
+  private async emitVenueLiveSync(venueId: string, reason: string) {
+    try {
+      const now = new Date();
+      const from = this.startOfLocalCalendarDay(now);
+      const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
+      const [reservedTables, liveStatus] = await Promise.all([
+        this.listVenueReservedTableIds(venueId, {
+          from: from.toISOString(),
+          to: to.toISOString(),
+          limit: 200,
+        }),
+        this.getVenueLiveStatus(venueId),
+      ]);
+
+      this.venueLiveSyncSubject(venueId).next({
+        type: "venue_live_sync",
+        data: {
+          venueId,
+          reason,
+          reservedTables,
+          liveStatus,
+          emittedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error) {
+      this.logger.warn(
+        `[venue-live-sync] failed venueId=${venueId} reason=${reason}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   private async mergeLiveRoomTableSelection(
