@@ -1397,16 +1397,16 @@ export class ReservationsService {
       include: { venue: true },
     });
 
-    await this.paymentsService.voidForInactiveReservation(
-      reservation.id,
-      "Reservation request was declined by venue.",
-    );
-
     await this.notifyCustomer(updated, {
       title: "Rezervacija je odbijena",
       body: `${updated.venue.name} je odbio rezervaciju. Pokušajte s drugim stolom.`,
       type: "reservation_declined",
     });
+
+    await this.paymentsService.voidForInactiveReservation(
+      reservation.id,
+      "Reservation request was declined by venue.",
+    );
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_declined");
 
@@ -1525,6 +1525,12 @@ export class ReservationsService {
       return cancelled;
     });
 
+    await this.notifyCustomer(updated, {
+      title: "Rezervacija otkazana",
+      body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      type: "reservation_cancelled_by_venue",
+    });
+
     await this.paymentsService.refundCapturedReservation(
       reservation.id,
       reservation.feeCents,
@@ -1534,12 +1540,6 @@ export class ReservationsService {
       reservation.id,
       "Reservation was cancelled by venue before capture.",
     );
-
-    await this.notifyCustomer(updated, {
-      title: "Rezervacija otkazana",
-      body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
-      type: "reservation_cancelled_by_venue",
-    });
     await this.notifyCustomerReservationRefundByEmail(
       updated,
       reservation,
@@ -1580,6 +1580,24 @@ export class ReservationsService {
       },
       include: { venue: true },
     });
+
+    if (updated.status !== reservation.status) {
+      if (updated.status === ReservationStatus.CANCELLED) {
+        await this.notifyCustomer(updated, {
+          title: "Rezervacija otkazana",
+          body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+          type: "reservation_cancelled_by_venue",
+        });
+      }
+
+      if (updated.status === ReservationStatus.DECLINED) {
+        await this.notifyCustomer(updated, {
+          title: "Rezervacija je odbijena",
+          body: `${updated.venue.name} je odbio rezervaciju. Pokušajte s drugim stolom.`,
+          type: "reservation_declined",
+        });
+      }
+    }
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_status_updated");
 
@@ -3463,7 +3481,7 @@ export class ReservationsService {
       this.logger.log(
         `[push][customer] sending reservationId=${reservation.id} customerId=${customerId} venueId=${reservation.venue.id} type=${notification.type} title=${notification.title}`,
       );
-      await this.deviceTokensService.sendToUser({
+      const result = await this.deviceTokensService.sendToUser({
         userId: customerId,
         app: DevicePushApp.CUSTOMER,
         title: notification.title,
@@ -3475,7 +3493,7 @@ export class ReservationsService {
         },
       });
       this.logger.log(
-        `[push][customer] sent reservationId=${reservation.id} customerId=${customerId} type=${notification.type}`,
+        `[push][customer] result reservationId=${reservation.id} customerId=${customerId} type=${notification.type} result=${JSON.stringify(result)}`,
       );
     } catch (error) {
       this.logger.warn(
