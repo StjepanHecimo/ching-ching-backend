@@ -2172,10 +2172,7 @@ export class ReservationsService {
   ) {
     const activeTableIds = new Set(venue.liveChinChinTableIds);
     if (type !== "LIVE") {
-      if (
-        !activeTableIds.size ||
-        !this.isSameLocalCalendarDay(new Date(), startAt)
-      ) {
+      if (!activeTableIds.size) {
         return tables;
       }
 

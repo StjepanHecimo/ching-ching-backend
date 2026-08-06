@@ -1400,7 +1400,8 @@ export class VenueChinChinPanelService {
       return;
     }
 
-    const scheduledFor = new Date(Date.now() + this.eventPushDelayMs());
+    const delayMs = this.eventPushDelayMs();
+    const scheduledFor = new Date(Date.now() + delayMs);
     for (const event of addedEvents) {
       await this.prisma.venueEventNotification.upsert({
         where: {
@@ -1425,6 +1426,15 @@ export class VenueChinChinPanelService {
     this.logger.log(
       `[push][customer] scheduled ${addedEvents.length} event notification(s) venueId=${venueId} venue=${venueName} scheduledFor=${scheduledFor.toISOString()}`,
     );
+
+    if (delayMs <= 0) {
+      void this.runScheduledEventNotifications().catch((error) => {
+        this.logger.error(
+          `[push][customer] immediate event notification dispatch failed venueId=${venueId}`,
+          error instanceof Error ? error.stack : undefined,
+        );
+      });
+    }
   }
 
   private addedEventsForNotification(
@@ -1446,10 +1456,10 @@ export class VenueChinChinPanelService {
       this.configService.get<string>("VENUE_EVENT_PUSH_DELAY_HOURS"),
     );
     const delayHours =
-      Number.isFinite(configuredHours) && configuredHours > 0
+      Number.isFinite(configuredHours) && configuredHours >= 0
         ? configuredHours
         : 2;
-    return Math.max(delayHours, 2) * 60 * 60 * 1000;
+    return delayHours * 60 * 60 * 1000;
   }
 
   private eventNotificationBody(event: {
