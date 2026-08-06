@@ -1622,7 +1622,7 @@ export class ReservationsService {
           : null,
       latitude: venue.latitude,
       longitude: venue.longitude,
-      liveChinChinTableIds: isLive ? venue.liveChinChinTableIds : [],
+      liveChinChinTableIds: venue.liveChinChinTableIds,
       livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
       livePrices: this.livePricingForBoost(venue.livePricingBoost),
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
