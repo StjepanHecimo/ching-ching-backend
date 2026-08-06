@@ -10,6 +10,9 @@ import {
 import { PrismaService } from "../prisma/prisma.service";
 import { UpsertDeviceTokenDto } from "./dto/upsert-device-token.dto";
 
+const CUSTOMER_ANDROID_NOTIFICATION_CHANNEL_ID = "chin_chin_customer_high";
+const VENUE_ANDROID_NOTIFICATION_CHANNEL_ID = "chin_chin_venue_high";
+
 type PushPayload = {
   userId: string;
   app?: DevicePushApp;
@@ -167,6 +170,16 @@ export class DeviceTokensService {
               data: payload.data ?? {},
               android: {
                 priority: "HIGH",
+                notification: {
+                  channel_id:
+                    payload.app === DevicePushApp.VENUE_OWNER
+                      ? VENUE_ANDROID_NOTIFICATION_CHANNEL_ID
+                      : CUSTOMER_ANDROID_NOTIFICATION_CHANNEL_ID,
+                  notification_priority: "PRIORITY_HIGH",
+                  sound: "default",
+                  default_sound: true,
+                  default_vibrate_timings: true,
+                },
               },
               apns: {
                 headers: {
