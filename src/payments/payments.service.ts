@@ -31,7 +31,7 @@ import { ResolveVenueProblemReportDto } from "./dto/resolve-venue-problem-report
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
 import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 
-const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 1500;
+const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 1000;
 const DEFAULT_FIRST_RESERVATION_COMMISSION_BPS = 1000;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const VENUE_NO_SHOW_REPORT_DELAY_MINUTES = 5;
