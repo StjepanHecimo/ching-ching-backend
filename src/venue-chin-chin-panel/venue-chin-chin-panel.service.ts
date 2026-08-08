@@ -837,6 +837,9 @@ export class VenueChinChinPanelService {
       ];
 
       if (!followerUserIds.length) {
+        this.logger.log(
+          `[push][customer] event notification skipped notificationId=${notification.id} venueId=${notification.venueId} eventId=${notification.eventId}: no followers`,
+        );
         await this.prisma.venueEventNotification.update({
           where: { id: notification.id },
           data: { skippedAt: new Date() },
@@ -852,8 +855,12 @@ export class VenueChinChinPanelService {
         startsAt: notification.eventStartsAt,
       });
 
+      this.logger.log(
+        `[push][customer] sending event notificationId=${notification.id} venueId=${notification.venueId} eventId=${notification.eventId} followerCount=${followerUserIds.length} title=Novi event u ${notification.venue.name}`,
+      );
+
       for (const userId of followerUserIds) {
-        await this.deviceTokensService.sendToUser({
+        const result = await this.deviceTokensService.sendToUser({
           userId,
           app: DevicePushApp.CUSTOMER,
           title: `Novi event u ${notification.venue.name}`,
@@ -864,6 +871,9 @@ export class VenueChinChinPanelService {
             eventId: notification.eventId,
           },
         });
+        this.logger.log(
+          `[push][customer] result event notificationId=${notification.id} venueId=${notification.venueId} eventId=${notification.eventId} userId=${userId} result=${JSON.stringify(result)}`,
+        );
       }
 
       await this.prisma.venueEventNotification.update({
