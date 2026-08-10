@@ -94,6 +94,9 @@ type ReservationWithVenueRefundRequests = ReservationWithVenue & {
 };
 
 type LivePricingBoost = "X1" | "X2" | "X3";
+type PanelLiveEvent = {
+  day: string;
+};
 
 const ADVANCE_STANDARD_PRICE_CENTS = 500;
 const ADVANCE_LARGE_PRICE_CENTS = 800;
@@ -102,8 +105,13 @@ const LIVE_PRICING_BOOSTS: Record<
   { standardCents: number; largeCents: number }
 > = {
   X1: { standardCents: 800, largeCents: 1100 },
-  X2: { standardCents: 1100, largeCents: 1300 },
-  X3: { standardCents: 1150, largeCents: 1400 },
+  X2: { standardCents: 900, largeCents: 1300 },
+  X3: { standardCents: 1000, largeCents: 1500 },
+};
+const LIVE_PRICING_BOOST_RANK: Record<LivePricingBoost, number> = {
+  X1: 1,
+  X2: 2,
+  X3: 3,
 };
 const LARGE_TABLE_MIN_CAPACITY = 6;
 const LIVE_RADIUS_METERS = 8000;
@@ -215,6 +223,13 @@ export class ReservationsService {
       query.userLatitude,
       query.userLongitude,
     );
+    const effectiveLivePricingBoost =
+      await this.getEffectiveLivePricingBoostForSlot(
+        venueId,
+        reservationType,
+        slot.startAt,
+        venue.livePricingBoost,
+      );
     await this.releaseExpiredReservationLocks(venueId);
     const tables = this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
@@ -248,6 +263,12 @@ export class ReservationsService {
       partySize: query.partySize,
       liveRadiusMeters: reservationType === "LIVE" ? LIVE_RADIUS_METERS : null,
       distanceMeters: liveDistanceMeters,
+      livePricingBoost:
+        reservationType === "LIVE" ? effectiveLivePricingBoost : null,
+      livePrices:
+        reservationType === "LIVE"
+          ? this.livePricingForBoost(effectiveLivePricingBoost)
+          : null,
       tables: tables.map((table) => {
         const reserved = this.isTableReservedByKeys(table, blockedTableKeys);
         return {
@@ -255,10 +276,10 @@ export class ReservationsService {
           priceCents: this.calculateFeeCents(
             reservationType,
             table,
-            venue.livePricingBoost,
+            effectiveLivePricingBoost,
           ),
           livePricingBoost:
-            reservationType === "LIVE" ? venue.livePricingBoost : null,
+            reservationType === "LIVE" ? effectiveLivePricingBoost : null,
           currency: "EUR",
           available:
             table.reservable &&
@@ -355,6 +376,13 @@ export class ReservationsService {
       dto.userLatitude,
       dto.userLongitude,
     );
+    const effectiveLivePricingBoost =
+      await this.getEffectiveLivePricingBoostForSlot(
+        venueId,
+        reservationType,
+        slot.startAt,
+        venue.livePricingBoost,
+      );
     await this.releaseExpiredReservationLocks(venueId);
     const tables = this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
@@ -425,7 +453,7 @@ export class ReservationsService {
         feeCents: this.calculateFeeCents(
           reservationType,
           table,
-          venue.livePricingBoost,
+          effectiveLivePricingBoost,
         ),
         refundCents: 0,
         currency: "EUR",
@@ -1661,6 +1689,19 @@ export class ReservationsService {
     const hasApprovedDocuments = await this.venueHasApprovedDocuments(venueId);
     const canGoLive = hasApprovedLayout && hasApprovedDocuments;
     const isLive = canGoLive ? venue.isLive : false;
+    const configuredLivePricingBoost = this.normalizeLivePricingBoost(
+      venue.livePricingBoost,
+    );
+    const livePricingReferenceAt = new Date();
+    const automaticLivePricingBoost =
+      await this.getAutomaticLivePricingBoostForSlot(
+        venueId,
+        livePricingReferenceAt,
+      );
+    const effectiveLivePricingBoost = this.maxLivePricingBoost(
+      configuredLivePricingBoost,
+      automaticLivePricingBoost,
+    );
     return {
       id: venue.id,
       isLive,
@@ -1676,8 +1717,11 @@ export class ReservationsService {
       latitude: venue.latitude,
       longitude: venue.longitude,
       liveChinChinTableIds: venue.liveChinChinTableIds,
-      livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
-      livePrices: this.livePricingForBoost(venue.livePricingBoost),
+      configuredLivePricingBoost,
+      automaticLivePricingBoost,
+      effectiveLivePricingBoost,
+      livePricingBoost: effectiveLivePricingBoost,
+      livePrices: this.livePricingForBoost(effectiveLivePricingBoost),
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
     };
@@ -1842,6 +1886,19 @@ export class ReservationsService {
         liveEndedAt: dto.isLive ? null : new Date(),
       },
     });
+    const configuredLivePricingBoost = this.normalizeLivePricingBoost(
+      venue.livePricingBoost,
+    );
+    const livePricingReferenceAt = new Date();
+    const automaticLivePricingBoost =
+      await this.getAutomaticLivePricingBoostForSlot(
+        venueId,
+        livePricingReferenceAt,
+      );
+    const effectiveLivePricingBoost = this.maxLivePricingBoost(
+      configuredLivePricingBoost,
+      automaticLivePricingBoost,
+    );
 
     const result = {
       id: venue.id,
@@ -1849,8 +1906,11 @@ export class ReservationsService {
       latitude: venue.latitude,
       longitude: venue.longitude,
       liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
-      livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
-      livePrices: this.livePricingForBoost(venue.livePricingBoost),
+      configuredLivePricingBoost,
+      automaticLivePricingBoost,
+      effectiveLivePricingBoost,
+      livePricingBoost: effectiveLivePricingBoost,
+      livePrices: this.livePricingForBoost(effectiveLivePricingBoost),
       liveStartedAt: venue.liveStartedAt,
       liveEndedAt: venue.liveEndedAt,
     };
@@ -2340,6 +2400,111 @@ export class ReservationsService {
     }
 
     return isLarge ? ADVANCE_LARGE_PRICE_CENTS : ADVANCE_STANDARD_PRICE_CENTS;
+  }
+
+  private async getEffectiveLivePricingBoostForSlot(
+    venueId: string,
+    type: "ADVANCE" | "LIVE",
+    startAt: Date,
+    configuredBoost: unknown,
+  ): Promise<LivePricingBoost> {
+    const normalizedConfiguredBoost =
+      this.normalizeLivePricingBoost(configuredBoost);
+    if (type !== "LIVE") {
+      return normalizedConfiguredBoost;
+    }
+
+    const automaticBoost = await this.getAutomaticLivePricingBoostForSlot(
+      venueId,
+      startAt,
+    );
+    return this.maxLivePricingBoost(normalizedConfiguredBoost, automaticBoost);
+  }
+
+  private async getAutomaticLivePricingBoostForSlot(
+    venueId: string,
+    startAt: Date,
+  ): Promise<LivePricingBoost> {
+    const isFridayOrSaturday = this.isFridayOrSaturdayLiveBusinessDay(startAt);
+    const hasEvent = await this.venueHasEventForLiveBusinessDay(
+      venueId,
+      startAt,
+    );
+
+    if (isFridayOrSaturday && hasEvent) {
+      return "X3";
+    }
+    if (isFridayOrSaturday || hasEvent) {
+      return "X2";
+    }
+    return "X1";
+  }
+
+  private maxLivePricingBoost(
+    left: LivePricingBoost,
+    right: LivePricingBoost,
+  ): LivePricingBoost {
+    return LIVE_PRICING_BOOST_RANK[left] >= LIVE_PRICING_BOOST_RANK[right]
+      ? left
+      : right;
+  }
+
+  private async venueHasEventForLiveBusinessDay(
+    venueId: string,
+    startAt: Date,
+  ) {
+    const panel = await this.prisma.venueChinChinPanel.findUnique({
+      where: { venueId },
+      select: {
+        hasEvent: true,
+        events: true,
+        eventDay: true,
+      },
+    });
+
+    if (!panel?.hasEvent) {
+      return false;
+    }
+
+    const eventDateKeys = new Set(
+      this.panelLiveEvents(panel.events).map((event) => event.day),
+    );
+    if (!eventDateKeys.size && panel.eventDay?.trim()) {
+      eventDateKeys.add(panel.eventDay.trim());
+    }
+
+    if (!eventDateKeys.size) {
+      return false;
+    }
+
+    return (
+      eventDateKeys.has(this.zagrebDateKey(startAt)) ||
+      eventDateKeys.has(this.zagrebLiveBusinessDateKey(startAt))
+    );
+  }
+
+  private panelLiveEvents(value: Prisma.JsonValue | null): PanelLiveEvent[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return null;
+        }
+
+        const item = entry as Record<string, unknown>;
+        const day = item.day?.toString().trim() || "";
+        if (!day) {
+          return null;
+        }
+
+        return {
+          day,
+        };
+      })
+      .filter((event): event is PanelLiveEvent => event !== null);
   }
 
   private async getApprovedChinChinTables(venueId: string) {
@@ -2862,8 +3027,9 @@ export class ReservationsService {
   }
 
   private isLiveStartWindowEnforced() {
-    return this.configService.get<string>("LIVE_START_WINDOW_ENFORCED") ===
-      "true";
+    return (
+      this.configService.get<string>("LIVE_START_WINDOW_ENFORCED") === "true"
+    );
   }
 
   private isMinuteInsideOvernightWindow(
@@ -3568,6 +3734,32 @@ export class ReservationsService {
   private zagrebMinutesOfDay(value: Date) {
     const parts = this.zagrebDateParts(value);
     return parts.hour * 60 + parts.minute;
+  }
+
+  private zagrebDateKey(value: Date) {
+    const parts = this.zagrebDateParts(value);
+    return `${parts.year}-${parts.month.toString().padStart(2, "0")}-${parts.day
+      .toString()
+      .padStart(2, "0")}`;
+  }
+
+  private zagrebLiveBusinessDate(value: Date) {
+    if (this.zagrebMinutesOfDay(value) < LIVE_START_WINDOW_END_MINUTES) {
+      return new Date(value.getTime() - 24 * 60 * 60 * 1000);
+    }
+    return value;
+  }
+
+  private zagrebLiveBusinessDateKey(value: Date) {
+    return this.zagrebDateKey(this.zagrebLiveBusinessDate(value));
+  }
+
+  private isFridayOrSaturdayLiveBusinessDay(value: Date) {
+    const parts = this.zagrebDateParts(this.zagrebLiveBusinessDate(value));
+    const dayOfWeek = new Date(
+      Date.UTC(parts.year, parts.month - 1, parts.day),
+    ).getUTCDay();
+    return dayOfWeek === 5 || dayOfWeek === 6;
   }
 
   private zagrebDateParts(value: Date) {
