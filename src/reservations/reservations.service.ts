@@ -2185,7 +2185,7 @@ export class ReservationsService {
 
     return Math.max(
       1,
-      Math.ceil(allowedTableCount * MIN_PUBLIC_SELECTION_ALLOWED_RATIO),
+      Math.round(allowedTableCount * MIN_PUBLIC_SELECTION_ALLOWED_RATIO),
     );
   }
 
