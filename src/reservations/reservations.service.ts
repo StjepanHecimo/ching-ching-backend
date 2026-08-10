@@ -116,6 +116,7 @@ const RESERVATION_WINDOW_MAX_END_MINUTES = 23 * 60;
 const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 const LAST_RESERVATION_REQUEST_BUFFER_MINUTES = 15;
+const LIVE_AUTO_DISABLE_MISSED_REQUEST_LIMIT = 5;
 const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 
 @Injectable()
@@ -166,16 +167,31 @@ export class ReservationsService {
       take: 100,
     });
 
-    if (!reservations.length) {
+    const liveVenues = await this.prisma.venue.findMany({
+      where: { isLive: true },
+      select: { id: true },
+      take: 100,
+    });
+
+    const venueIds = Array.from(
+      new Set([
+        ...reservations.map((reservation) => reservation.venueId),
+        ...liveVenues.map((venue) => venue.id),
+      ]),
+    );
+
+    if (!venueIds.length) {
       return 0;
     }
 
-    await Promise.all(
-      reservations.map((reservation) =>
-        this.releaseExpiredReservationLocks(reservation.venueId),
-      ),
+    const autoDisableResults = await Promise.all(
+      venueIds.map((venueId) => this.releaseExpiredReservationLocks(venueId)),
     );
-    return reservations.length;
+    return (
+      reservations.length +
+      autoDisableResults.filter((result): result is string => Boolean(result))
+        .length
+    );
   }
 
   async getVenueAvailability(
@@ -1001,6 +1017,10 @@ export class ReservationsService {
     });
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_cancelled");
+    void this.autoDisableVenueLiveIfNeeded(
+      updated.venueId,
+      "reservation_cancelled_by_admin",
+    );
 
     return this.serializeReservation(updated);
   }
@@ -1187,6 +1207,10 @@ export class ReservationsService {
         "Venue confirmation window expired.",
       );
       void this.emitVenueLiveSync(expired.venueId, "reservation_expired");
+      void this.autoDisableVenueLiveIfNeeded(
+        expired.venueId,
+        "reservation_expired",
+      );
       return this.serializeReservation(expired);
     }
 
@@ -1242,6 +1266,10 @@ export class ReservationsService {
     }
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_accepted");
+    void this.autoDisableVenueLiveIfNeeded(
+      updated.venueId,
+      "reservation_accepted",
+    );
 
     return this.serializeReservation(updated);
   }
@@ -1294,6 +1322,10 @@ export class ReservationsService {
     });
 
     void this.emitVenueLiveSync(checkedIn.venueId, "reservation_checked_in");
+    void this.autoDisableVenueLiveIfNeeded(
+      checkedIn.venueId,
+      "reservation_checked_in",
+    );
 
     return this.serializeReservation(checkedIn);
   }
@@ -1409,6 +1441,10 @@ export class ReservationsService {
     );
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_declined");
+    void this.autoDisableVenueLiveIfNeeded(
+      updated.venueId,
+      "reservation_declined",
+    );
 
     return this.serializeReservation(updated);
   }
@@ -1469,6 +1505,10 @@ export class ReservationsService {
     });
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_cancelled");
+    void this.autoDisableVenueLiveIfNeeded(
+      updated.venueId,
+      "reservation_cancelled_by_customer",
+    );
 
     return this.serializeReservation(updated);
   }
@@ -1547,6 +1587,10 @@ export class ReservationsService {
     );
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_cancelled");
+    void this.autoDisableVenueLiveIfNeeded(
+      updated.venueId,
+      "reservation_cancelled_by_venue",
+    );
 
     return {
       reservation: this.serializeReservation(updated),
@@ -1600,6 +1644,10 @@ export class ReservationsService {
     }
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_status_updated");
+    void this.autoDisableVenueLiveIfNeeded(
+      updated.venueId,
+      "reservation_status_updated",
+    );
 
     return this.serializeReservation(updated);
   }
@@ -2804,6 +2852,152 @@ export class ReservationsService {
     await this.releaseExpiredVenueConfirmationRequests(venueId);
     await this.releaseExpiredArrivalLocks(venueId);
     await this.releaseExpiredNightLocks(venueId);
+    return this.autoDisableVenueLiveIfNeeded(venueId, "scheduled_cleanup");
+  }
+
+  private async autoDisableVenueLiveIfNeeded(venueId: string, trigger: string) {
+    const venue = await this.prisma.venue.findUnique({
+      where: { id: venueId },
+      select: {
+        id: true,
+        isLive: true,
+        liveStartedAt: true,
+        liveChinChinTableIds: true,
+      },
+    });
+
+    if (!venue?.isLive) {
+      return null;
+    }
+
+    const liveTableIds = this.uniqueNonEmptyStrings(
+      this.jsonStringArray(venue.liveChinChinTableIds),
+    );
+
+    if (!liveTableIds.length) {
+      return this.disableVenueLive(
+        venueId,
+        "live_auto_disabled_no_live_tables",
+        trigger,
+      );
+    }
+
+    const freeLiveTableCount = await this.countFreeLiveTables(
+      venueId,
+      liveTableIds,
+    );
+
+    if (freeLiveTableCount === 0) {
+      return this.disableVenueLive(
+        venueId,
+        "live_auto_disabled_no_free_tables",
+        trigger,
+      );
+    }
+
+    if (!venue.liveStartedAt) {
+      return null;
+    }
+
+    const missedRequestCount = await this.prisma.reservation.count({
+      where: {
+        venueId,
+        type: ReservationType.LIVE,
+        createdAt: { gte: venue.liveStartedAt },
+        status: {
+          in: [
+            ReservationStatus.PENDING_VENUE_CONFIRMATION,
+            ReservationStatus.EXPIRED,
+          ],
+        },
+      },
+    });
+
+    if (missedRequestCount >= LIVE_AUTO_DISABLE_MISSED_REQUEST_LIMIT) {
+      return this.disableVenueLive(
+        venueId,
+        "live_auto_disabled_missed_requests",
+        trigger,
+        { missedRequestCount, freeLiveTableCount },
+      );
+    }
+
+    return null;
+  }
+
+  private async countFreeLiveTables(venueId: string, liveTableIds: string[]) {
+    const now = new Date();
+    const dayStart = this.startOfLocalCalendarDay(now);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setDate(dayEnd.getDate() + 1);
+    const reservedTables = await this.prisma.reservation.findMany({
+      where: {
+        venueId,
+        type: ReservationType.LIVE,
+        status: {
+          in: [
+            ReservationStatus.PENDING_VENUE_CONFIRMATION,
+            ReservationStatus.CONFIRMED,
+            ReservationStatus.RESERVED,
+            ReservationStatus.CHECK_IN_PENDING,
+            ReservationStatus.CHECKED_IN,
+            ReservationStatus.SEATED,
+          ],
+        },
+        OR: [
+          {
+            timeSlotStart: {
+              gte: dayStart,
+              lt: dayEnd,
+            },
+          },
+          {
+            status: {
+              in: [ReservationStatus.CHECKED_IN, ReservationStatus.SEATED],
+            },
+          },
+        ],
+      },
+      select: { tableId: true },
+      take: 500,
+    });
+
+    const reservedTableIds = new Set(
+      reservedTables
+        .map((reservation) => this.normalizeTableIdentity(reservation.tableId))
+        .filter(Boolean),
+    );
+
+    return liveTableIds.filter(
+      (tableId) => !reservedTableIds.has(this.normalizeTableIdentity(tableId)),
+    ).length;
+  }
+
+  private async disableVenueLive(
+    venueId: string,
+    reason: string,
+    trigger: string,
+    details: Record<string, unknown> = {},
+  ) {
+    const now = new Date();
+    const updated = await this.prisma.venue.updateMany({
+      where: { id: venueId, isLive: true },
+      data: {
+        isLive: false,
+        liveEndedAt: now,
+      },
+    });
+
+    if (updated.count !== 1) {
+      return null;
+    }
+
+    this.logger.log(
+      `[venue-live] auto disabled venueId=${venueId} reason=${reason} trigger=${trigger} details=${JSON.stringify(details)}`,
+    );
+    void this.emitVenueLiveSync(venueId, reason);
+
+    return reason;
   }
 
   private async notifyDueCustomerCheckInReminders(venueId: string) {

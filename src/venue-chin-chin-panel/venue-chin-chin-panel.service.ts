@@ -1402,42 +1402,182 @@ export class VenueChinChinPanelService {
     previousEvents: NormalizedPanelEvent[],
     currentEvents: NormalizedPanelEvent[],
   ) {
-    const addedEvents = this.addedEventsForNotification(
-      previousEvents,
-      currentEvents,
-    );
-    if (!addedEvents.length) {
-      return;
-    }
-
     const delayMs = this.eventPushDelayMs();
     const scheduledFor = new Date(Date.now() + delayMs);
-    for (const event of addedEvents) {
-      await this.prisma.venueEventNotification.upsert({
+    const previousIds = new Set(previousEvents.map((event) => event.id));
+    const currentIds = new Set(currentEvents.map((event) => event.id));
+    const pendingNotifications =
+      await this.prisma.venueEventNotification.findMany({
         where: {
-          venueId_eventId: {
-            venueId,
-            eventId: event.id,
-          },
-        },
-        create: {
           venueId,
-          eventId: event.id,
-          eventName: event.eventName,
-          eventDay: event.day,
-          eventStartsAt: event.startsAt,
-          eventEndsAt: event.endsAt,
-          scheduledFor,
+          sentAt: null,
+          skippedAt: null,
         },
-        update: {},
+        orderBy: { createdAt: "asc" },
       });
+    const pendingByEventId = new Map(
+      pendingNotifications.map((notification) => [
+        notification.eventId,
+        notification,
+      ]),
+    );
+    const rescheduledEditEventIds = new Set<string>();
+
+    if (
+      previousEvents.length === currentEvents.length &&
+      previousEvents.length > 0
+    ) {
+      for (let index = 0; index < previousEvents.length; index += 1) {
+        const previousEvent = previousEvents[index];
+        const currentEvent = currentEvents[index];
+        if (!currentEvent || previousEvent.id === currentEvent.id) {
+          continue;
+        }
+
+        const pendingNotification = pendingByEventId.get(previousEvent.id);
+        if (
+          !pendingNotification ||
+          pendingByEventId.has(currentEvent.id) ||
+          rescheduledEditEventIds.has(currentEvent.id)
+        ) {
+          continue;
+        }
+        const existingCurrentNotification =
+          await this.prisma.venueEventNotification.findUnique({
+            where: {
+              venueId_eventId: {
+                venueId,
+                eventId: currentEvent.id,
+              },
+            },
+          });
+        if (
+          existingCurrentNotification &&
+          existingCurrentNotification.id !== pendingNotification.id
+        ) {
+          continue;
+        }
+
+        await this.prisma.venueEventNotification.update({
+          where: { id: pendingNotification.id },
+          data: {
+            eventId: currentEvent.id,
+            eventName: currentEvent.eventName,
+            eventDay: currentEvent.day,
+            eventStartsAt: currentEvent.startsAt,
+            eventEndsAt: currentEvent.endsAt,
+          },
+        });
+        pendingByEventId.delete(previousEvent.id);
+        pendingByEventId.set(currentEvent.id, {
+          ...pendingNotification,
+          eventId: currentEvent.id,
+          eventName: currentEvent.eventName,
+          eventDay: currentEvent.day,
+          eventStartsAt: currentEvent.startsAt,
+          eventEndsAt: currentEvent.endsAt,
+        });
+        rescheduledEditEventIds.add(currentEvent.id);
+        this.logger.log(
+          `[push][customer] updated pending event notification venueId=${venueId} venue=${venueName} oldEventId=${previousEvent.id} eventId=${currentEvent.id} scheduledFor=${pendingNotification.scheduledFor.toISOString()}`,
+        );
+      }
     }
 
-    this.logger.log(
-      `[push][customer] scheduled ${addedEvents.length} event notification(s) venueId=${venueId} venue=${venueName} scheduledFor=${scheduledFor.toISOString()}`,
-    );
+    const deletedPendingNotifications = Array.from(
+      pendingByEventId.values(),
+    ).filter((notification) => !currentIds.has(notification.eventId));
+    if (deletedPendingNotifications.length) {
+      await this.prisma.venueEventNotification.updateMany({
+        where: {
+          id: {
+            in: deletedPendingNotifications.map(
+              (notification) => notification.id,
+            ),
+          },
+        },
+        data: { skippedAt: new Date() },
+      });
+      this.logger.log(
+        `[push][customer] skipped ${deletedPendingNotifications.length} pending event notification(s) venueId=${venueId} venue=${venueName}: event removed before scheduled send`,
+      );
+    }
 
-    if (delayMs <= 0) {
+    let scheduledCount = 0;
+    let refreshedPendingCount = 0;
+    for (const event of currentEvents) {
+      const pendingNotification = pendingByEventId.get(event.id);
+      if (pendingNotification) {
+        await this.prisma.venueEventNotification.update({
+          where: { id: pendingNotification.id },
+          data: {
+            eventName: event.eventName,
+            eventDay: event.day,
+            eventStartsAt: event.startsAt,
+            eventEndsAt: event.endsAt,
+          },
+        });
+        refreshedPendingCount += 1;
+        continue;
+      }
+
+      if (previousIds.has(event.id) || rescheduledEditEventIds.has(event.id)) {
+        continue;
+      }
+
+      const existingNotification =
+        await this.prisma.venueEventNotification.findUnique({
+          where: {
+            venueId_eventId: {
+              venueId,
+              eventId: event.id,
+            },
+          },
+        });
+      if (existingNotification?.sentAt) {
+        continue;
+      }
+
+      if (existingNotification) {
+        await this.prisma.venueEventNotification.update({
+          where: { id: existingNotification.id },
+          data: {
+            eventName: event.eventName,
+            eventDay: event.day,
+            eventStartsAt: event.startsAt,
+            eventEndsAt: event.endsAt,
+            scheduledFor,
+            skippedAt: null,
+          },
+        });
+      } else {
+        await this.prisma.venueEventNotification.create({
+          data: {
+            venueId,
+            eventId: event.id,
+            eventName: event.eventName,
+            eventDay: event.day,
+            eventStartsAt: event.startsAt,
+            eventEndsAt: event.endsAt,
+            scheduledFor,
+          },
+        });
+      }
+      scheduledCount += 1;
+    }
+
+    if (scheduledCount > 0) {
+      this.logger.log(
+        `[push][customer] scheduled ${scheduledCount} event notification(s) venueId=${venueId} venue=${venueName} scheduledFor=${scheduledFor.toISOString()}`,
+      );
+    }
+    if (refreshedPendingCount > 0) {
+      this.logger.log(
+        `[push][customer] refreshed ${refreshedPendingCount} pending event notification(s) venueId=${venueId} venue=${venueName}`,
+      );
+    }
+
+    if (delayMs <= 0 && scheduledCount > 0) {
       void this.runScheduledEventNotifications().catch((error) => {
         this.logger.error(
           `[push][customer] immediate event notification dispatch failed venueId=${venueId}`,
@@ -1445,20 +1585,6 @@ export class VenueChinChinPanelService {
         );
       });
     }
-  }
-
-  private addedEventsForNotification(
-    previousEvents: NormalizedPanelEvent[],
-    currentEvents: NormalizedPanelEvent[],
-  ) {
-    if (currentEvents.length <= previousEvents.length) {
-      return [];
-    }
-
-    const previousIds = new Set(previousEvents.map((event) => event.id));
-    return currentEvents
-      .filter((event) => !previousIds.has(event.id))
-      .slice(0, currentEvents.length - previousEvents.length);
   }
 
   private eventPushDelayMs() {
