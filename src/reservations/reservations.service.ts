@@ -116,7 +116,6 @@ const RESERVATION_WINDOW_MAX_END_MINUTES = 23 * 60;
 const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 const LAST_RESERVATION_REQUEST_BUFFER_MINUTES = 15;
-const LIVE_AUTO_DISABLE_MISSED_REQUEST_LIMIT = 5;
 const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 
 @Injectable()
@@ -2861,7 +2860,6 @@ export class ReservationsService {
       select: {
         id: true,
         isLive: true,
-        liveStartedAt: true,
         liveChinChinTableIds: true,
       },
     });
@@ -2875,11 +2873,7 @@ export class ReservationsService {
     );
 
     if (!liveTableIds.length) {
-      return this.disableVenueLive(
-        venueId,
-        "live_auto_disabled_no_live_tables",
-        trigger,
-      );
+      return null;
     }
 
     const freeLiveTableCount = await this.countFreeLiveTables(
@@ -2892,33 +2886,6 @@ export class ReservationsService {
         venueId,
         "live_auto_disabled_no_free_tables",
         trigger,
-      );
-    }
-
-    if (!venue.liveStartedAt) {
-      return null;
-    }
-
-    const missedRequestCount = await this.prisma.reservation.count({
-      where: {
-        venueId,
-        type: ReservationType.LIVE,
-        createdAt: { gte: venue.liveStartedAt },
-        status: {
-          in: [
-            ReservationStatus.PENDING_VENUE_CONFIRMATION,
-            ReservationStatus.EXPIRED,
-          ],
-        },
-      },
-    });
-
-    if (missedRequestCount >= LIVE_AUTO_DISABLE_MISSED_REQUEST_LIMIT) {
-      return this.disableVenueLive(
-        venueId,
-        "live_auto_disabled_missed_requests",
-        trigger,
-        { missedRequestCount, freeLiveTableCount },
       );
     }
 
