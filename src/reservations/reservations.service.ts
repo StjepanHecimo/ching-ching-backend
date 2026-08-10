@@ -7,6 +7,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import bcrypt from "bcrypt";
 import { Observable, Subject } from "rxjs";
 import { Prisma } from "../../generated/prisma/client";
@@ -105,7 +106,9 @@ const LIVE_PRICING_BOOSTS: Record<
   X3: { standardCents: 1150, largeCents: 1400 },
 };
 const LARGE_TABLE_MIN_CAPACITY = 6;
-const LIVE_RADIUS_METERS = 1000;
+const LIVE_RADIUS_METERS = 8000;
+const LIVE_START_WINDOW_START_MINUTES = 18 * 60;
+const LIVE_START_WINDOW_END_MINUTES = 4 * 60;
 const ARRIVAL_GRACE_MINUTES = 15;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES = 4 * 60;
@@ -131,6 +134,7 @@ export class ReservationsService {
     private readonly paymentsService: PaymentsService,
     private readonly deviceTokensService: DeviceTokensService,
     private readonly emailService: EmailService,
+    private readonly configService: ConfigService,
   ) {}
 
   async runScheduledReservationCleanup() {
@@ -1662,6 +1666,8 @@ export class ReservationsService {
       isLive,
       documentsApproved: hasApprovedDocuments,
       canGoLive,
+      liveRadiusMeters: LIVE_RADIUS_METERS,
+      liveStartWindow: this.liveStartWindowStatus(),
       liveBlockReason: !hasApprovedLayout
         ? "LAYOUT_NOT_APPROVED"
         : !hasApprovedDocuments
@@ -1767,7 +1773,7 @@ export class ReservationsService {
 
     const existingVenue = await this.prisma.venue.findUnique({
       where: { id: venueId },
-      select: { id: true, liveChinChinTableIds: true },
+      select: { id: true, isLive: true, liveChinChinTableIds: true },
     });
 
     if (!existingVenue) {
@@ -1778,6 +1784,10 @@ export class ReservationsService {
       throw new BadRequestException(
         "Venue cannot go live before Chin-Chin approves the first space draft.",
       );
+    }
+
+    if (dto.isLive && !existingVenue.isLive) {
+      this.assertLiveStartWindowAllowed();
     }
 
     const requiresApprovedDocuments =
@@ -2306,7 +2316,9 @@ export class ReservationsService {
 
     if (distanceMeters > LIVE_RADIUS_METERS) {
       throw new BadRequestException(
-        "User is outside the live reservation radius.",
+        `Live rezervacija je dostupna samo korisnicima unutar ${this.formatDistanceKm(
+          LIVE_RADIUS_METERS,
+        )} od kafića.`,
       );
     }
 
@@ -2806,6 +2818,64 @@ export class ReservationsService {
       .padStart(2, "0");
     const minute = (totalMinutes % 60).toString().padStart(2, "0");
     return `${hour}:${minute}`;
+  }
+
+  private formatDistanceKm(distanceMeters: number) {
+    const kilometers = distanceMeters / 1000;
+    return Number.isInteger(kilometers)
+      ? `${kilometers} km`
+      : `${kilometers.toFixed(1)} km`;
+  }
+
+  private liveStartWindowStatus(now = new Date()) {
+    const enforced = this.isLiveStartWindowEnforced();
+    return {
+      enforced,
+      startMinutes: LIVE_START_WINDOW_START_MINUTES,
+      endMinutes: LIVE_START_WINDOW_END_MINUTES,
+      startLabel: this.formatMinutes(LIVE_START_WINDOW_START_MINUTES),
+      endLabel: this.formatMinutes(LIVE_START_WINDOW_END_MINUTES),
+      canStartNow:
+        !enforced ||
+        this.isMinuteInsideOvernightWindow(
+          this.zagrebMinutesOfDay(now),
+          LIVE_START_WINDOW_START_MINUTES,
+          LIVE_START_WINDOW_END_MINUTES,
+        ),
+      message: this.liveStartWindowMessage(),
+    };
+  }
+
+  private assertLiveStartWindowAllowed(now = new Date()) {
+    const status = this.liveStartWindowStatus(now);
+    if (!status.canStartNow) {
+      throw new BadRequestException(status.message);
+    }
+  }
+
+  private liveStartWindowMessage() {
+    return `Live sesiju možete pokrenuti od ${this.formatMinutes(
+      LIVE_START_WINDOW_START_MINUTES,
+    )} do ${this.formatMinutes(
+      LIVE_START_WINDOW_END_MINUTES,
+    )}. Za dnevne rezervacije koristite rezervacije unaprijed.`;
+  }
+
+  private isLiveStartWindowEnforced() {
+    return this.configService.get<string>("LIVE_START_WINDOW_ENFORCED") ===
+      "true";
+  }
+
+  private isMinuteInsideOvernightWindow(
+    minuteOfDay: number,
+    startMinutes: number,
+    endMinutes: number,
+  ) {
+    if (startMinutes <= endMinutes) {
+      return minuteOfDay >= startMinutes && minuteOfDay < endMinutes;
+    }
+
+    return minuteOfDay >= startMinutes || minuteOfDay < endMinutes;
   }
 
   private isNightLocked(reservation: {
