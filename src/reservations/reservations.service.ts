@@ -63,6 +63,7 @@ type ReservationSlot = {
 type VenueReservationState = {
   id: string;
   isLive: boolean;
+  isChinChinPanelListed: boolean;
   latitude: number | null;
   longitude: number | null;
   advanceChinChinTableIds: string[];
@@ -1707,6 +1708,7 @@ export class ReservationsService {
     return {
       id: venue.id,
       isLive,
+      isChinChinPanelListed: venue.isChinChinPanelListed,
       documentsApproved: hasApprovedDocuments,
       canGoLive,
       liveRadiusMeters: LIVE_RADIUS_METERS,
@@ -1823,6 +1825,7 @@ export class ReservationsService {
       select: {
         id: true,
         isLive: true,
+        isChinChinPanelListed: true,
         advanceChinChinTableIds: true,
         liveChinChinTableIds: true,
       },
@@ -1844,6 +1847,7 @@ export class ReservationsService {
 
     const requiresApprovedDocuments =
       dto.isLive ||
+      dto.isChinChinPanelListed !== undefined ||
       dto.advanceChinChinTableIds !== undefined ||
       dto.liveChinChinTableIds !== undefined;
 
@@ -1912,6 +1916,17 @@ export class ReservationsService {
       );
     }
 
+    if (
+      dto.isChinChinPanelListed === true &&
+      advanceChinChinTableIds === undefined
+    ) {
+      await this.validateLiveChinChinTableSelection(
+        venueId,
+        this.jsonStringArray(existingVenue.advanceChinChinTableIds),
+        { enforcePublicMinimum: true },
+      );
+    }
+
     if (liveChinChinTableIds !== undefined && dto.isLive) {
       this.logger.log(
         `[venue-live] validating live selection venueId=${venueId} finalIds=${JSON.stringify(liveChinChinTableIds)}`,
@@ -1930,6 +1945,7 @@ export class ReservationsService {
       where: { id: venueId },
       data: {
         isLive: dto.isLive,
+        isChinChinPanelListed: dto.isChinChinPanelListed,
         latitude: dto.latitude,
         longitude: dto.longitude,
         advanceChinChinTableIds:
@@ -1962,6 +1978,7 @@ export class ReservationsService {
     const result = {
       id: venue.id,
       isLive: venue.isLive,
+      isChinChinPanelListed: venue.isChinChinPanelListed,
       latitude: venue.latitude,
       longitude: venue.longitude,
       advanceChinChinTableIds: this.jsonStringArray(
@@ -2099,7 +2116,7 @@ export class ReservationsService {
     tableIds: string[],
     options?: { isLive?: boolean; enforcePublicMinimum?: boolean },
   ) {
-    if (!tableIds.length) {
+    if (!tableIds.length && !options?.enforcePublicMinimum) {
       if (options?.isLive) {
         throw new BadRequestException(
           "Live requires at least one selected Chin-Chin table.",
@@ -2373,6 +2390,7 @@ export class ReservationsService {
       select: {
         id: true,
         isLive: true,
+        isChinChinPanelListed: true,
         latitude: true,
         longitude: true,
         advanceChinChinTableIds: true,
@@ -2411,6 +2429,9 @@ export class ReservationsService {
   ) {
     if (type !== "LIVE") {
       const advanceTableIds = new Set(venue.advanceChinChinTableIds);
+      if (!venue.isChinChinPanelListed) {
+        return [];
+      }
       const minimumTableCount =
         await this.minimumPublicChinChinSelectionForVenue(venue.id);
       if (
@@ -2670,7 +2691,7 @@ export class ReservationsService {
           tableLabel: tableMap.label?.toString() || tableId,
           roomLabel,
           chinChinTier: this.chinChinTierFrom(tableMap),
-          minPartySize: this.numberFrom(tableMap.minPartySize, 1),
+          minPartySize: this.minPartySizeFrom(tableMap),
           maxPartySize: this.maxPartySizeFrom(tableMap),
           reservable: tableMap.reservable !== false,
         });
@@ -3055,6 +3076,11 @@ export class ReservationsService {
         ? LARGE_TABLE_MIN_CAPACITY
         : 4;
     return Math.max(fallback, this.numberFrom(tableMap.maxPartySize, fallback));
+  }
+
+  private minPartySizeFrom(tableMap: Record<string, unknown>) {
+    const fallback = this.chinChinTierFrom(tableMap) === "LARGE" ? 4 : 2;
+    return Math.max(fallback, this.numberFrom(tableMap.minPartySize, fallback));
   }
 
   private assertReservationWindow(startMinutes: number, endMinutes: number) {

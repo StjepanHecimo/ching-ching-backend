@@ -1,0 +1,2 @@
+ALTER TABLE "venues"
+ADD COLUMN "isChinChinPanelListed" BOOLEAN NOT NULL DEFAULT true;

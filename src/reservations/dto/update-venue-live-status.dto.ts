@@ -28,6 +28,10 @@ export class UpdateVenueLiveStatusDto {
   longitude?: number;
 
   @IsOptional()
+  @IsBoolean()
+  isChinChinPanelListed?: boolean;
+
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   advanceChinChinTableIds?: string[];

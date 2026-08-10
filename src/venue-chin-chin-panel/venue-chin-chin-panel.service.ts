@@ -461,11 +461,13 @@ export class VenueChinChinPanelService {
       },
     });
 
-    const visibleVenues = venues.filter((venue) =>
-      this.hasPublicPanelTableSelection(
-        venue.advanceChinChinTableIds,
-        venue.spaceLayoutProjects,
-      ),
+    const visibleVenues = venues.filter(
+      (venue) =>
+        venue.isChinChinPanelListed &&
+        this.hasPublicPanelTableSelection(
+          venue.advanceChinChinTableIds,
+          venue.spaceLayoutProjects,
+        ),
     );
 
     return {
@@ -558,11 +560,13 @@ export class VenueChinChinPanelService {
     });
 
     const eventVenues = venues
-      .filter((venue) =>
-        this.hasPublicPanelTableSelection(
-          venue.advanceChinChinTableIds,
-          venue.spaceLayoutProjects,
-        ),
+      .filter(
+        (venue) =>
+          venue.isChinChinPanelListed &&
+          this.hasPublicPanelTableSelection(
+            venue.advanceChinChinTableIds,
+            venue.spaceLayoutProjects,
+          ),
       )
       .map((venue) => {
         if (!venue.chinChinPanel) {
