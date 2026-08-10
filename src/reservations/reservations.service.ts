@@ -65,6 +65,7 @@ type VenueReservationState = {
   isLive: boolean;
   latitude: number | null;
   longitude: number | null;
+  advanceChinChinTableIds: string[];
   liveChinChinTableIds: string[];
   livePricingBoost: LivePricingBoost;
   reservationWindowStartMinutes: number;
@@ -98,14 +99,14 @@ type PanelLiveEvent = {
   day: string;
 };
 
-const ADVANCE_STANDARD_PRICE_CENTS = 500;
-const ADVANCE_LARGE_PRICE_CENTS = 800;
+const ADVANCE_STANDARD_PRICE_CENTS = 300;
+const ADVANCE_LARGE_PRICE_CENTS = 500;
 const LIVE_PRICING_BOOSTS: Record<
   LivePricingBoost,
   { standardCents: number; largeCents: number }
 > = {
-  X1: { standardCents: 800, largeCents: 1100 },
-  X2: { standardCents: 900, largeCents: 1300 },
+  X1: { standardCents: 500, largeCents: 800 },
+  X2: { standardCents: 900, largeCents: 1400 },
   X3: { standardCents: 1000, largeCents: 1500 },
 };
 const LIVE_PRICING_BOOST_RANK: Record<LivePricingBoost, number> = {
@@ -114,6 +115,7 @@ const LIVE_PRICING_BOOST_RANK: Record<LivePricingBoost, number> = {
   X3: 3,
 };
 const LARGE_TABLE_MIN_CAPACITY = 6;
+const MIN_PUBLIC_SELECTION_ALLOWED_RATIO = 0.3;
 const LIVE_RADIUS_METERS = 8000;
 const LIVE_START_WINDOW_START_MINUTES = 18 * 60;
 const LIVE_START_WINDOW_END_MINUTES = 4 * 60;
@@ -231,7 +233,7 @@ export class ReservationsService {
         venue.livePricingBoost,
       );
     await this.releaseExpiredReservationLocks(venueId);
-    const tables = this.filterTablesForReservationType(
+    const tables = await this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
       venue,
       reservationType,
@@ -305,7 +307,7 @@ export class ReservationsService {
     const latestReservationStartMinutes =
       venue.reservationWindowEndMinutes -
       LAST_RESERVATION_REQUEST_BUFFER_MINUTES;
-    const tables = this.filterTablesForReservationType(
+    const tables = await this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
       venue,
       query.type,
@@ -384,7 +386,7 @@ export class ReservationsService {
         venue.livePricingBoost,
       );
     await this.releaseExpiredReservationLocks(venueId);
-    const tables = this.filterTablesForReservationType(
+    const tables = await this.filterTablesForReservationType(
       await this.getApprovedChinChinTables(venueId),
       venue,
       reservationType,
@@ -1716,6 +1718,7 @@ export class ReservationsService {
           : null,
       latitude: venue.latitude,
       longitude: venue.longitude,
+      advanceChinChinTableIds: venue.advanceChinChinTableIds,
       liveChinChinTableIds: venue.liveChinChinTableIds,
       configuredLivePricingBoost,
       automaticLivePricingBoost,
@@ -1812,12 +1815,17 @@ export class ReservationsService {
 
   async updateVenueLiveStatus(venueId: string, dto: UpdateVenueLiveStatusDto) {
     this.logger.log(
-      `[venue-live] update request venueId=${venueId} isLive=${dto.isLive} liveRoomLabel=${dto.liveRoomLabel ?? ""} ids=${JSON.stringify(dto.liveChinChinTableIds ?? [])}`,
+      `[venue-live] update request venueId=${venueId} isLive=${dto.isLive} liveRoomLabel=${dto.liveRoomLabel ?? ""} advanceIds=${JSON.stringify(dto.advanceChinChinTableIds ?? [])} liveIds=${JSON.stringify(dto.liveChinChinTableIds ?? [])}`,
     );
 
     const existingVenue = await this.prisma.venue.findUnique({
       where: { id: venueId },
-      select: { id: true, isLive: true, liveChinChinTableIds: true },
+      select: {
+        id: true,
+        isLive: true,
+        advanceChinChinTableIds: true,
+        liveChinChinTableIds: true,
+      },
     });
 
     if (!existingVenue) {
@@ -1835,7 +1843,9 @@ export class ReservationsService {
     }
 
     const requiresApprovedDocuments =
-      dto.isLive || dto.liveChinChinTableIds !== undefined;
+      dto.isLive ||
+      dto.advanceChinChinTableIds !== undefined ||
+      dto.liveChinChinTableIds !== undefined;
 
     if (
       requiresApprovedDocuments &&
@@ -1846,16 +1856,43 @@ export class ReservationsService {
       );
     }
 
+    const isLegacyAdvanceSelectionPayload =
+      !dto.isLive &&
+      dto.advanceChinChinTableIds === undefined &&
+      dto.liveChinChinTableIds !== undefined &&
+      !!dto.liveRoomLabel?.trim();
+
+    let advanceChinChinTableIds =
+      dto.advanceChinChinTableIds !== undefined ||
+      isLegacyAdvanceSelectionPayload
+        ? this.uniqueNonEmptyStrings(
+            dto.advanceChinChinTableIds ?? dto.liveChinChinTableIds ?? [],
+          )
+        : undefined;
     let liveChinChinTableIds =
-      dto.isLive || dto.liveChinChinTableIds !== undefined
+      !isLegacyAdvanceSelectionPayload &&
+      (dto.isLive || dto.liveChinChinTableIds !== undefined)
         ? this.uniqueNonEmptyStrings(dto.liveChinChinTableIds ?? [])
         : undefined;
 
     this.logger.log(
-      `[venue-live] existing selection venueId=${venueId} ids=${JSON.stringify(this.jsonStringArray(existingVenue.liveChinChinTableIds))}`,
+      `[venue-live] existing selection venueId=${venueId} advanceIds=${JSON.stringify(this.jsonStringArray(existingVenue.advanceChinChinTableIds))} liveIds=${JSON.stringify(this.jsonStringArray(existingVenue.liveChinChinTableIds))}`,
     );
 
-    if (liveChinChinTableIds !== undefined && dto.liveRoomLabel?.trim()) {
+    if (advanceChinChinTableIds !== undefined && dto.liveRoomLabel?.trim()) {
+      advanceChinChinTableIds = await this.mergeLiveRoomTableSelection(
+        venueId,
+        this.jsonStringArray(existingVenue.advanceChinChinTableIds),
+        advanceChinChinTableIds,
+        dto.liveRoomLabel,
+      );
+    }
+
+    if (
+      dto.isLive &&
+      liveChinChinTableIds !== undefined &&
+      dto.liveRoomLabel?.trim()
+    ) {
       liveChinChinTableIds = await this.mergeLiveRoomTableSelection(
         venueId,
         this.jsonStringArray(existingVenue.liveChinChinTableIds),
@@ -1864,15 +1901,30 @@ export class ReservationsService {
       );
     }
 
-    if (liveChinChinTableIds !== undefined) {
+    if (advanceChinChinTableIds !== undefined) {
       this.logger.log(
-        `[venue-live] validating venueId=${venueId} finalIds=${JSON.stringify(liveChinChinTableIds)}`,
+        `[venue-live] validating advance selection venueId=${venueId} finalIds=${JSON.stringify(advanceChinChinTableIds)}`,
+      );
+      await this.validateLiveChinChinTableSelection(
+        venueId,
+        advanceChinChinTableIds,
+        { enforcePublicMinimum: true },
+      );
+    }
+
+    if (liveChinChinTableIds !== undefined && dto.isLive) {
+      this.logger.log(
+        `[venue-live] validating live selection venueId=${venueId} finalIds=${JSON.stringify(liveChinChinTableIds)}`,
       );
       await this.validateLiveChinChinTableSelection(
         venueId,
         liveChinChinTableIds,
+        { isLive: dto.isLive },
       );
     }
+
+    const shouldClearLiveSelection =
+      dto.isLive === false && !isLegacyAdvanceSelectionPayload;
 
     const venue = await this.prisma.venue.update({
       where: { id: venueId },
@@ -1880,8 +1932,15 @@ export class ReservationsService {
         isLive: dto.isLive,
         latitude: dto.latitude,
         longitude: dto.longitude,
-        liveChinChinTableIds:
-          liveChinChinTableIds === undefined ? undefined : liveChinChinTableIds,
+        advanceChinChinTableIds:
+          advanceChinChinTableIds === undefined
+            ? undefined
+            : advanceChinChinTableIds,
+        liveChinChinTableIds: shouldClearLiveSelection
+          ? []
+          : liveChinChinTableIds === undefined
+            ? undefined
+            : liveChinChinTableIds,
         liveStartedAt: dto.isLive ? new Date() : undefined,
         liveEndedAt: dto.isLive ? null : new Date(),
       },
@@ -1905,6 +1964,9 @@ export class ReservationsService {
       isLive: venue.isLive,
       latitude: venue.latitude,
       longitude: venue.longitude,
+      advanceChinChinTableIds: this.jsonStringArray(
+        venue.advanceChinChinTableIds,
+      ),
       liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
       configuredLivePricingBoost,
       automaticLivePricingBoost,
@@ -2035,22 +2097,33 @@ export class ReservationsService {
   private async validateLiveChinChinTableSelection(
     venueId: string,
     tableIds: string[],
+    options?: { isLive?: boolean; enforcePublicMinimum?: boolean },
   ) {
     if (!tableIds.length) {
+      if (options?.isLive) {
+        throw new BadRequestException(
+          "Live requires at least one selected Chin-Chin table.",
+        );
+      }
       return;
     }
 
     const rooms = await this.getApprovedLiveSelectionRooms(venueId);
+    const minimumTableCount =
+      this.minimumPublicChinChinSelectionForRooms(rooms);
+    if (options?.enforcePublicMinimum && tableIds.length < minimumTableCount) {
+      throw new BadRequestException(
+        `Odaberite barem ${minimumTableCount} Chin-Chin stola za prikaz kafića na Chin-Chin panelu ili uklonite sve stolove da kafić bude sakriven.`,
+      );
+    }
+
     this.logger.log(
       `[venue-live] validation rooms venueId=${venueId} ids=${JSON.stringify(tableIds)} rooms=${JSON.stringify(
         rooms.map((room) => ({
           roomLabel: room.roomLabel,
           isTemporarySpace: room.isTemporarySpace,
           tableCount: room.tableCount,
-          limit: Math.max(
-            1,
-            Math.floor(room.tableCount * (room.isTemporarySpace ? 0.5 : 0.4)),
-          ),
+          limit: this.maxChinChinTableCountForRoom(room),
           approvedIds: [...room.approvedChinChinTableIds],
         })),
       )}`,
@@ -2078,10 +2151,7 @@ export class ReservationsService {
     }
 
     for (const [room, selectedCount] of selectedByRoom.entries()) {
-      const maxChinChinTables = Math.max(
-        1,
-        Math.floor(room.tableCount * (room.isTemporarySpace ? 0.5 : 0.4)),
-      );
+      const maxChinChinTables = this.maxChinChinTableCountForRoom(room);
       this.logger.log(
         `[venue-live] validation room venueId=${venueId} roomLabel=${room.roomLabel} selected=${selectedCount} max=${maxChinChinTables} temporary=${room.isTemporarySpace}`,
       );
@@ -2094,6 +2164,36 @@ export class ReservationsService {
         );
       }
     }
+  }
+
+  private async minimumPublicChinChinSelectionForVenue(venueId: string) {
+    return this.minimumPublicChinChinSelectionForRooms(
+      await this.getApprovedLiveSelectionRooms(venueId),
+    );
+  }
+
+  private minimumPublicChinChinSelectionForRooms(
+    rooms: ApprovedLiveSelectionRoom[],
+  ) {
+    const allowedTableCount = rooms.reduce(
+      (total, room) => total + this.maxChinChinTableCountForRoom(room),
+      0,
+    );
+    if (allowedTableCount <= 0) {
+      return 1;
+    }
+
+    return Math.max(
+      1,
+      Math.ceil(allowedTableCount * MIN_PUBLIC_SELECTION_ALLOWED_RATIO),
+    );
+  }
+
+  private maxChinChinTableCountForRoom(room: ApprovedLiveSelectionRoom) {
+    return Math.max(
+      1,
+      Math.floor(room.tableCount * (room.isTemporarySpace ? 0.5 : 0.4)),
+    );
   }
 
   private async getApprovedLiveSelectionRooms(venueId: string) {
@@ -2275,6 +2375,7 @@ export class ReservationsService {
         isLive: true,
         latitude: true,
         longitude: true,
+        advanceChinChinTableIds: true,
         liveChinChinTableIds: true,
         livePricingBoost: true,
         reservationWindowStartMinutes: true,
@@ -2288,6 +2389,9 @@ export class ReservationsService {
 
     return {
       ...venue,
+      advanceChinChinTableIds: this.jsonStringArray(
+        venue.advanceChinChinTableIds,
+      ),
       liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
       livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
       reservationWindowStartMinutes:
@@ -2299,26 +2403,32 @@ export class ReservationsService {
     };
   }
 
-  private filterTablesForReservationType(
+  private async filterTablesForReservationType(
     tables: ReservableTable[],
     venue: VenueReservationState,
     type: "ADVANCE" | "LIVE",
     startAt: Date,
   ) {
-    const activeTableIds = new Set(venue.liveChinChinTableIds);
     if (type !== "LIVE") {
-      if (!activeTableIds.size) {
-        return tables;
+      const advanceTableIds = new Set(venue.advanceChinChinTableIds);
+      const minimumTableCount =
+        await this.minimumPublicChinChinSelectionForVenue(venue.id);
+      if (
+        advanceTableIds.size === 0 ||
+        advanceTableIds.size < minimumTableCount
+      ) {
+        return [];
       }
 
-      return tables.filter((table) => activeTableIds.has(table.tableId));
+      return tables.filter((table) => advanceTableIds.has(table.tableId));
     }
 
-    if (!activeTableIds.size) {
+    const liveTableIds = new Set(venue.liveChinChinTableIds);
+    if (!liveTableIds.size) {
       return [];
     }
 
-    return tables.filter((table) => activeTableIds.has(table.tableId));
+    return tables.filter((table) => liveTableIds.has(table.tableId));
   }
 
   private resolveReservationType(
@@ -2425,16 +2535,16 @@ export class ReservationsService {
     venueId: string,
     startAt: Date,
   ): Promise<LivePricingBoost> {
-    const isFridayOrSaturday = this.isFridayOrSaturdayLiveBusinessDay(startAt);
+    const isPremiumLiveDay = this.isPremiumLiveBusinessDay(startAt);
     const hasEvent = await this.venueHasEventForLiveBusinessDay(
       venueId,
       startAt,
     );
 
-    if (isFridayOrSaturday && hasEvent) {
+    if (isPremiumLiveDay && hasEvent) {
       return "X3";
     }
-    if (isFridayOrSaturday || hasEvent) {
+    if (isPremiumLiveDay || hasEvent) {
       return "X2";
     }
     return "X1";
@@ -3754,12 +3864,12 @@ export class ReservationsService {
     return this.zagrebDateKey(this.zagrebLiveBusinessDate(value));
   }
 
-  private isFridayOrSaturdayLiveBusinessDay(value: Date) {
+  private isPremiumLiveBusinessDay(value: Date) {
     const parts = this.zagrebDateParts(this.zagrebLiveBusinessDate(value));
     const dayOfWeek = new Date(
       Date.UTC(parts.year, parts.month - 1, parts.day),
     ).getUTCDay();
-    return dayOfWeek === 5 || dayOfWeek === 6;
+    return dayOfWeek === 3 || dayOfWeek === 5 || dayOfWeek === 6;
   }
 
   private zagrebDateParts(value: Date) {

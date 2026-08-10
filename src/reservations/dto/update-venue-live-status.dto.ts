@@ -30,6 +30,11 @@ export class UpdateVenueLiveStatusDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  advanceChinChinTableIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
   liveChinChinTableIds?: string[];
 
   @IsOptional()

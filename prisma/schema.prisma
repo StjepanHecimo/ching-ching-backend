@@ -296,6 +296,7 @@ model Venue {
   profileImages                 Json      @default("[]")
   isLive                        Boolean   @default(false)
   livePricingBoost              String    @default("X1")
+  advanceChinChinTableIds       Json      @default("[]")
   liveChinChinTableIds          Json      @default("[]")
   liveStartedAt                 DateTime?
   liveEndedAt                   DateTime?

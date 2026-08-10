@@ -91,6 +91,8 @@ type PanelEventInput = {
   posterDataUrl: string | null;
 };
 
+const MIN_PUBLIC_SELECTION_ALLOWED_RATIO = 0.3;
+
 type ContentAssetLookup = {
   name: string;
   contentKey: string;
@@ -450,6 +452,7 @@ export class VenueChinChinPanelService {
           select: {
             photos: true,
             space: true,
+            savedLayout: true,
           },
         },
       },
@@ -458,10 +461,17 @@ export class VenueChinChinPanelService {
       },
     });
 
+    const visibleVenues = venues.filter((venue) =>
+      this.hasPublicPanelTableSelection(
+        venue.advanceChinChinTableIds,
+        venue.spaceLayoutProjects,
+      ),
+    );
+
     return {
       city: normalizedCity || null,
-      count: venues.length,
-      venues: venues.map((venue) => {
+      count: visibleVenues.length,
+      venues: visibleVenues.map((venue) => {
         const liveChinChinTableIds = this.jsonStringArray(
           venue.liveChinChinTableIds,
         );
@@ -537,6 +547,7 @@ export class VenueChinChinPanelService {
           select: {
             photos: true,
             space: true,
+            savedLayout: true,
           },
         },
       },
@@ -547,6 +558,12 @@ export class VenueChinChinPanelService {
     });
 
     const eventVenues = venues
+      .filter((venue) =>
+        this.hasPublicPanelTableSelection(
+          venue.advanceChinChinTableIds,
+          venue.spaceLayoutProjects,
+        ),
+      )
       .map((venue) => {
         if (!venue.chinChinPanel) {
           return null;
@@ -2054,6 +2071,47 @@ export class VenueChinChinPanelService {
           .filter((item): item is string => Boolean(item)),
       ),
     );
+  }
+
+  private hasPublicPanelTableSelection(
+    value: Prisma.JsonValue | null | undefined,
+    projects: Array<{ savedLayout?: Prisma.JsonValue | null }>,
+  ) {
+    const minimumTableCount =
+      this.minimumPublicTableSelectionForProjects(projects);
+    return this.jsonStringArray(value).length >= minimumTableCount;
+  }
+
+  private minimumPublicTableSelectionForProjects(
+    projects: Array<{ savedLayout?: Prisma.JsonValue | null }>,
+  ) {
+    const project = projects[0];
+    const savedLayout = this.asJsonObject(project?.savedLayout ?? null);
+    const layout = this.asJsonObject(savedLayout?.layout ?? null);
+    const rooms = Array.isArray(layout?.rooms) ? layout.rooms : [];
+    const allowedTableCount = rooms.reduce<number>((total, room) => {
+      if (!room || typeof room !== "object" || Array.isArray(room)) {
+        return total;
+      }
+
+      const roomMap = room as Record<string, unknown>;
+      const tables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+      const ratio = roomMap.isTemporarySpace === true ? 0.5 : 0.4;
+      return total + Math.max(1, Math.floor(tables.length * ratio));
+    }, 0);
+
+    return Math.max(
+      1,
+      Math.ceil(allowedTableCount * MIN_PUBLIC_SELECTION_ALLOWED_RATIO),
+    );
+  }
+
+  private asJsonObject(value: Prisma.JsonValue | null | undefined) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return null;
+    }
+
+    return value as Record<string, unknown>;
   }
 
   private normalizeLivePricingBoost(value: unknown) {
