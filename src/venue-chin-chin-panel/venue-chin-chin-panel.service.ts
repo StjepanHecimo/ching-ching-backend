@@ -43,6 +43,11 @@ type DrinkPanelInput = {
   promoSizeLabel?: string | null;
 };
 
+const LIVE_START_WINDOW_END_MINUTES = 24 * 60;
+const LIVE_END_GRACE_MINUTES = 60;
+const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
+const ZAGREB_TIME_ZONE = "Europe/Zagreb";
+
 type DrinkBrandLookup = {
   name: string;
   brandKey: string;
@@ -482,6 +487,7 @@ export class VenueChinChinPanelService {
           liveChinChinTableIds,
           venue.liveStartedAt,
           venue.liveEndedAt,
+          venue.reservationWindowEndMinutes,
         );
 
         return {
@@ -595,6 +601,7 @@ export class VenueChinChinPanelService {
           liveChinChinTableIds,
           venue.liveStartedAt,
           venue.liveEndedAt,
+          venue.reservationWindowEndMinutes,
         );
 
         return {
@@ -1145,12 +1152,93 @@ export class VenueChinChinPanelService {
     liveChinChinTableIds: string[],
     liveStartedAt: Date | null,
     liveEndedAt: Date | null,
+    reservationWindowEndMinutes: number | null,
   ) {
     if (!isLive || liveChinChinTableIds.length === 0 || !liveStartedAt) {
       return false;
     }
 
-    return !liveEndedAt;
+    if (liveEndedAt) {
+      return false;
+    }
+
+    const liveDayStart = this.startOfZagrebCalendarDay(liveStartedAt);
+    const now = new Date();
+    const nowDayStart = this.startOfZagrebCalendarDay(now);
+    const daysSinceLiveStarted = Math.round(
+      (nowDayStart.getTime() - liveDayStart.getTime()) / 86400000,
+    );
+    if (daysSinceLiveStarted < 0) {
+      return false;
+    }
+
+    const minutesSinceLiveDayStart =
+      daysSinceLiveStarted * 24 * 60 + this.zagrebMinutesOfDay(now);
+    const liveEndWithGraceMinutes =
+      this.effectiveLiveEndMinutes(
+        reservationWindowEndMinutes ?? DEFAULT_RESERVATION_WINDOW_END_MINUTES,
+      ) + LIVE_END_GRACE_MINUTES;
+
+    return minutesSinceLiveDayStart < liveEndWithGraceMinutes;
+  }
+
+  private effectiveLiveEndMinutes(reservationWindowEndMinutes: number) {
+    return Math.min(
+      LIVE_START_WINDOW_END_MINUTES,
+      Math.max(0, reservationWindowEndMinutes),
+    );
+  }
+
+  private startOfZagrebCalendarDay(value: Date) {
+    const parts = this.zagrebDateParts(value);
+    return this.zagrebDateTimeToUtc(parts.year, parts.month, parts.day, 0, 0);
+  }
+
+  private zagrebMinutesOfDay(value: Date) {
+    const parts = this.zagrebDateParts(value);
+    return parts.hour * 60 + parts.minute;
+  }
+
+  private zagrebDateParts(value: Date) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: ZAGREB_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(value);
+    const part = (type: string) =>
+      Number(parts.find((item) => item.type === type)?.value ?? 0);
+
+    return {
+      year: part("year"),
+      month: part("month"),
+      day: part("day"),
+      hour: part("hour"),
+      minute: part("minute"),
+    };
+  }
+
+  private zagrebDateTimeToUtc(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+  ) {
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute));
+    const zonedParts = this.zagrebDateParts(utcGuess);
+    const zonedAsUtc = Date.UTC(
+      zonedParts.year,
+      zonedParts.month - 1,
+      zonedParts.day,
+      zonedParts.hour,
+      zonedParts.minute,
+    );
+    const desiredAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+    return new Date(utcGuess.getTime() + desiredAsUtc - zonedAsUtc);
   }
 
   private serializeDrinkList(value: Prisma.JsonValue): NormalizedDrink[] {
