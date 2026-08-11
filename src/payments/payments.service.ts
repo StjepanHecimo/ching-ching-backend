@@ -34,7 +34,7 @@ import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 1000;
 const DEFAULT_FIRST_RESERVATION_COMMISSION_BPS = 1000;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
-const VENUE_NO_SHOW_REPORT_DELAY_MINUTES = 5;
+const VENUE_NO_SHOW_REPORT_DELAY_MINUTES = 10;
 
 @Injectable()
 export class PaymentsService {
@@ -643,6 +643,7 @@ export class PaymentsService {
     dto: CreateVenueRefundRequestDto,
   ) {
     const problemDescription = dto.problemDescription.trim();
+    const shouldReleaseNoShowTable = dto.releaseNoShowTable === true;
 
     const reservation = await this.prisma.reservation.findUnique({
       where: { id: reservationId },
@@ -653,17 +654,24 @@ export class PaymentsService {
       throw new NotFoundException("Reservation was not found for this venue.");
     }
 
-    if (
-      reservation.type === ReservationType.LIVE &&
-      reservation.status === ReservationStatus.CHECK_IN_PENDING
-    ) {
+    if (shouldReleaseNoShowTable) {
+      const releasableStatuses: ReservationStatus[] = [
+        ReservationStatus.CONFIRMED,
+        ReservationStatus.RESERVED,
+        ReservationStatus.CHECK_IN_PENDING,
+      ];
+      if (!releasableStatuses.includes(reservation.status)) {
+        throw new BadRequestException(
+          "This reservation cannot be released as no-show.",
+        );
+      }
       const noShowReportAvailableAt = new Date(
         reservation.timeSlotStart.getTime() +
           VENUE_NO_SHOW_REPORT_DELAY_MINUTES * 60 * 1000,
       );
       if (noShowReportAvailableAt.getTime() > Date.now()) {
         throw new BadRequestException(
-          "Live no-show reports can be submitted five minutes after the reservation time.",
+          "No-show table release is available ten minutes after the reservation time.",
         );
       }
     }
@@ -685,24 +693,47 @@ export class PaymentsService {
       orderBy: { createdAt: "desc" },
     });
 
-    const refundRequest = existingPending
-      ? await this.prisma.venueRefundRequest.update({
-          where: { id: existingPending.id },
-          data: {
-            paymentId: payment?.id,
-            requestedByOwnerId: reservation.venue.ownerId,
-            problemDescription,
+    const refundRequest = await this.prisma.$transaction(async (tx) => {
+      const request = existingPending
+        ? await tx.venueRefundRequest.update({
+            where: { id: existingPending.id },
+            data: {
+              paymentId: payment?.id,
+              requestedByOwnerId: reservation.venue.ownerId,
+              problemDescription,
+            },
+          })
+        : await tx.venueRefundRequest.create({
+            data: {
+              reservationId,
+              paymentId: payment?.id,
+              venueId,
+              requestedByOwnerId: reservation.venue.ownerId,
+              problemDescription,
+            },
+          });
+
+      if (shouldReleaseNoShowTable) {
+        await tx.reservation.updateMany({
+          where: {
+            id: reservationId,
+            status: {
+              in: [
+                ReservationStatus.CONFIRMED,
+                ReservationStatus.RESERVED,
+                ReservationStatus.CHECK_IN_PENDING,
+              ],
+            },
           },
-        })
-      : await this.prisma.venueRefundRequest.create({
           data: {
-            reservationId,
-            paymentId: payment?.id,
-            venueId,
-            requestedByOwnerId: reservation.venue.ownerId,
-            problemDescription,
+            status: ReservationStatus.NO_SHOW,
+            releasedAt: new Date(),
           },
         });
+      }
+
+      return request;
+    });
 
     return this.serializeVenueRefundRequest(refundRequest);
   }

@@ -119,14 +119,14 @@ const LARGE_TABLE_MIN_CAPACITY = 6;
 const MIN_PUBLIC_SELECTION_ALLOWED_RATIO = 0.3;
 const LIVE_RADIUS_METERS = 10000;
 const LIVE_START_WINDOW_START_MINUTES = 18 * 60;
-const LIVE_START_WINDOW_END_MINUTES = 4 * 60;
+const LIVE_START_WINDOW_END_MINUTES = 24 * 60;
 const ARRIVAL_GRACE_MINUTES = 15;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES = 4 * 60;
 const ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 60;
 const MAX_ADVANCE_RESERVATION_DAYS = 7;
-const RESERVATION_WINDOW_MIN_START_MINUTES = 12 * 60;
-const RESERVATION_WINDOW_MAX_END_MINUTES = 23 * 60;
+const RESERVATION_WINDOW_MIN_START_MINUTES = 16 * 60;
+const RESERVATION_WINDOW_MAX_END_MINUTES = 24 * 60;
 const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 const LAST_RESERVATION_REQUEST_BUFFER_MINUTES = 15;
@@ -1712,7 +1712,9 @@ export class ReservationsService {
       documentsApproved: hasApprovedDocuments,
       canGoLive,
       liveRadiusMeters: LIVE_RADIUS_METERS,
-      liveStartWindow: this.liveStartWindowStatus(),
+      liveStartWindow: this.liveStartWindowStatus(
+        venue.reservationWindowEndMinutes,
+      ),
       liveBlockReason: !hasApprovedLayout
         ? "LAYOUT_NOT_APPROVED"
         : !hasApprovedDocuments
@@ -1828,6 +1830,7 @@ export class ReservationsService {
         isChinChinPanelListed: true,
         advanceChinChinTableIds: true,
         liveChinChinTableIds: true,
+        reservationWindowEndMinutes: true,
       },
     });
 
@@ -1842,7 +1845,9 @@ export class ReservationsService {
     }
 
     if (dto.isLive && !existingVenue.isLive) {
-      this.assertLiveStartWindowAllowed();
+      this.assertLiveStartWindowAllowed(
+        existingVenue.reservationWindowEndMinutes,
+      );
     }
 
     const requiresApprovedDocuments =
@@ -2631,10 +2636,7 @@ export class ReservationsService {
       return false;
     }
 
-    return (
-      eventDateKeys.has(this.zagrebDateKey(startAt)) ||
-      eventDateKeys.has(this.zagrebLiveBusinessDateKey(startAt))
-    );
+    return eventDateKeys.has(this.zagrebDateKey(startAt));
   }
 
   private panelLiveEvents(value: Prisma.JsonValue | null): PanelLiveEvent[] {
@@ -3113,7 +3115,7 @@ export class ReservationsService {
       endMinutes < startMinutes
     ) {
       throw new BadRequestException(
-        "Reservation window must be between 12:00 and 23:00.",
+        "Reservation window must be between 16:00 and 00:00.",
       );
     }
   }
@@ -3137,10 +3139,11 @@ export class ReservationsService {
   }
 
   private formatMinutes(totalMinutes: number) {
-    const hour = Math.floor(totalMinutes / 60)
+    const normalizedMinutes = totalMinutes % (24 * 60);
+    const hour = Math.floor(normalizedMinutes / 60)
       .toString()
       .padStart(2, "0");
-    const minute = (totalMinutes % 60).toString().padStart(2, "0");
+    const minute = (normalizedMinutes % 60).toString().padStart(2, "0");
     return `${hour}:${minute}`;
   }
 
@@ -3151,51 +3154,63 @@ export class ReservationsService {
       : `${kilometers.toFixed(1)} km`;
   }
 
-  private liveStartWindowStatus(now = new Date()) {
+  private liveStartWindowStatus(
+    reservationWindowEndMinutes = LIVE_START_WINDOW_END_MINUTES,
+    now = new Date(),
+  ) {
+    const endMinutes = Math.min(
+      LIVE_START_WINDOW_END_MINUTES,
+      Math.max(0, reservationWindowEndMinutes),
+    );
     const enforced = this.isLiveStartWindowEnforced();
     return {
       enforced,
       startMinutes: LIVE_START_WINDOW_START_MINUTES,
-      endMinutes: LIVE_START_WINDOW_END_MINUTES,
+      endMinutes,
       startLabel: this.formatMinutes(LIVE_START_WINDOW_START_MINUTES),
-      endLabel: this.formatMinutes(LIVE_START_WINDOW_END_MINUTES),
+      endLabel: this.formatMinutes(endMinutes),
       canStartNow:
         !enforced ||
-        this.isMinuteInsideOvernightWindow(
+        this.isMinuteInsideWindow(
           this.zagrebMinutesOfDay(now),
           LIVE_START_WINDOW_START_MINUTES,
-          LIVE_START_WINDOW_END_MINUTES,
+          endMinutes,
         ),
-      message: this.liveStartWindowMessage(),
+      message: this.liveStartWindowMessage(endMinutes),
     };
   }
 
-  private assertLiveStartWindowAllowed(now = new Date()) {
-    const status = this.liveStartWindowStatus(now);
+  private assertLiveStartWindowAllowed(
+    reservationWindowEndMinutes: number,
+    now = new Date(),
+  ) {
+    const status = this.liveStartWindowStatus(reservationWindowEndMinutes, now);
     if (!status.canStartNow) {
       throw new BadRequestException(status.message);
     }
   }
 
-  private liveStartWindowMessage() {
+  private liveStartWindowMessage(endMinutes = LIVE_START_WINDOW_END_MINUTES) {
     return `Live sesiju možete pokrenuti od ${this.formatMinutes(
       LIVE_START_WINDOW_START_MINUTES,
-    )} do ${this.formatMinutes(
-      LIVE_START_WINDOW_END_MINUTES,
-    )}. Za dnevne rezervacije koristite rezervacije unaprijed.`;
+    )} do ${this.formatMinutes(endMinutes)}. Ako live već traje, ostaje aktivan dok ga sami ne ugasite.`;
   }
 
   private isLiveStartWindowEnforced() {
     return (
-      this.configService.get<string>("LIVE_START_WINDOW_ENFORCED") === "true"
+      this.configService.get<string>("LIVE_START_WINDOW_ENFORCED") !== "false"
     );
   }
 
-  private isMinuteInsideOvernightWindow(
+  private isMinuteInsideWindow(
     minuteOfDay: number,
     startMinutes: number,
     endMinutes: number,
   ) {
+    if (startMinutes === endMinutes) {
+      return false;
+    }
+
     if (startMinutes <= endMinutes) {
       return minuteOfDay >= startMinutes && minuteOfDay < endMinutes;
     }
@@ -3902,19 +3917,8 @@ export class ReservationsService {
       .padStart(2, "0")}`;
   }
 
-  private zagrebLiveBusinessDate(value: Date) {
-    if (this.zagrebMinutesOfDay(value) < LIVE_START_WINDOW_END_MINUTES) {
-      return new Date(value.getTime() - 24 * 60 * 60 * 1000);
-    }
-    return value;
-  }
-
-  private zagrebLiveBusinessDateKey(value: Date) {
-    return this.zagrebDateKey(this.zagrebLiveBusinessDate(value));
-  }
-
   private isPremiumLiveBusinessDay(value: Date) {
-    const parts = this.zagrebDateParts(this.zagrebLiveBusinessDate(value));
+    const parts = this.zagrebDateParts(value);
     const dayOfWeek = new Date(
       Date.UTC(parts.year, parts.month - 1, parts.day),
     ).getUTCDay();
