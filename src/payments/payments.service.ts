@@ -674,6 +674,25 @@ export class PaymentsService {
           "No-show table release is available ten minutes after the reservation time.",
         );
       }
+
+      await this.prisma.reservation.updateMany({
+        where: {
+          id: reservationId,
+          status: {
+            in: releasableStatuses,
+          },
+        },
+        data: {
+          status: ReservationStatus.NO_SHOW,
+          releasedAt: new Date(),
+        },
+      });
+
+      return {
+        reservationId,
+        released: true,
+        status: ReservationStatus.NO_SHOW,
+      };
     }
 
     const payment = await this.prisma.reservationPayment.findFirst({
@@ -693,47 +712,24 @@ export class PaymentsService {
       orderBy: { createdAt: "desc" },
     });
 
-    const refundRequest = await this.prisma.$transaction(async (tx) => {
-      const request = existingPending
-        ? await tx.venueRefundRequest.update({
-            where: { id: existingPending.id },
-            data: {
-              paymentId: payment?.id,
-              requestedByOwnerId: reservation.venue.ownerId,
-              problemDescription,
-            },
-          })
-        : await tx.venueRefundRequest.create({
-            data: {
-              reservationId,
-              paymentId: payment?.id,
-              venueId,
-              requestedByOwnerId: reservation.venue.ownerId,
-              problemDescription,
-            },
-          });
-
-      if (shouldReleaseNoShowTable) {
-        await tx.reservation.updateMany({
-          where: {
-            id: reservationId,
-            status: {
-              in: [
-                ReservationStatus.CONFIRMED,
-                ReservationStatus.RESERVED,
-                ReservationStatus.CHECK_IN_PENDING,
-              ],
-            },
-          },
+    const refundRequest = existingPending
+      ? await this.prisma.venueRefundRequest.update({
+          where: { id: existingPending.id },
           data: {
-            status: ReservationStatus.NO_SHOW,
-            releasedAt: new Date(),
+            paymentId: payment?.id,
+            requestedByOwnerId: reservation.venue.ownerId,
+            problemDescription,
+          },
+        })
+      : await this.prisma.venueRefundRequest.create({
+          data: {
+            reservationId,
+            paymentId: payment?.id,
+            venueId,
+            requestedByOwnerId: reservation.venue.ownerId,
+            problemDescription,
           },
         });
-      }
-
-      return request;
-    });
 
     return this.serializeVenueRefundRequest(refundRequest);
   }
