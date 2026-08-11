@@ -2126,11 +2126,11 @@ export class ReservationsService {
     }
 
     const rooms = await this.getApprovedLiveSelectionRooms(venueId);
-    const minimumTableCount =
-      this.minimumPublicChinChinSelectionForRooms(rooms);
-    if (options?.enforcePublicMinimum && tableIds.length < minimumTableCount) {
+    if (options?.enforcePublicMinimum && tableIds.length === 0) {
+      const minimumTableCount =
+        this.minimumPublicChinChinSelectionForRooms(rooms);
       throw new BadRequestException(
-        `Odaberite barem ${minimumTableCount} Chin-Chin stola za prikaz kafića na Chin-Chin panelu ili uklonite sve stolove da kafić bude sakriven.`,
+        `Odaberite barem ${minimumTableCount} Chin-Chin stola za prikaz kafića na Chin-Chin panelu.`,
       );
     }
 
@@ -2169,9 +2169,22 @@ export class ReservationsService {
 
     for (const [room, selectedCount] of selectedByRoom.entries()) {
       const maxChinChinTables = this.maxChinChinTableCountForRoom(room);
+      const minimumChinChinTables =
+        this.minimumPublicChinChinSelectionForRoom(room);
       this.logger.log(
-        `[venue-live] validation room venueId=${venueId} roomLabel=${room.roomLabel} selected=${selectedCount} max=${maxChinChinTables} temporary=${room.isTemporarySpace}`,
+        `[venue-live] validation room venueId=${venueId} roomLabel=${room.roomLabel} selected=${selectedCount} min=${minimumChinChinTables} max=${maxChinChinTables} temporary=${room.isTemporarySpace}`,
       );
+      if (
+        options?.enforcePublicMinimum &&
+        selectedCount < minimumChinChinTables
+      ) {
+        this.logger.warn(
+          `[venue-live] validation public minimum not met venueId=${venueId} roomLabel=${room.roomLabel} selected=${selectedCount} min=${minimumChinChinTables}`,
+        );
+        throw new BadRequestException(
+          `${room.roomLabel}: odaberite barem ${minimumChinChinTables} Chin-Chin stola za spremanje odabira ove prostorije.`,
+        );
+      }
       if (selectedCount > maxChinChinTables) {
         this.logger.warn(
           `[venue-live] validation limit exceeded venueId=${venueId} roomLabel=${room.roomLabel} selected=${selectedCount} max=${maxChinChinTables}`,
@@ -2200,6 +2213,16 @@ export class ReservationsService {
       return 1;
     }
 
+    return Math.max(
+      1,
+      Math.round(allowedTableCount * MIN_PUBLIC_SELECTION_ALLOWED_RATIO),
+    );
+  }
+
+  private minimumPublicChinChinSelectionForRoom(
+    room: ApprovedLiveSelectionRoom,
+  ) {
+    const allowedTableCount = this.maxChinChinTableCountForRoom(room);
     return Math.max(
       1,
       Math.round(allowedTableCount * MIN_PUBLIC_SELECTION_ALLOWED_RATIO),
