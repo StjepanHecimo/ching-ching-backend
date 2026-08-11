@@ -2025,6 +2025,7 @@ export class PaymentsService {
           type: "reservation_request",
           reservationId,
           venueId: reservation.venue.id,
+          reservationType: reservation.type,
         },
       });
       this.logger.log(
