@@ -1150,19 +1150,7 @@ export class VenueChinChinPanelService {
       return false;
     }
 
-    return (
-      !liveEndedAt &&
-      this.zagrebDateKey(liveStartedAt) === this.zagrebDateKey(new Date())
-    );
-  }
-
-  private zagrebDateKey(date: Date) {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: "Europe/Zagreb",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    }).format(date);
+    return !liveEndedAt;
   }
 
   private serializeDrinkList(value: Prisma.JsonValue): NormalizedDrink[] {
