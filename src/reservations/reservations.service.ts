@@ -122,6 +122,9 @@ const LIVE_RADIUS_METERS = 10000;
 const LIVE_START_WINDOW_START_MINUTES = 18 * 60;
 const LIVE_START_WINDOW_END_MINUTES = 24 * 60;
 const LIVE_END_GRACE_MINUTES = 60;
+const LIVE_CUSTOMER_NEARBY_BEFORE_MINUTES = 15;
+const LIVE_CUSTOMER_NEARBY_AFTER_MINUTES = 10;
+const LIVE_CUSTOMER_NEARBY_RADIUS_METERS = 50;
 const ARRIVAL_GRACE_MINUTES = 15;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES = 4 * 60;
@@ -3475,24 +3478,15 @@ export class ReservationsService {
       where: {
         venueId,
         checkInReminderSentAt: null,
-        OR: [
-          {
-            type: ReservationType.ADVANCE,
-            status: {
-              in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
-            },
-            customerCheckedInAt: null,
-            timeSlotStart: {
-              gte: now,
-              lte: latestRelevantStart,
-            },
-          },
-          {
-            type: ReservationType.LIVE,
-            status: ReservationStatus.CHECK_IN_PENDING,
-            timeSlotStart: { lte: now },
-          },
-        ],
+        type: ReservationType.ADVANCE,
+        status: {
+          in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
+        },
+        customerCheckedInAt: null,
+        timeSlotStart: {
+          gte: now,
+          lte: latestRelevantStart,
+        },
       },
       include: { venue: true },
       take: 100,
@@ -3513,19 +3507,11 @@ export class ReservationsService {
         where: {
           id: reservation.id,
           checkInReminderSentAt: null,
-          OR: [
-            {
-              type: ReservationType.ADVANCE,
-              customerCheckedInAt: null,
-              status: {
-                in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
-              },
-            },
-            {
-              type: ReservationType.LIVE,
-              status: ReservationStatus.CHECK_IN_PENDING,
-            },
-          ],
+          type: ReservationType.ADVANCE,
+          customerCheckedInAt: null,
+          status: {
+            in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
+          },
         },
         data: { checkInReminderSentAt: now },
       });
