@@ -37,6 +37,11 @@ const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const VENUE_NO_SHOW_REPORT_DELAY_MINUTES = 10;
 
 @Injectable()
+function customerFacingTableLabel(value?: string | null): string {
+  const label = value?.trim() || "Chin-Chin stol";
+  return label.replace(/^table\s+/i, "Stol ");
+}
+
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
 
@@ -1175,7 +1180,7 @@ export class PaymentsService {
       });
       await this.notifyVenueAboutAdminPaymentAction(payment, {
         title: "Rezervacija je refundirana",
-        body: `${this.customerDisplayName(payment)} · ${this.formatCents(amountCents, payment.currency)} refundirano za ${payment.reservation.tableLabel ?? "Chin-Chin stol"}.`,
+        body: `${this.customerDisplayName(payment)} · ${this.formatCents(amountCents, payment.currency)} refundirano za ${customerFacingTableLabel(payment.reservation.tableLabel)}.`,
         type: "reservation_refunded_by_admin",
         amountCents,
       });
@@ -1230,7 +1235,7 @@ export class PaymentsService {
 
     await this.notifyVenueAboutAdminPaymentAction(payment, {
       title: "Korekcija isplate",
-      body: `${this.formatCents(allocation.venueShareCents, payment.currency)} dodano je kao korekcija ugostiteljske isplate za ${payment.reservation.tableLabel ?? "Chin-Chin stol"}.`,
+      body: `${this.formatCents(allocation.venueShareCents, payment.currency)} dodano je kao korekcija ugostiteljske isplate za ${customerFacingTableLabel(payment.reservation.tableLabel)}.`,
       type: "venue_payout_adjusted_by_admin",
       amountCents: allocation.venueShareCents,
     });
@@ -2020,7 +2025,7 @@ export class PaymentsService {
         userId: reservation.venue.ownerId,
         app: DevicePushApp.VENUE_OWNER,
         title: "Novi zahtjev za rezervaciju",
-        body: `${reservation.customerName ?? "Chin-Chin korisnik"} zeli rezervirati ${reservation.tableLabel ?? "Chin-Chin stol"}.`,
+        body: `${reservation.customerName ?? "Chin-Chin korisnik"} želi rezervirati ${customerFacingTableLabel(reservation.tableLabel)}.`,
         data: {
           type: "reservation_request",
           reservationId,

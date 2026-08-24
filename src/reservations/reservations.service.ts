@@ -60,6 +60,11 @@ type ReservationSlot = {
   arrivalDeadlineAt: Date;
 };
 
+function customerFacingTableLabel(value?: string | null): string {
+  const label = value?.trim() || "Chin-Chin stol";
+  return label.replace(/^table\s+/i, "Stol ");
+}
+
 type VenueReservationState = {
   id: string;
   isLive: boolean;
@@ -323,7 +328,7 @@ export class ReservationsService {
 
     if (!table) {
       throw new BadRequestException(
-        "Selected table is not an approved Chin-Chin table.",
+        "Odabrani stol nije odobren Chin-Chin stol.",
       );
     }
 
@@ -402,12 +407,12 @@ export class ReservationsService {
 
     if (!table) {
       throw new BadRequestException(
-        "Selected table is not an approved Chin-Chin table.",
+        "Odabrani stol nije odobren Chin-Chin stol.",
       );
     }
 
     if (!table.reservable) {
-      throw new BadRequestException("Selected table is not reservable.");
+      throw new BadRequestException("Odabrani stol nije dostupan za rezervaciju.");
     }
 
     if (
@@ -432,7 +437,7 @@ export class ReservationsService {
 
     if (blockingReservations.length) {
       throw new ConflictException(
-        "Selected table is already reserved for this time slot.",
+        "Odabrani stol je već rezerviran za ovaj termin.",
       );
     }
 
@@ -1073,7 +1078,7 @@ export class ReservationsService {
 
     await this.notifyCustomer(updated, {
       title: "Rezervacija otkazana",
-      body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      body: `${updated.venue.name} je otkazao rezervaciju za ${customerFacingTableLabel(updated.tableLabel)}.`,
       type: "reservation_cancelled_by_admin",
     });
 
@@ -1199,7 +1204,7 @@ export class ReservationsService {
 
     await this.notifyVenueOwner(checkedIn, {
       title: "Gost je potvrdio dolazak",
-      body: `${checkedIn.customerName ?? "Chin-Chin korisnik"} je potvrdio dolazak za ${checkedIn.tableLabel ?? "Chin-Chin stol"}.`,
+      body: `${checkedIn.customerName ?? "Chin-Chin korisnik"} je potvrdio dolazak za ${customerFacingTableLabel(checkedIn.tableLabel)}.`,
       type: "customer_check_in_confirmed",
     });
 
@@ -1288,7 +1293,7 @@ export class ReservationsService {
 
     if (blockers.length) {
       throw new ConflictException(
-        "Selected table is already reserved for this time slot.",
+        "Odabrani stol je već rezerviran za ovaj termin.",
       );
     }
 
@@ -1317,7 +1322,7 @@ export class ReservationsService {
 
     await this.notifyCustomer(updated, {
       title: "Rezervacija potvrđena",
-      body: `${updated.venue.name} je potvrdio rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      body: `${updated.venue.name} je potvrdio rezervaciju za ${customerFacingTableLabel(updated.tableLabel)}.`,
       type: "reservation_confirmed",
     });
 
@@ -1453,7 +1458,7 @@ export class ReservationsService {
 
     await this.notifyVenueOwner(checkedIn, {
       title: "Gost je potvrdio dolazak",
-      body: `${checkedIn.customerName ?? "Chin-Chin korisnik"} je potvrdio/la dolazak za ${checkedIn.tableLabel ?? "Chin-Chin stol"}.`,
+      body: `${checkedIn.customerName ?? "Chin-Chin korisnik"} je potvrdio/la dolazak za ${customerFacingTableLabel(checkedIn.tableLabel)}.`,
       type: "customer_check_in_confirmed",
     });
 
@@ -1561,7 +1566,7 @@ export class ReservationsService {
 
     await this.notifyVenueOwner(updated, {
       title: "Gost je otkazao rezervaciju",
-      body: `${updated.customerName ?? "Chin-Chin korisnik"} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      body: `${updated.customerName ?? "Chin-Chin korisnik"} je otkazao rezervaciju za ${customerFacingTableLabel(updated.tableLabel)}.`,
       type: "reservation_cancelled_by_customer",
     });
 
@@ -1628,7 +1633,7 @@ export class ReservationsService {
 
     await this.notifyCustomer(updated, {
       title: "Rezervacija otkazana",
-      body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+      body: `${updated.venue.name} je otkazao rezervaciju za ${customerFacingTableLabel(updated.tableLabel)}.`,
       type: "reservation_cancelled_by_venue",
     });
 
@@ -1690,7 +1695,7 @@ export class ReservationsService {
       if (updated.status === ReservationStatus.CANCELLED) {
         await this.notifyCustomer(updated, {
           title: "Rezervacija otkazana",
-          body: `${updated.venue.name} je otkazao rezervaciju za ${updated.tableLabel ?? "Chin-Chin stol"}.`,
+          body: `${updated.venue.name} je otkazao rezervaciju za ${customerFacingTableLabel(updated.tableLabel)}.`,
           type: "reservation_cancelled_by_venue",
         });
       }
@@ -2401,7 +2406,7 @@ export class ReservationsService {
     const endAt = new Date(endAtValue);
 
     if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
-      throw new BadRequestException("Invalid reservation time slot.");
+      throw new BadRequestException("Odabrani termin rezervacije nije valjan.");
     }
 
     if (endAt.getTime() <= startAt.getTime()) {
