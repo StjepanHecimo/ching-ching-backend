@@ -507,6 +507,28 @@ export class ReservationsService {
       );
     }
 
+    const weekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const weeklyReservationCount = await this.prisma.reservation.count({
+      where: {
+        customerId,
+        createdAt: { gte: weekStart },
+        status: {
+          in: [
+            ReservationStatus.REQUESTED,
+            ReservationStatus.PENDING_VENUE_CONFIRMATION,
+            ReservationStatus.CONFIRMED,
+            ReservationStatus.RESERVED,
+            ReservationStatus.CHECK_IN_PENDING,
+            ReservationStatus.CHECKED_IN,
+            ReservationStatus.SEATED,
+          ],
+        },
+      },
+    });
+    if (weeklyReservationCount >= 3) {
+      throw new BadRequestException("CUSTOMER_WEEKLY_RESERVATION_LIMIT");
+    }
+
     return this.createReservation(
       venueId,
       {
