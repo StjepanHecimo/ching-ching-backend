@@ -412,7 +412,9 @@ export class ReservationsService {
     }
 
     if (!table.reservable) {
-      throw new BadRequestException("Odabrani stol nije dostupan za rezervaciju.");
+      throw new BadRequestException(
+        "Odabrani stol nije dostupan za rezervaciju.",
+      );
     }
 
     if (
@@ -1540,7 +1542,12 @@ export class ReservationsService {
     }
 
     const now = new Date();
-    const refundCents = this.customerCancellationRefundCents(reservation, now);
+    const isPendingVenueResponse =
+      reservation.status === ReservationStatus.REQUESTED ||
+      reservation.status === ReservationStatus.PENDING_VENUE_CONFIRMATION;
+    const refundCents = isPendingVenueResponse
+      ? 0
+      : this.customerCancellationRefundCents(reservation, now);
     const updated = await this.prisma.reservation.update({
       where: { id },
       data: {
@@ -1554,20 +1561,30 @@ export class ReservationsService {
       include: { venue: true },
     });
 
-    await this.paymentsService.refundCapturedReservation(
-      reservation.id,
-      refundCents,
-      "Reservation was cancelled by customer.",
-    );
+    if (!isPendingVenueResponse && refundCents > 0) {
+      await this.paymentsService.refundCapturedReservation(
+        reservation.id,
+        refundCents,
+        "Reservation was cancelled by customer.",
+      );
+    }
     await this.paymentsService.voidForInactiveReservation(
       reservation.id,
-      "Reservation was cancelled by customer before capture.",
+      isPendingVenueResponse
+        ? "Reservation request was withdrawn by customer before confirmation."
+        : "Reservation was cancelled by customer before capture.",
     );
 
     await this.notifyVenueOwner(updated, {
-      title: "Gost je otkazao rezervaciju",
-      body: `${updated.customerName ?? "Chin-Chin korisnik"} je otkazao rezervaciju za ${customerFacingTableLabel(updated.tableLabel)}.`,
-      type: "reservation_cancelled_by_customer",
+      title: isPendingVenueResponse
+        ? "Gost je opozvao zahtjev"
+        : "Gost je otkazao rezervaciju",
+      body: `${updated.customerName ?? "Chin-Chin korisnik"} je ${
+        isPendingVenueResponse ? "opozvao zahtjev" : "otkazao rezervaciju"
+      } za ${customerFacingTableLabel(updated.tableLabel)}.`,
+      type: isPendingVenueResponse
+        ? "reservation_request_withdrawn_by_customer"
+        : "reservation_cancelled_by_customer",
     });
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_cancelled");

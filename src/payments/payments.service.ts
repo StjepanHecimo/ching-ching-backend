@@ -36,12 +36,12 @@ const DEFAULT_FIRST_RESERVATION_COMMISSION_BPS = 1000;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const VENUE_NO_SHOW_REPORT_DELAY_MINUTES = 10;
 
-@Injectable()
 function customerFacingTableLabel(value?: string | null): string {
   const label = value?.trim() || "Chin-Chin stol";
   return label.replace(/^table\s+/i, "Stol ");
 }
 
+@Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
 
