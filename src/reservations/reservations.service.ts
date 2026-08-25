@@ -1575,17 +1575,13 @@ export class ReservationsService {
         : "Reservation was cancelled by customer before capture.",
     );
 
-    await this.notifyVenueOwner(updated, {
-      title: isPendingVenueResponse
-        ? "Gost je opozvao zahtjev"
-        : "Gost je otkazao rezervaciju",
-      body: `${updated.customerName ?? "Chin-Chin korisnik"} je ${
-        isPendingVenueResponse ? "opozvao zahtjev" : "otkazao rezervaciju"
-      } za ${customerFacingTableLabel(updated.tableLabel)}.`,
-      type: isPendingVenueResponse
-        ? "reservation_request_withdrawn_by_customer"
-        : "reservation_cancelled_by_customer",
-    });
+    if (!isPendingVenueResponse) {
+      await this.notifyVenueOwner(updated, {
+        title: "Gost je otkazao rezervaciju",
+        body: `${updated.customerName ?? "Chin-Chin korisnik"} je otkazao rezervaciju za ${customerFacingTableLabel(updated.tableLabel)}.`,
+        type: "reservation_cancelled_by_customer",
+      });
+    }
 
     void this.emitVenueLiveSync(updated.venueId, "reservation_cancelled");
     void this.autoDisableVenueLiveIfNeeded(
