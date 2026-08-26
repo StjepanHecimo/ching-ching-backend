@@ -1,9 +1,9 @@
-ALTER TABLE "Venue"
+ALTER TABLE "venues"
 ADD COLUMN IF NOT EXISTS "venueType" TEXT NOT NULL DEFAULT 'NIGHT_CAFFE';
 
-ALTER TABLE "Venue"
+ALTER TABLE "venues"
 ALTER COLUMN "venueType" SET DEFAULT 'NIGHT_CAFFE';
 
-UPDATE "Venue"
+UPDATE "venues"
 SET "venueType" = 'NIGHT_CAFFE'
 WHERE "venueType" IS NULL OR "venueType" = 'CAFE';
