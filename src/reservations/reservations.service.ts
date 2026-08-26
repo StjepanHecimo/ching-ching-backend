@@ -125,8 +125,8 @@ const LARGE_TABLE_MIN_CAPACITY = 6;
 const MIN_PUBLIC_SELECTION_ALLOWED_RATIO = 0.3;
 const LIVE_RADIUS_METERS = 10000;
 const LIVE_START_WINDOW_START_MINUTES = 18 * 60;
-const LIVE_START_WINDOW_END_MINUTES = 24 * 60;
-const LIVE_END_GRACE_MINUTES = 60;
+const LIVE_START_WINDOW_END_MINUTES = 26 * 60;
+const LIVE_END_GRACE_MINUTES = 0;
 const LIVE_CUSTOMER_NEARBY_BEFORE_MINUTES = 15;
 const LIVE_CUSTOMER_NEARBY_AFTER_MINUTES = 10;
 const LIVE_CUSTOMER_NEARBY_RADIUS_METERS = 50;
@@ -135,8 +135,8 @@ const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES = 4 * 60;
 const ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 60;
 const MAX_ADVANCE_RESERVATION_DAYS = 7;
-const RESERVATION_WINDOW_MIN_START_MINUTES = 16 * 60;
-const RESERVATION_WINDOW_MAX_END_MINUTES = 24 * 60;
+const RESERVATION_WINDOW_MIN_START_MINUTES = 12 * 60;
+const RESERVATION_WINDOW_MAX_END_MINUTES = 26 * 60;
 const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 const LAST_RESERVATION_REQUEST_BUFFER_MINUTES = 15;
@@ -2464,7 +2464,11 @@ export class ReservationsService {
       );
     }
 
-    const startMinutes = this.zagrebMinutesOfDay(startAt);
+    const startMinutes = this.zagrebReservationWindowMinutes(
+      startAt,
+      venue.reservationWindowStartMinutes,
+      venue.reservationWindowEndMinutes,
+    );
     const latestReservationStartMinutes =
       venue.reservationWindowEndMinutes -
       LAST_RESERVATION_REQUEST_BUFFER_MINUTES;
@@ -2473,9 +2477,9 @@ export class ReservationsService {
       startMinutes > latestReservationStartMinutes
     ) {
       throw new BadRequestException(
-        `Reservations are available from ${this.formatMinutes(
+        `Rezervacije su dostupne od ${this.formatMinutes(
           venue.reservationWindowStartMinutes,
-        )} to ${this.formatMinutes(latestReservationStartMinutes)}.`,
+        )} do ${this.formatMinutes(latestReservationStartMinutes)}.`,
       );
     }
 
@@ -3206,7 +3210,7 @@ export class ReservationsService {
       endMinutes < startMinutes
     ) {
       throw new BadRequestException(
-        "Reservation window must be between 16:00 and 00:00.",
+        "Vrijeme rezervacija mora biti između 12:00 i 02:00 sljedećeg dana.",
       );
     }
   }
@@ -3264,7 +3268,11 @@ export class ReservationsService {
       canStartNow:
         !enforced ||
         this.isMinuteInsideWindow(
-          this.zagrebMinutesOfDay(now),
+          this.zagrebReservationWindowMinutes(
+            now,
+            LIVE_START_WINDOW_START_MINUTES,
+            endMinutes,
+          ),
           LIVE_START_WINDOW_START_MINUTES,
           endMinutes,
         ),
@@ -3288,7 +3296,7 @@ export class ReservationsService {
     )} do ${this.formatMinutes(
       endMinutes,
     )}. Ako live ostane uključen, automatski se gasi u ${this.formatMinutes(
-      endMinutes + LIVE_END_GRACE_MINUTES,
+      endMinutes,
     )}.`;
   }
 
@@ -3321,6 +3329,23 @@ export class ReservationsService {
       LIVE_START_WINDOW_END_MINUTES,
       Math.max(0, reservationWindowEndMinutes),
     );
+  }
+
+  private zagrebReservationWindowMinutes(
+    value: Date,
+    windowStartMinutes: number,
+    windowEndMinutes: number,
+  ) {
+    const minutes = this.zagrebMinutesOfDay(value);
+    if (
+      windowEndMinutes > 24 * 60 &&
+      minutes < windowStartMinutes &&
+      minutes < windowEndMinutes % (24 * 60)
+    ) {
+      return minutes + 24 * 60;
+    }
+
+    return minutes;
   }
 
   private isVenueLiveWithinGraceWindow(

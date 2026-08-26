@@ -43,8 +43,8 @@ type DrinkPanelInput = {
   promoSizeLabel?: string | null;
 };
 
-const LIVE_START_WINDOW_END_MINUTES = 24 * 60;
-const LIVE_END_GRACE_MINUTES = 60;
+const LIVE_START_WINDOW_END_MINUTES = 26 * 60;
+const LIVE_END_GRACE_MINUTES = 0;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 
