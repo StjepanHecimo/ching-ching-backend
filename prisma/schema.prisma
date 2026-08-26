@@ -290,7 +290,7 @@ model Venue {
   address                       String?
   city                          String?
   country                       String    @default("HR")
-  venueType                     String    @default("CAFE")
+  venueType                     String    @default("NIGHT_CAFFE")
   latitude                      Float?
   longitude                     Float?
   profileDescription            String?

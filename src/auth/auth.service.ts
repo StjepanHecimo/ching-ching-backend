@@ -1408,6 +1408,6 @@ export class AuthService {
     const normalized = value?.trim().toUpperCase();
     return normalized === "NIGHT_CAFFE" || normalized === "CLUB"
       ? normalized
-      : "CAFE";
+      : "NIGHT_CAFFE";
   }
 }

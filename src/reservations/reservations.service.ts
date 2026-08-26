@@ -2868,7 +2868,7 @@ export class ReservationsService {
     const normalized = value?.trim().toUpperCase();
     return normalized === "CLUB" || normalized === "NIGHT_CAFFE"
       ? normalized
-      : "CAFE";
+      : "NIGHT_CAFFE";
   }
 
   private livePricingForBoost(value: unknown) {
