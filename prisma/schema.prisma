@@ -290,12 +290,13 @@ model Venue {
   address                       String?
   city                          String?
   country                       String    @default("HR")
+  venueType                     String    @default("CAFE")
   latitude                      Float?
   longitude                     Float?
   profileDescription            String?
   profileImages                 Json      @default("[]")
   isLive                        Boolean   @default(false)
-  livePricingBoost              String    @default("X1")
+  livePricingBoost              String    @default("DEFAULT")
   isChinChinPanelListed         Boolean   @default(true)
   advanceChinChinTableIds       Json      @default("[]")
   liveChinChinTableIds          Json      @default("[]")

@@ -2196,6 +2196,6 @@ export class VenueChinChinPanelService {
 
   private normalizeLivePricingBoost(value: unknown) {
     const boost = value?.toString().trim().toUpperCase();
-    return boost === "X2" || boost === "X3" ? boost : "X1";
+    return boost === "PREMIUM" ? "PREMIUM" : "DEFAULT";
   }
 }

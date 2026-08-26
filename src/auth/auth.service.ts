@@ -121,6 +121,7 @@ export class AuthService {
           ownerId: user.id,
           name: dto.venueName.trim(),
           slug: venueSlug,
+          venueType: this.normalizeVenueType(dto.venueType),
           businessOib: dto.venueBusinessOib.trim(),
           address: dto.venueAddress?.trim(),
           city: dto.venueCity?.trim(),
@@ -573,6 +574,7 @@ export class AuthService {
             name: user.venues[0].name,
             slug: user.venues[0].slug,
             businessOib: user.venues[0].businessOib,
+            venueType: user.venues[0].venueType,
             address: user.venues[0].address,
             city: user.venues[0].city,
             country: user.venues[0].country,
@@ -690,6 +692,7 @@ export class AuthService {
             name: user.venues[0].name,
             slug: user.venues[0].slug,
             businessOib: user.venues[0].businessOib,
+            venueType: user.venues[0].venueType,
             address: user.venues[0].address,
             city: user.venues[0].city,
             country: user.venues[0].country,
@@ -933,6 +936,7 @@ export class AuthService {
         name: venue.name,
         slug: venue.slug,
         businessOib: venue.businessOib,
+        venueType: venue.venueType,
         address: venue.address,
         city: venue.city,
         country: venue.country,
@@ -1398,5 +1402,12 @@ export class AuthService {
       .replace(/[\u0300-\u036f]/g, "")
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
+  }
+
+  private normalizeVenueType(value?: string | null) {
+    const normalized = value?.trim().toUpperCase();
+    return normalized === "NIGHT_CAFFE" || normalized === "CLUB"
+      ? normalized
+      : "CAFE";
   }
 }

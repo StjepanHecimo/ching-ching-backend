@@ -30,7 +30,6 @@ import { DeclineReservationDto } from "./dto/decline-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailable-slots-query.dto";
 import { UpdateReservationStatusDto } from "./dto/update-reservation-status.dto";
-import { UpdateVenueLivePricingBoostDto } from "./dto/update-venue-live-pricing-boost.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
 import { UpdateVenueReservationSettingsDto } from "./dto/update-venue-reservation-settings.dto";
 import { VenueReservationsQueryDto } from "./dto/venue-reservations-query.dto";
@@ -71,9 +70,10 @@ type VenueReservationState = {
   isChinChinPanelListed: boolean;
   latitude: number | null;
   longitude: number | null;
+  venueType: string;
   advanceChinChinTableIds: string[];
   liveChinChinTableIds: string[];
-  livePricingBoost: LivePricingBoost;
+  livePricingBoost: ConfiguredLivePricingPackage;
   liveStartedAt: Date | null;
   reservationWindowStartMinutes: number;
   reservationWindowEndMinutes: number;
@@ -101,7 +101,13 @@ type ReservationWithVenueRefundRequests = ReservationWithVenue & {
   }[];
 };
 
-type LivePricingBoost = "X1" | "X2" | "X3";
+type LivePricingBoost =
+  | "DEFAULT"
+  | "STRONG_DAY"
+  | "EVENT"
+  | "PREMIUM_STRONG_DAY"
+  | "PREMIUM_EVENT";
+type ConfiguredLivePricingPackage = "DEFAULT" | "PREMIUM";
 type PanelLiveEvent = {
   day: string;
 };
@@ -114,14 +120,11 @@ const LIVE_PRICING_BOOSTS: Record<
   LivePricingBoost,
   { standardCents: number; largeCents: number }
 > = {
-  X1: { standardCents: 400, largeCents: 700 },
-  X2: { standardCents: 500, largeCents: 800 },
-  X3: { standardCents: 700, largeCents: 1000 },
-};
-const LIVE_PRICING_BOOST_RANK: Record<LivePricingBoost, number> = {
-  X1: 1,
-  X2: 2,
-  X3: 3,
+  DEFAULT: { standardCents: 400, largeCents: 700 },
+  STRONG_DAY: { standardCents: 500, largeCents: 800 },
+  EVENT: { standardCents: 700, largeCents: 1000 },
+  PREMIUM_STRONG_DAY: { standardCents: 800, largeCents: 1200 },
+  PREMIUM_EVENT: { standardCents: 1000, largeCents: 1500 },
 };
 const LARGE_TABLE_MIN_CAPACITY = 6;
 const MIN_PUBLIC_SELECTION_ALLOWED_RATIO = 0.3;
@@ -243,7 +246,7 @@ export class ReservationsService {
         venueId,
         reservationType,
         slot.startAt,
-        venue.livePricingBoost,
+        this.effectiveConfiguredLivePricingPackage(venue),
       );
     await this.releaseExpiredReservationLocks(venueId);
     const tables = await this.filterTablesForReservationType(
@@ -397,7 +400,7 @@ export class ReservationsService {
         venueId,
         reservationType,
         slot.startAt,
-        venue.livePricingBoost,
+        this.effectiveConfiguredLivePricingPackage(venue),
       );
     await this.releaseExpiredReservationLocks(venueId);
     const tables = await this.filterTablesForReservationType(
@@ -1772,19 +1775,21 @@ export class ReservationsService {
     const hasApprovedDocuments = await this.venueHasApprovedDocuments(venueId);
     const canGoLive = hasApprovedLayout && hasApprovedDocuments;
     const isLive = canGoLive ? venue.isLive : false;
-    const configuredLivePricingBoost = this.normalizeLivePricingBoost(
-      venue.livePricingBoost,
-    );
+    const configuredLivePricingBoost =
+      this.effectiveConfiguredLivePricingPackage(venue);
     const livePricingReferenceAt = new Date();
     const automaticLivePricingBoost =
       await this.getAutomaticLivePricingBoostForSlot(
         venueId,
         livePricingReferenceAt,
       );
-    const effectiveLivePricingBoost = this.maxLivePricingBoost(
-      configuredLivePricingBoost,
-      automaticLivePricingBoost,
-    );
+    const effectiveLivePricingBoost =
+      await this.getEffectiveLivePricingBoostForSlot(
+        venueId,
+        "LIVE",
+        livePricingReferenceAt,
+        configuredLivePricingBoost,
+      );
     return {
       id: venue.id,
       isLive,
@@ -1855,45 +1860,6 @@ export class ReservationsService {
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
       minReservationWindowStartMinutes: RESERVATION_WINDOW_MIN_START_MINUTES,
       maxReservationWindowEndMinutes: RESERVATION_WINDOW_MAX_END_MINUTES,
-    };
-  }
-
-  async updateVenueLivePricingBoost(
-    adminUserId: string,
-    venueId: string,
-    dto: UpdateVenueLivePricingBoostDto,
-  ) {
-    await this.assertAdminPassword(adminUserId, dto.adminPassword);
-
-    const existingVenue = await this.prisma.venue.findUnique({
-      where: { id: venueId },
-      select: { id: true },
-    });
-    if (!existingVenue) {
-      throw new NotFoundException("Venue was not found.");
-    }
-
-    const venue = await this.prisma.venue.update({
-      where: { id: venueId },
-      data: {
-        livePricingBoost: dto.livePricingBoost,
-      },
-      select: {
-        id: true,
-        livePricingBoost: true,
-        isLive: true,
-        liveChinChinTableIds: true,
-      },
-    });
-
-    void this.emitVenueLiveSync(venue.id, "live_pricing_boost_updated");
-
-    return {
-      venueId: venue.id,
-      isLive: venue.isLive,
-      livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
-      livePrices: this.livePricingForBoost(venue.livePricingBoost),
-      liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
     };
   }
 
@@ -2053,19 +2019,21 @@ export class ReservationsService {
         liveEndedAt: dto.isLive ? null : new Date(),
       },
     });
-    const configuredLivePricingBoost = this.normalizeLivePricingBoost(
-      venue.livePricingBoost,
-    );
+    const configuredLivePricingBoost =
+      this.effectiveConfiguredLivePricingPackage(venue);
     const livePricingReferenceAt = new Date();
     const automaticLivePricingBoost =
       await this.getAutomaticLivePricingBoostForSlot(
         venueId,
         livePricingReferenceAt,
       );
-    const effectiveLivePricingBoost = this.maxLivePricingBoost(
-      configuredLivePricingBoost,
-      automaticLivePricingBoost,
-    );
+    const effectiveLivePricingBoost =
+      await this.getEffectiveLivePricingBoostForSlot(
+        venueId,
+        "LIVE",
+        livePricingReferenceAt,
+        configuredLivePricingBoost,
+      );
 
     const result = {
       id: venue.id,
@@ -2512,6 +2480,7 @@ export class ReservationsService {
         isChinChinPanelListed: true,
         latitude: true,
         longitude: true,
+        venueType: true,
         advanceChinChinTableIds: true,
         liveChinChinTableIds: true,
         livePricingBoost: true,
@@ -2538,7 +2507,10 @@ export class ReservationsService {
         venue.advanceChinChinTableIds,
       ),
       liveChinChinTableIds: this.jsonStringArray(venue.liveChinChinTableIds),
-      livePricingBoost: this.normalizeLivePricingBoost(venue.livePricingBoost),
+      venueType: this.normalizeVenueType(venue.venueType),
+      livePricingBoost: this.normalizeConfiguredLivePricingPackage(
+        venue.livePricingBoost,
+      ),
       reservationWindowStartMinutes:
         venue.reservationWindowStartMinutes ??
         DEFAULT_RESERVATION_WINDOW_START_MINUTES,
@@ -2677,21 +2649,22 @@ export class ReservationsService {
     configuredBoost: unknown,
   ): Promise<LivePricingBoost> {
     const normalizedConfiguredBoost =
-      this.normalizeLivePricingBoost(configuredBoost);
+      this.normalizeConfiguredLivePricingPackage(configuredBoost);
     if (type !== "LIVE") {
-      return normalizedConfiguredBoost;
+      return "DEFAULT";
     }
 
-    const automaticBoost = await this.getAutomaticLivePricingBoostForSlot(
+    return this.getAutomaticLivePricingBoostForSlot(
       venueId,
       startAt,
+      normalizedConfiguredBoost === "PREMIUM",
     );
-    return this.maxLivePricingBoost(normalizedConfiguredBoost, automaticBoost);
   }
 
   private async getAutomaticLivePricingBoostForSlot(
     venueId: string,
     startAt: Date,
+    hasPremiumPricingPackage = false,
   ): Promise<LivePricingBoost> {
     const isPremiumLiveDay = this.isPremiumLiveBusinessDay(startAt);
     const hasEvent = await this.venueHasEventForLiveBusinessDay(
@@ -2699,22 +2672,19 @@ export class ReservationsService {
       startAt,
     );
 
+    if (hasPremiumPricingPackage && isPremiumLiveDay && hasEvent) {
+      return "PREMIUM_EVENT";
+    }
+    if (hasPremiumPricingPackage && isPremiumLiveDay) {
+      return "PREMIUM_STRONG_DAY";
+    }
     if (hasEvent) {
-      return "X3";
+      return "EVENT";
     }
     if (isPremiumLiveDay) {
-      return "X2";
+      return "STRONG_DAY";
     }
-    return "X1";
-  }
-
-  private maxLivePricingBoost(
-    left: LivePricingBoost,
-    right: LivePricingBoost,
-  ): LivePricingBoost {
-    return LIVE_PRICING_BOOST_RANK[left] >= LIVE_PRICING_BOOST_RANK[right]
-      ? left
-      : right;
+    return "DEFAULT";
   }
 
   private async venueHasEventForLiveBusinessDay(
@@ -2863,7 +2833,42 @@ export class ReservationsService {
 
   private normalizeLivePricingBoost(value: unknown): LivePricingBoost {
     const boost = value?.toString().trim().toUpperCase();
-    return boost === "X2" || boost === "X3" ? boost : "X1";
+    if (boost === "PREMIUM_EVENT") {
+      return "PREMIUM_EVENT";
+    }
+    if (boost === "PREMIUM_STRONG_DAY") {
+      return "PREMIUM_STRONG_DAY";
+    }
+    if (boost === "EVENT") {
+      return "EVENT";
+    }
+    if (boost === "STRONG_DAY") {
+      return "STRONG_DAY";
+    }
+    return "DEFAULT";
+  }
+
+  private normalizeConfiguredLivePricingPackage(
+    value: unknown,
+  ): ConfiguredLivePricingPackage {
+    const boost = value?.toString().trim().toUpperCase();
+    return boost === "PREMIUM" ? "PREMIUM" : "DEFAULT";
+  }
+
+  private effectiveConfiguredLivePricingPackage(venue: {
+    livePricingBoost?: string | null;
+    venueType?: string | null;
+  }): ConfiguredLivePricingPackage {
+    return this.normalizeVenueType(venue.venueType) === "CLUB"
+      ? "PREMIUM"
+      : "DEFAULT";
+  }
+
+  private normalizeVenueType(value?: string | null) {
+    const normalized = value?.trim().toUpperCase();
+    return normalized === "CLUB" || normalized === "NIGHT_CAFFE"
+      ? normalized
+      : "CAFE";
   }
 
   private livePricingForBoost(value: unknown) {

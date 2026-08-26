@@ -192,6 +192,7 @@ export class SpaceLayoutsService {
         address: venue.address,
         city: venue.city,
         country: venue.country,
+        venueType: this.normalizeVenueType(venue.venueType),
         isLive: venue.isLive,
         livePricingBoost: this.normalizeLivePricingBoost(
           venue.livePricingBoost,
@@ -3870,7 +3871,14 @@ export class SpaceLayoutsService {
 
   private normalizeLivePricingBoost(value: unknown) {
     const boost = value?.toString().trim().toUpperCase();
-    return boost === "X2" || boost === "X3" ? boost : "X1";
+    return boost === "PREMIUM" ? "PREMIUM" : "DEFAULT";
+  }
+
+  private normalizeVenueType(value?: string | null) {
+    const normalized = value?.trim().toUpperCase();
+    return normalized === "CLUB" || normalized === "NIGHT_CAFFE"
+      ? normalized
+      : "CAFE";
   }
 
   private layoutStatsFromSavedLayout(

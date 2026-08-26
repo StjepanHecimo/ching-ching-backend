@@ -1,5 +1,6 @@
 import {
   IsEmail,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -29,6 +30,10 @@ export class RegisterVenueOwnerDto {
   @IsString()
   @Length(2, 120)
   venueName!: string;
+
+  @IsOptional()
+  @IsIn(["CAFE", "NIGHT_CAFFE", "CLUB"])
+  venueType?: "CAFE" | "NIGHT_CAFFE" | "CLUB";
 
   @IsString()
   @Matches(/^\d{11}$/, {
