@@ -1240,7 +1240,7 @@ export class ReservationsService {
   }
 
   async acceptReservation(id: string) {
-    const reservation = await this.prisma.reservation.findUnique({
+    let reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
     });
@@ -1251,10 +1251,40 @@ export class ReservationsService {
 
     await this.releaseExpiredReservationLocks(reservation.venueId);
 
+    reservation = await this.prisma.reservation.findUnique({
+      where: { id },
+      include: { venue: true },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException("Reservation was not found.");
+    }
+
     if (reservation.status !== ReservationStatus.PENDING_VENUE_CONFIRMATION) {
       throw new BadRequestException(
         "Only pending reservation requests can be accepted.",
       );
+    }
+
+    if (
+      reservation.type === ReservationType.ADVANCE &&
+      reservation.timeSlotStart.getTime() <= Date.now()
+    ) {
+      const expired = await this.prisma.reservation.update({
+        where: { id },
+        data: {
+          status: ReservationStatus.EXPIRED,
+          releasedAt: new Date(),
+          confirmationExpiresAt: null,
+        },
+        include: { venue: true },
+      });
+      await this.paymentsService.voidForInactiveReservation(
+        reservation.id,
+        "Advance reservation request expired before venue confirmation.",
+      );
+      void this.emitVenueLiveSync(expired.venueId, "reservation_expired");
+      return this.serializeReservation(expired);
     }
 
     if (
@@ -3574,12 +3604,20 @@ export class ReservationsService {
       where: {
         venueId,
         status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
-        type: ReservationType.LIVE,
         OR: [
-          { confirmationExpiresAt: { lt: now } },
           {
-            confirmationExpiresAt: null,
-            timeSlotEnd: { lt: now },
+            type: ReservationType.LIVE,
+            OR: [
+              { confirmationExpiresAt: { lt: now } },
+              {
+                confirmationExpiresAt: null,
+                timeSlotEnd: { lt: now },
+              },
+            ],
+          },
+          {
+            type: ReservationType.ADVANCE,
+            timeSlotStart: { lte: now },
           },
         ],
       },
