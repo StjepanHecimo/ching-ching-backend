@@ -106,15 +106,17 @@ type PanelLiveEvent = {
   day: string;
 };
 
-const ADVANCE_STANDARD_PRICE_CENTS = 300;
-const ADVANCE_LARGE_PRICE_CENTS = 500;
+const STANDARD_ADVANCE_STANDARD_PRICE_CENTS = 250;
+const STANDARD_ADVANCE_LARGE_PRICE_CENTS = 400;
+const PREMIUM_ADVANCE_STANDARD_PRICE_CENTS = 300;
+const PREMIUM_ADVANCE_LARGE_PRICE_CENTS = 500;
 const LIVE_PRICING_BOOSTS: Record<
   LivePricingBoost,
   { standardCents: number; largeCents: number }
 > = {
-  X1: { standardCents: 500, largeCents: 800 },
-  X2: { standardCents: 900, largeCents: 1400 },
-  X3: { standardCents: 1000, largeCents: 1500 },
+  X1: { standardCents: 400, largeCents: 700 },
+  X2: { standardCents: 500, largeCents: 800 },
+  X3: { standardCents: 700, largeCents: 1000 },
 };
 const LIVE_PRICING_BOOST_RANK: Record<LivePricingBoost, number> = {
   X1: 1,
@@ -290,6 +292,7 @@ export class ReservationsService {
             reservationType,
             table,
             effectiveLivePricingBoost,
+            slot.startAt,
           ),
           livePricingBoost:
             reservationType === "LIVE" ? effectiveLivePricingBoost : null,
@@ -469,6 +472,7 @@ export class ReservationsService {
           reservationType,
           table,
           effectiveLivePricingBoost,
+          slot.startAt,
         ),
         refundCents: 0,
         currency: "EUR",
@@ -2643,6 +2647,7 @@ export class ReservationsService {
     type: "ADVANCE" | "LIVE",
     table: ReservableTable,
     livePricingBoost: LivePricingBoost,
+    startAt: Date,
   ) {
     const isLarge =
       table.chinChinTier === "LARGE" ||
@@ -2653,7 +2658,16 @@ export class ReservationsService {
       return isLarge ? livePrices.largeCents : livePrices.standardCents;
     }
 
-    return isLarge ? ADVANCE_LARGE_PRICE_CENTS : ADVANCE_STANDARD_PRICE_CENTS;
+    const isPremiumDay = this.isPremiumLiveBusinessDay(startAt);
+    if (isPremiumDay) {
+      return isLarge
+        ? PREMIUM_ADVANCE_LARGE_PRICE_CENTS
+        : PREMIUM_ADVANCE_STANDARD_PRICE_CENTS;
+    }
+
+    return isLarge
+      ? STANDARD_ADVANCE_LARGE_PRICE_CENTS
+      : STANDARD_ADVANCE_STANDARD_PRICE_CENTS;
   }
 
   private async getEffectiveLivePricingBoostForSlot(
@@ -2685,10 +2699,10 @@ export class ReservationsService {
       startAt,
     );
 
-    if (isPremiumLiveDay && hasEvent) {
+    if (hasEvent) {
       return "X3";
     }
-    if (isPremiumLiveDay || hasEvent) {
+    if (isPremiumLiveDay) {
       return "X2";
     }
     return "X1";
