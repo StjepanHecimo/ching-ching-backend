@@ -2305,7 +2305,7 @@ export class ReservationsService {
   private async getApprovedLiveSelectionRooms(venueId: string) {
     const project = await this.prisma.spaceLayoutProject.findFirst({
       where: { venueId, status: SpaceLayoutStatus.APPROVED },
-      orderBy: { approvedAt: "desc" },
+      orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
     });
 
     const savedLayout = this.asJsonObject(project?.savedLayout ?? null);
@@ -2751,7 +2751,7 @@ export class ReservationsService {
   private async getApprovedChinChinTables(venueId: string) {
     const project = await this.prisma.spaceLayoutProject.findFirst({
       where: { venueId, status: SpaceLayoutStatus.APPROVED },
-      orderBy: { approvedAt: "desc" },
+      orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
     });
 
     const savedLayout = this.asJsonObject(project?.savedLayout ?? null);

@@ -16,6 +16,7 @@ import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-preview.dto";
 import { CreateTablePhotoUploadUrlDto } from "./dto/create-table-photo-upload-url.dto";
+import { CreateSpaceChangeAttachmentUploadUrlDto } from "./dto/create-space-change-attachment-upload-url.dto";
 import { CreateSpaceLayoutDto } from "./dto/create-space-layout.dto";
 import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
 import { LayoutPhotoDto } from "./dto/layout-photo.dto";
@@ -504,7 +505,7 @@ export class SpaceLayoutsService {
   async getLatestApprovedVenueProjectPreview(venueId: string) {
     const project = await this.prisma.spaceLayoutProject.findFirst({
       where: { venueId, status: SpaceLayoutStatus.APPROVED },
-      orderBy: { approvedAt: "desc" },
+      orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
       include: { venue: true },
     });
 
@@ -543,7 +544,7 @@ export class SpaceLayoutsService {
     const sourceProject =
       (await this.prisma.spaceLayoutProject.findFirst({
         where: { venueId, status: SpaceLayoutStatus.APPROVED },
-        orderBy: { approvedAt: "desc" },
+        orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
         include: { venue: true },
       })) ??
       (await this.prisma.spaceLayoutProject.findFirst({
@@ -643,7 +644,7 @@ export class SpaceLayoutsService {
     const sourceProject =
       (await this.prisma.spaceLayoutProject.findFirst({
         where: { venueId, status: SpaceLayoutStatus.APPROVED },
-        orderBy: { approvedAt: "desc" },
+        orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
         include: { venue: true },
       })) ??
       (await this.prisma.spaceLayoutProject.findFirst({
@@ -748,6 +749,29 @@ export class SpaceLayoutsService {
     venueId: string,
     dto: CreateTablePhotoUploadUrlDto,
   ) {
+    return this.createImageUploadUrl(venueId, dto, {
+      folder: "table-photos",
+      idPrefix: "table-photo",
+      storageLabel: "table photo uploads",
+    });
+  }
+
+  async createSpaceChangeAttachmentUploadUrl(
+    venueId: string,
+    dto: CreateSpaceChangeAttachmentUploadUrlDto,
+  ) {
+    return this.createImageUploadUrl(venueId, dto, {
+      folder: "space-change-attachments",
+      idPrefix: "space-change-photo",
+      storageLabel: "space change attachment uploads",
+    });
+  }
+
+  private async createImageUploadUrl(
+    venueId: string,
+    dto: { fileName: string; mimeType: string },
+    options: { folder: string; idPrefix: string; storageLabel: string },
+  ) {
     const bucket = this.configService.get<string>("R2_BUCKET")?.trim();
     const publicBaseUrl = this.configService
       .get<string>("R2_PUBLIC_BASE_URL")
@@ -756,16 +780,16 @@ export class SpaceLayoutsService {
 
     if (!bucket || !publicBaseUrl) {
       throw new InternalServerErrorException(
-        "R2 storage is not configured for table photo uploads.",
+        `R2 storage is not configured for ${options.storageLabel}.`,
       );
     }
 
-    const photoId = `table-photo-${randomUUID()}`;
+    const photoId = `${options.idPrefix}-${randomUUID()}`;
     const extension = this.extensionFromMimeType(dto.mimeType);
     const key = [
       "venues",
       this.slugForObjectKey(venueId),
-      "table-photos",
+      options.folder,
       `${photoId}${extension}`,
     ].join("/");
 
@@ -801,7 +825,7 @@ export class SpaceLayoutsService {
     const sourceProject =
       (await this.prisma.spaceLayoutProject.findFirst({
         where: { venueId, status: SpaceLayoutStatus.APPROVED },
-        orderBy: { approvedAt: "desc" },
+        orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
         include: { venue: true },
       })) ??
       (await this.prisma.spaceLayoutProject.findFirst({
@@ -925,12 +949,16 @@ export class SpaceLayoutsService {
     const isHideRoomRequest =
       changeRequest?.type === "HIDE_ROOM" ||
       previousSavedLayout.changeRequestType === "HIDE_ROOM";
+    const isEditSpaceRequest =
+      changeRequest?.type === "EDIT_SPACE" ||
+      previousSavedLayout.changeRequestType === "EDIT_SPACE";
     console.log("[space-layouts] approveAdjustedLayoutPreview", {
       projectId: project.id,
       venueId: project.venueId,
       changeRequestType:
         changeRequest?.type ?? previousSavedLayout.changeRequestType ?? null,
       isAdditionalRoomRequest,
+      isEditSpaceRequest,
       isDeleteRoomRequest,
       isHideRoomRequest,
       incomingRoomCount: Array.isArray(dto.layout?.rooms)
@@ -946,19 +974,27 @@ export class SpaceLayoutsService {
         )
       : dto.forceApprove
         ? dto.layout
-        : isDeleteRoomRequest
-          ? this.removeRequestedRoomFromLayout(
+        : isEditSpaceRequest
+          ? await this.mergeEditedRoomLayout(
+              project.venueId,
+              project.id,
               dto.layout,
               changeRequest?.roomLabel?.toString() ??
                 previousSavedLayout.requestedRoomLabel?.toString(),
             )
-          : isHideRoomRequest
-            ? this.hideRequestedRoomInLayout(
+          : isDeleteRoomRequest
+            ? this.removeRequestedRoomFromLayout(
                 dto.layout,
                 changeRequest?.roomLabel?.toString() ??
                   previousSavedLayout.requestedRoomLabel?.toString(),
               )
-            : dto.layout;
+            : isHideRoomRequest
+              ? this.hideRequestedRoomInLayout(
+                  dto.layout,
+                  changeRequest?.roomLabel?.toString() ??
+                    previousSavedLayout.requestedRoomLabel?.toString(),
+                )
+              : dto.layout;
     const spaceForApproval = isAdditionalRoomRequest
       ? await this.mergeAdditionalRoomSpace(
           project.venueId,
@@ -1034,9 +1070,10 @@ export class SpaceLayoutsService {
     }
 
     await this.notifyVenueTablePhotoApproved(
-      project,
+      updatedProject,
       changeRequest,
       previousSavedLayout,
+      layoutForApproval,
     );
     await this.notifyVenueSpaceApproved(
       project,
@@ -1060,6 +1097,7 @@ export class SpaceLayoutsService {
     },
     changeRequest: Record<string, unknown> | null,
     previousSavedLayout: Record<string, unknown>,
+    approvedLayout: Record<string, unknown>,
   ) {
     const changeRequestType =
       changeRequest?.type?.toString() ??
@@ -1070,6 +1108,7 @@ export class SpaceLayoutsService {
         project,
         changeRequest,
         previousSavedLayout,
+        approvedLayout,
       );
       return;
     }
@@ -1098,6 +1137,17 @@ export class SpaceLayoutsService {
       changeRequest?.tableId?.toString().trim() ||
       previousSavedLayout.requestedTableId?.toString().trim() ||
       "";
+    const approvedTable = this.findTableInLayout(approvedLayout, tableId);
+    const approvedTier =
+      approvedTable?.chinChinTier?.toString().trim().toUpperCase() === "LARGE"
+        ? "LARGE"
+        : "STANDARD";
+    const approvedSeats =
+      typeof approvedTable?.seats === "number"
+        ? approvedTable.seats
+        : approvedTier === "LARGE"
+          ? 6
+          : 4;
 
     try {
       this.logger.log(
@@ -1114,6 +1164,9 @@ export class SpaceLayoutsService {
           projectId: project.id,
           tableId,
           tablePhotoId,
+          chinChinTier: approvedTier,
+          tableType: approvedTier,
+          seats: String(approvedSeats),
         },
       });
       this.logger.log(
@@ -1191,6 +1244,7 @@ export class SpaceLayoutsService {
     },
     changeRequest: Record<string, unknown> | null,
     previousSavedLayout: Record<string, unknown>,
+    approvedLayout: Record<string, unknown>,
   ) {
     const rawUpdates = Array.isArray(changeRequest?.updates)
       ? changeRequest?.updates
@@ -1207,9 +1261,9 @@ export class SpaceLayoutsService {
       .map((update) => ({
         tableId: update.tableId?.toString().trim() ?? "",
         tablePhotoId: update.tablePhotoId?.toString().trim() ?? "",
-      }));
-    const photoUpdates = updates.filter((update) => update.tablePhotoId);
-    if (!photoUpdates.length) {
+      }))
+      .filter((update) => update.tableId);
+    if (!updates.length) {
       return;
     }
 
@@ -1224,24 +1278,42 @@ export class SpaceLayoutsService {
 
     try {
       this.logger.log(
-        `[push][venue-owner] sending table updates approval projectId=${project.id} ownerId=${ownerId} venueId=${project.venueId} photoUpdateCount=${photoUpdates.length}`,
+        `[push][venue-owner] sending table updates approval projectId=${project.id} ownerId=${ownerId} venueId=${project.venueId} tableUpdateCount=${updates.length}`,
       );
+      const firstUpdate = updates[0];
+      const approvedTable = this.findTableInLayout(
+        approvedLayout,
+        firstUpdate?.tableId ?? "",
+      );
+      const approvedTier =
+        approvedTable?.chinChinTier?.toString().trim().toUpperCase() === "LARGE"
+          ? "LARGE"
+          : "STANDARD";
+      const approvedSeats =
+        typeof approvedTable?.seats === "number"
+          ? approvedTable.seats
+          : approvedTier === "LARGE"
+            ? 6
+            : 4;
       await this.deviceTokensService.sendToUser({
         userId: ownerId,
         app: DevicePushApp.VENUE_OWNER,
-        title: "Vaše slike stolova su odobrene.",
-        body: "Vaše slike stolova su odobrene.",
+        title: "Izmjene stolova su odobrene.",
+        body: "Chin-Chin tim je odobrio izmjene stolova.",
         data: {
           type: "table_photos_approved",
           venueId: project.venueId,
           projectId: project.id,
-          tableId: photoUpdates[0]?.tableId ?? "",
-          tablePhotoId: photoUpdates[0]?.tablePhotoId ?? "",
-          tableCount: String(photoUpdates.length),
+          tableId: firstUpdate?.tableId ?? "",
+          tablePhotoId: firstUpdate?.tablePhotoId ?? "",
+          tableCount: String(updates.length),
+          chinChinTier: approvedTier,
+          tableType: approvedTier,
+          seats: String(approvedSeats),
         },
       });
       this.logger.log(
-        `[push][venue-owner] sent table updates approval projectId=${project.id} ownerId=${ownerId} photoUpdateCount=${photoUpdates.length}`,
+        `[push][venue-owner] sent table updates approval projectId=${project.id} ownerId=${ownerId} tableUpdateCount=${updates.length}`,
       );
     } catch (error) {
       this.logger.warn(
@@ -1713,25 +1785,33 @@ export class SpaceLayoutsService {
     layout: Record<string, unknown>,
     dto: RequestSpaceChangePreviewDto,
   ) {
-    if (dto.type !== "DELETE_ROOM" && dto.type !== "HIDE_ROOM") {
+    if (
+      dto.type !== "EDIT_SPACE" &&
+      dto.type !== "DELETE_ROOM" &&
+      dto.type !== "HIDE_ROOM"
+    ) {
       return;
     }
 
     const roomLabel = dto.roomLabel?.trim();
     if (!roomLabel) {
       throw new BadRequestException(
-        "Room label is required for room hide/delete requests.",
+        "Room label is required for space change requests.",
       );
     }
 
     const rooms = Array.isArray(layout.rooms) ? layout.rooms : [];
+    if (dto.type === "EDIT_SPACE" && rooms.length <= 1) {
+      return;
+    }
+
     const found = rooms.some((room) => {
       if (typeof room !== "object" || !room || Array.isArray(room)) {
         return false;
       }
-      return (
-        (room as Record<string, unknown>).roomLabel?.toString().trim() ===
-        roomLabel
+      return this.isSameRoomLabel(
+        (room as Record<string, unknown>).roomLabel,
+        roomLabel,
       );
     });
 
@@ -1799,8 +1879,9 @@ export class SpaceLayoutsService {
       if (typeof room !== "object" || !room || Array.isArray(room)) {
         return true;
       }
-      return (
-        (room as Record<string, unknown>).roomLabel?.toString().trim() !== label
+      return !this.isSameRoomLabel(
+        (room as Record<string, unknown>).roomLabel,
+        label,
       );
     });
 
@@ -1846,7 +1927,7 @@ export class SpaceLayoutsService {
         continue;
       }
       const roomMap = room as Record<string, unknown>;
-      if (roomMap.roomLabel?.toString().trim() !== label) {
+      if (!this.isSameRoomLabel(roomMap.roomLabel, label)) {
         continue;
       }
 
@@ -1859,6 +1940,91 @@ export class SpaceLayoutsService {
 
     if (!updated) {
       return clonedLayout;
+    }
+
+    clonedLayout.summary = this.recalculateLayoutSummary(clonedLayout);
+    return clonedLayout;
+  }
+
+  private async mergeEditedRoomLayout(
+    venueId: string,
+    currentProjectId: string,
+    editedLayout: Record<string, unknown>,
+    roomLabel?: string,
+  ) {
+    const label = roomLabel?.trim();
+    if (!label) {
+      throw new BadRequestException(
+        "Room label is required for approving space changes.",
+      );
+    }
+
+    const approvedProject = await this.prisma.spaceLayoutProject.findFirst({
+      where: {
+        venueId,
+        status: SpaceLayoutStatus.APPROVED,
+        id: { not: currentProjectId },
+      },
+      orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
+    });
+    const approvedSavedLayout = this.asJsonObject(
+      approvedProject?.savedLayout ?? null,
+    );
+    const approvedLayout = this.asJsonObject(
+      approvedSavedLayout?.layout ?? null,
+    );
+    if (!approvedLayout) {
+      return editedLayout;
+    }
+
+    const editedRooms = Array.isArray(editedLayout.rooms)
+      ? editedLayout.rooms
+      : [];
+    const editedRoom = editedRooms.find((room) => {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        return false;
+      }
+      return this.isSameRoomLabel(
+        (room as Record<string, unknown>).roomLabel,
+        label,
+      );
+    });
+
+    if (!editedRoom) {
+      throw new BadRequestException(
+        "Requested room was not found in the adjusted layout.",
+      );
+    }
+
+    const clonedLayout = JSON.parse(JSON.stringify(approvedLayout)) as Record<
+      string,
+      unknown
+    >;
+    const approvedRooms = Array.isArray(clonedLayout.rooms)
+      ? clonedLayout.rooms
+      : [];
+    let replaced = false;
+    clonedLayout.rooms = approvedRooms.map((room) => {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        return room;
+      }
+      if (
+        !this.isSameRoomLabel(
+          (room as Record<string, unknown>).roomLabel,
+          label,
+        )
+      ) {
+        return room;
+      }
+
+      replaced = true;
+      return editedRoom;
+    });
+
+    if (!replaced) {
+      throw new BadRequestException(
+        "Requested room was not found in the approved layout.",
+      );
     }
 
     clonedLayout.summary = this.recalculateLayoutSummary(clonedLayout);
@@ -1989,7 +2155,7 @@ export class SpaceLayoutsService {
         status: SpaceLayoutStatus.APPROVED,
         id: { not: currentProjectId },
       },
-      orderBy: { approvedAt: "desc" },
+      orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
     });
     const approvedSavedLayout = this.asJsonObject(
       approvedProject?.savedLayout ?? null,
@@ -2143,7 +2309,7 @@ export class SpaceLayoutsService {
         status: SpaceLayoutStatus.APPROVED,
         id: { not: currentProjectId },
       },
-      orderBy: { approvedAt: "desc" },
+      orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
     });
     const approvedSpace = this.asJsonObject(approvedProject?.space ?? null);
     const currentSpace = this.asJsonObject(projectSpace);
@@ -2481,6 +2647,48 @@ export class SpaceLayoutsService {
       .replace(/[\u0300-\u036f]/g, "")
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
+  }
+
+  private normalizedRoomLabel(value: unknown) {
+    return value?.toString().trim().toLowerCase() ?? "";
+  }
+
+  private isSameRoomLabel(left: unknown, right: unknown) {
+    const normalizedLeft = this.normalizedRoomLabel(left);
+    const normalizedRight = this.normalizedRoomLabel(right);
+    return !!normalizedLeft && normalizedLeft === normalizedRight;
+  }
+
+  private findTableInLayout(
+    layout: Record<string, unknown> | null | undefined,
+    tableId: string,
+  ) {
+    if (!layout || !tableId) {
+      return null;
+    }
+
+    const rooms = Array.isArray(layout.rooms) ? layout.rooms : [];
+    for (const room of rooms) {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        continue;
+      }
+
+      const tables = Array.isArray((room as Record<string, unknown>).tables)
+        ? ((room as Record<string, unknown>).tables as unknown[])
+        : [];
+      for (const table of tables) {
+        if (typeof table !== "object" || !table || Array.isArray(table)) {
+          continue;
+        }
+
+        const tableMap = table as Record<string, unknown>;
+        if (tableMap.id?.toString() === tableId) {
+          return tableMap;
+        }
+      }
+    }
+
+    return null;
   }
 
   private async withMergedAdditionalRoomFallback(project: {
