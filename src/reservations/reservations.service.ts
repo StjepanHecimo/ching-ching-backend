@@ -120,8 +120,8 @@ const LIVE_PRICING_BOOSTS: Record<
   LivePricingBoost,
   { standardCents: number; largeCents: number }
 > = {
-  DEFAULT: { standardCents: 400, largeCents: 700 },
-  STRONG_DAY: { standardCents: 500, largeCents: 800 },
+  DEFAULT: { standardCents: 300, largeCents: 400 },
+  STRONG_DAY: { standardCents: 500, largeCents: 700 },
   EVENT: { standardCents: 700, largeCents: 1000 },
   PREMIUM_STRONG_DAY: { standardCents: 800, largeCents: 1200 },
   PREMIUM_EVENT: { standardCents: 1000, largeCents: 1500 },
@@ -1579,6 +1579,12 @@ export class ReservationsService {
     }
 
     const now = new Date();
+    if (reservation.timeSlotStart.getTime() <= now.getTime()) {
+      throw new BadRequestException(
+        "Termin rezervacije je prošao i više se ne može otkazati.",
+      );
+    }
+
     const isPendingVenueResponse =
       reservation.status === ReservationStatus.REQUESTED ||
       reservation.status === ReservationStatus.PENDING_VENUE_CONFIRMATION;
