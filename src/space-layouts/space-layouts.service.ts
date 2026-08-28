@@ -22,6 +22,7 @@ import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-previ
 import { LayoutPhotoDto } from "./dto/layout-photo.dto";
 import { LayoutReferenceFileDto } from "./dto/layout-reference-file.dto";
 import { RequestTableAdditionPreviewDto } from "./dto/request-table-addition-preview.dto";
+import { RequestTableDeletionPreviewDto } from "./dto/request-table-deletion-preview.dto";
 import { RequestTableUpdatesPreviewDto } from "./dto/request-table-updates-preview.dto";
 import { RequestSpaceChangePreviewDto } from "./dto/request-space-change-preview.dto";
 import { SaveSpaceLayoutDto } from "./dto/save-space-layout.dto";
@@ -695,6 +696,7 @@ export class SpaceLayoutsService {
         tablePhotoId: photo?.id,
         chinChinTier,
         seats: update.seats,
+        action: update.action ?? "UPDATE",
       };
     });
     const now = new Date().toISOString();
@@ -742,6 +744,89 @@ export class SpaceLayoutsService {
     return {
       ...this.serializeProject(project),
       message: "Table updates request submitted for Chin-Chin review.",
+    };
+  }
+
+  async requestTableDeletionPreview(
+    venueId: string,
+    dto: RequestTableDeletionPreviewDto,
+  ) {
+    const sourceProject =
+      (await this.prisma.spaceLayoutProject.findFirst({
+        where: { venueId, status: SpaceLayoutStatus.APPROVED },
+        orderBy: [{ approvedAt: "desc" }, { updatedAt: "desc" }],
+        include: { venue: true },
+      })) ??
+      (await this.prisma.spaceLayoutProject.findFirst({
+        where: { venueId },
+        orderBy: { updatedAt: "desc" },
+        include: { venue: true },
+      }));
+
+    if (!sourceProject) {
+      throw new NotFoundException("Space layout project was not found.");
+    }
+
+    const sourceSavedLayout = this.asJsonObject(sourceProject.savedLayout);
+    const sourceLayout = this.asJsonObject(sourceSavedLayout?.layout ?? null);
+    if (!sourceLayout) {
+      throw new BadRequestException(
+        "Approved layout is required before requesting table deletion.",
+      );
+    }
+
+    if (!this.findTableInLayout(sourceLayout, dto.tableId)) {
+      throw new BadRequestException("Requested table was not found.");
+    }
+
+    const now = new Date().toISOString();
+    const updates = [
+      {
+        tableId: dto.tableId,
+        action: "DELETE",
+      },
+    ];
+
+    const project = await this.prisma.spaceLayoutProject.create({
+      data: {
+        ownerId: sourceProject.ownerId,
+        venueId: sourceProject.venueId,
+        name: `${sourceProject.name ?? sourceProject.venue.name} - table deletion request`,
+        status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW,
+        photos: sourceProject.photos as Prisma.InputJsonValue,
+        space: sourceProject.space as Prisma.InputJsonValue,
+        aiSuggestion: sourceProject.aiSuggestion as Prisma.InputJsonValue,
+        savedLayout: {
+          ...(sourceSavedLayout ?? {}),
+          selectedLayoutOptionId:
+            sourceLayout.id?.toString() ??
+            sourceSavedLayout?.selectedLayoutOptionId?.toString(),
+          editedBy: "flutter-editor",
+          changeRequestType: "UPDATE_CHIN_CHIN_TABLES",
+          requestedTableUpdates: updates,
+          ownerNotes: dto.ownerNotes.trim(),
+          layout: sourceLayout,
+          sourceProjectId: sourceProject.id,
+          requestedAt: now,
+        } as Prisma.InputJsonValue,
+        reviewSubmission: {
+          submittedAt: now,
+          ownerNotes: dto.ownerNotes.trim(),
+          review: { status: "pending" },
+          changeRequest: {
+            type: "UPDATE_CHIN_CHIN_TABLES",
+            sourceProjectId: sourceProject.id,
+            updates,
+            requestedAt: now,
+          },
+        } as Prisma.InputJsonValue,
+      },
+      include: { venue: true },
+    });
+
+    return {
+      ...this.serializeProject(project),
+      message: "Table deletion request submitted for Chin-Chin review.",
     };
   }
 
@@ -1148,6 +1233,11 @@ export class SpaceLayoutsService {
         : approvedTier === "LARGE"
           ? 6
           : 4;
+    const tableLabel =
+      approvedTable?.label?.toString().trim() || tableId || "novi stol";
+    const tierLabel = approvedTier === "LARGE" ? "Large" : "Standard";
+    const approvalTitle = "Novi stol je odobren.";
+    const approvalMessage = `Chin-Chin tim je dodao ${tableLabel} kao ${tierLabel} stol i odobrio sliku.`;
 
     try {
       this.logger.log(
@@ -1156,14 +1246,18 @@ export class SpaceLayoutsService {
       await this.deviceTokensService.sendToUser({
         userId: ownerId,
         app: DevicePushApp.VENUE_OWNER,
-        title: "Vaše slike stolova su odobrene.",
-        body: "Vaše slike stolova su odobrene.",
+        title: approvalTitle,
+        body: approvalMessage,
         data: {
           type: "table_photo_approved",
           venueId: project.venueId,
           projectId: project.id,
           tableId,
           tablePhotoId,
+          approvalKind: "ADD_CHIN_CHIN_TABLE",
+          approvalTitle,
+          approvalMessage,
+          tableLabel,
           chinChinTier: approvedTier,
           tableType: approvedTier,
           seats: String(approvedSeats),
@@ -1261,6 +1355,7 @@ export class SpaceLayoutsService {
       .map((update) => ({
         tableId: update.tableId?.toString().trim() ?? "",
         tablePhotoId: update.tablePhotoId?.toString().trim() ?? "",
+        action: update.action?.toString().trim().toUpperCase() ?? "UPDATE",
       }))
       .filter((update) => update.tableId);
     if (!updates.length) {
@@ -1281,25 +1376,49 @@ export class SpaceLayoutsService {
         `[push][venue-owner] sending table updates approval projectId=${project.id} ownerId=${ownerId} venueId=${project.venueId} tableUpdateCount=${updates.length}`,
       );
       const firstUpdate = updates[0];
+      const previousLayout = this.asJsonObject(
+        previousSavedLayout.layout as Prisma.JsonValue | null,
+      );
       const approvedTable = this.findTableInLayout(
         approvedLayout,
         firstUpdate?.tableId ?? "",
       );
+      const previousTable = this.findTableInLayout(
+        previousLayout,
+        firstUpdate?.tableId ?? "",
+      );
+      const sourceTable = approvedTable ?? previousTable;
       const approvedTier =
-        approvedTable?.chinChinTier?.toString().trim().toUpperCase() === "LARGE"
+        sourceTable?.chinChinTier?.toString().trim().toUpperCase() === "LARGE"
           ? "LARGE"
           : "STANDARD";
       const approvedSeats =
-        typeof approvedTable?.seats === "number"
-          ? approvedTable.seats
+        typeof sourceTable?.seats === "number"
+          ? sourceTable.seats
           : approvedTier === "LARGE"
             ? 6
             : 4;
+      const tableLabel =
+        sourceTable?.label?.toString().trim() || firstUpdate?.tableId || "stol";
+      const tierLabel = approvedTier === "LARGE" ? "Large" : "Standard";
+      const isDeleteUpdate = firstUpdate?.action === "DELETE";
+      const approvalTitle = isDeleteUpdate
+        ? "Stol je uklonjen iz Chin-Chin ponude."
+        : updates.length > 1
+          ? "Izmjene stolova su odobrene."
+          : "Izmjena stola je odobrena.";
+      const approvalMessage = isDeleteUpdate
+        ? `${tableLabel} je uklonjen s Chin-Chin mape.`
+        : updates.length > 1
+          ? `Chin-Chin tim je odobrio izmjene za ${updates.length} stolova.`
+          : firstUpdate?.tablePhotoId
+            ? `Nova slika za ${tableLabel} je odobrena. Tip stola: ${tierLabel}.`
+            : `Izmjene za ${tableLabel} su odobrene. Tip stola: ${tierLabel}.`;
       await this.deviceTokensService.sendToUser({
         userId: ownerId,
         app: DevicePushApp.VENUE_OWNER,
-        title: "Izmjene stolova su odobrene.",
-        body: "Chin-Chin tim je odobrio izmjene stolova.",
+        title: approvalTitle,
+        body: approvalMessage,
         data: {
           type: "table_photos_approved",
           venueId: project.venueId,
@@ -1307,6 +1426,11 @@ export class SpaceLayoutsService {
           tableId: firstUpdate?.tableId ?? "",
           tablePhotoId: firstUpdate?.tablePhotoId ?? "",
           tableCount: String(updates.length),
+          approvalKind: "UPDATE_CHIN_CHIN_TABLES",
+          approvalTitle,
+          approvalMessage,
+          tableLabel,
+          tableAction: firstUpdate?.action ?? "UPDATE",
           chinChinTier: approvedTier,
           tableType: approvedTier,
           seats: String(approvedSeats),

@@ -32,6 +32,10 @@ export class RequestTableUpdatePreviewDto {
   @IsOptional()
   @IsIn(["STANDARD", "LARGE"])
   chinChinTier?: "STANDARD" | "LARGE";
+
+  @IsOptional()
+  @IsIn(["UPDATE", "DELETE"])
+  action?: "UPDATE" | "DELETE";
 }
 
 export class RequestTableUpdatesPreviewDto {

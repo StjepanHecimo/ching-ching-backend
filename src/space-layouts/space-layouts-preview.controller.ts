@@ -8,6 +8,7 @@ import { ApproveAdjustedLayoutPreviewDto } from "./dto/approve-adjusted-layout-p
 import { CreateSpaceChangeAttachmentUploadUrlDto } from "./dto/create-space-change-attachment-upload-url.dto";
 import { CreateTablePhotoUploadUrlDto } from "./dto/create-table-photo-upload-url.dto";
 import { GenerateSpaceLayoutPreviewDto } from "./dto/generate-space-layout-preview.dto";
+import { RequestTableDeletionPreviewDto } from "./dto/request-table-deletion-preview.dto";
 import { RequestTableAdditionPreviewDto } from "./dto/request-table-addition-preview.dto";
 import { RequestTableUpdatesPreviewDto } from "./dto/request-table-updates-preview.dto";
 import { RequestSpaceChangePreviewDto } from "./dto/request-space-change-preview.dto";
@@ -78,6 +79,14 @@ export class SpaceLayoutsPreviewController {
     @Body() dto: RequestTableUpdatesPreviewDto,
   ) {
     return this.spaceLayoutsService.requestTableUpdatesPreview(venueId, dto);
+  }
+
+  @Post("preview/venues/:venueId/request-table-deletion")
+  requestTableDeletionPreview(
+    @Param("venueId") venueId: string,
+    @Body() dto: RequestTableDeletionPreviewDto,
+  ) {
+    return this.spaceLayoutsService.requestTableDeletionPreview(venueId, dto);
   }
 
   @Post("preview/venues/:venueId/table-photo-upload-url")
