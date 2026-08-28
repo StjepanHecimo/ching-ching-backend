@@ -1356,6 +1356,9 @@ export class SpaceLayoutsService {
         tableId: update.tableId?.toString().trim() ?? "",
         tablePhotoId: update.tablePhotoId?.toString().trim() ?? "",
         action: update.action?.toString().trim().toUpperCase() ?? "UPDATE",
+        seats: typeof update.seats === "number" ? update.seats : null,
+        chinChinTier:
+          update.chinChinTier?.toString().trim().toUpperCase() ?? "",
       }))
       .filter((update) => update.tableId);
     if (!updates.length) {
@@ -1402,18 +1405,27 @@ export class SpaceLayoutsService {
         sourceTable?.label?.toString().trim() || firstUpdate?.tableId || "stol";
       const tierLabel = approvedTier === "LARGE" ? "Large" : "Standard";
       const isDeleteUpdate = firstUpdate?.action === "DELETE";
+      const isConfigurationUpdate = Boolean(
+        !isDeleteUpdate &&
+        firstUpdate?.tablePhotoId &&
+        (firstUpdate?.seats || firstUpdate?.chinChinTier),
+      );
       const approvalTitle = isDeleteUpdate
         ? "Stol je uklonjen iz Chin-Chin ponude."
         : updates.length > 1
-          ? "Izmjene stolova su odobrene."
-          : "Izmjena stola je odobrena.";
+          ? "Konfiguracije stolova su odobrene."
+          : isConfigurationUpdate
+            ? "Konfiguracija stola je odobrena."
+            : "Izmjena stola je odobrena.";
       const approvalMessage = isDeleteUpdate
         ? `${tableLabel} je uklonjen s Chin-Chin mape.`
         : updates.length > 1
-          ? `Chin-Chin tim je odobrio izmjene za ${updates.length} stolova.`
-          : firstUpdate?.tablePhotoId
-            ? `Nova slika za ${tableLabel} je odobrena. Tip stola: ${tierLabel}.`
-            : `Izmjene za ${tableLabel} su odobrene. Tip stola: ${tierLabel}.`;
+          ? `Chin-Chin tim je odobrio konfiguraciju za ${updates.length} stolova.`
+          : isConfigurationUpdate
+            ? `Nova konfiguracija za ${tableLabel} je odobrena. Tip stola: ${tierLabel}.`
+            : firstUpdate?.tablePhotoId
+              ? `Nova slika za ${tableLabel} je odobrena. Tip stola: ${tierLabel}.`
+              : `Izmjene za ${tableLabel} su odobrene. Tip stola: ${tierLabel}.`;
       await this.deviceTokensService.sendToUser({
         userId: ownerId,
         app: DevicePushApp.VENUE_OWNER,
