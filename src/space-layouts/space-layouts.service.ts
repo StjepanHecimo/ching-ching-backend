@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -538,10 +539,28 @@ export class SpaceLayoutsService {
     return projects.map((project) => this.serializeProject(project));
   }
 
+  private async ensureNoPendingSpaceReviewForVenue(venueId: string) {
+    const pendingProject = await this.prisma.spaceLayoutProject.findFirst({
+      where: {
+        venueId,
+        status: SpaceLayoutStatus.PENDING_CHIN_CHIN_REVIEW,
+      },
+      select: { id: true },
+    });
+
+    if (pendingProject) {
+      throw new ConflictException(
+        "Već imate zahtjev u obradi. Pričekajte da ga Chin-Chin tim pregleda prije slanja novog zahtjeva.",
+      );
+    }
+  }
+
   async requestTableAdditionPreview(
     venueId: string,
     dto: RequestTableAdditionPreviewDto,
   ) {
+    await this.ensureNoPendingSpaceReviewForVenue(venueId);
+
     const sourceProject =
       (await this.prisma.spaceLayoutProject.findFirst({
         where: { venueId, status: SpaceLayoutStatus.APPROVED },
@@ -642,6 +661,8 @@ export class SpaceLayoutsService {
     venueId: string,
     dto: RequestTableUpdatesPreviewDto,
   ) {
+    await this.ensureNoPendingSpaceReviewForVenue(venueId);
+
     const sourceProject =
       (await this.prisma.spaceLayoutProject.findFirst({
         where: { venueId, status: SpaceLayoutStatus.APPROVED },
@@ -751,6 +772,8 @@ export class SpaceLayoutsService {
     venueId: string,
     dto: RequestTableDeletionPreviewDto,
   ) {
+    await this.ensureNoPendingSpaceReviewForVenue(venueId);
+
     const sourceProject =
       (await this.prisma.spaceLayoutProject.findFirst({
         where: { venueId, status: SpaceLayoutStatus.APPROVED },
@@ -907,6 +930,8 @@ export class SpaceLayoutsService {
     venueId: string,
     dto: RequestSpaceChangePreviewDto,
   ) {
+    await this.ensureNoPendingSpaceReviewForVenue(venueId);
+
     const sourceProject =
       (await this.prisma.spaceLayoutProject.findFirst({
         where: { venueId, status: SpaceLayoutStatus.APPROVED },
