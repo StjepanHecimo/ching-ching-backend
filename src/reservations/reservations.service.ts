@@ -1326,6 +1326,7 @@ export class ReservationsService {
       {
         tableId: reservation.tableId,
         tableLabel: reservation.tableLabel,
+        roomLabel: reservation.roomLabel,
       },
       reservation.id,
     );
@@ -3895,7 +3896,9 @@ export class ReservationsService {
       ? this.normalizeTableIdentity(roomLabel)
       : "";
 
-    if (normalizedTableId) {
+    if (normalizedRoomLabel && normalizedTableId) {
+      keys.add(`room:${normalizedRoomLabel}|id:${normalizedTableId}`);
+    } else if (normalizedTableId) {
       keys.add(`id:${normalizedTableId}`);
     }
     if (normalizedRoomLabel && normalizedTableLabel) {
