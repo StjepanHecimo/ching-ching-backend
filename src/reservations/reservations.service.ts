@@ -64,6 +64,8 @@ function customerFacingTableLabel(value?: string | null): string {
   return label.replace(/^table\s+/i, "Stol ");
 }
 
+const AUTO_DECLINE_TABLE_TAKEN_NOTE = "__CHIN_CHIN_TABLE_TAKEN__";
+
 type VenueReservationState = {
   id: string;
   isLive: boolean;
@@ -1331,7 +1333,16 @@ export class ReservationsService {
       reservation.id,
     );
 
-    if (blockers.length) {
+    const activeBlockers = blockers.filter(
+      (blocker) =>
+        blocker.status !== ReservationStatus.PENDING_VENUE_CONFIRMATION,
+    );
+    const competingPendingReservations = blockers.filter(
+      (blocker) =>
+        blocker.status === ReservationStatus.PENDING_VENUE_CONFIRMATION,
+    );
+
+    if (activeBlockers.length) {
       throw new ConflictException(
         "Odabrani stol je već rezerviran za ovaj termin.",
       );
@@ -1371,6 +1382,10 @@ export class ReservationsService {
       await this.notifyDueCustomerCheckInReminders(updated.venueId);
     }
 
+    await this.declineCompetingPendingReservations(
+      competingPendingReservations.map((item) => item.id),
+    );
+
     void this.emitVenueLiveSync(updated.venueId, "reservation_accepted");
     void this.autoDisableVenueLiveIfNeeded(
       updated.venueId,
@@ -1378,6 +1393,57 @@ export class ReservationsService {
     );
 
     return this.serializeReservation(updated);
+  }
+
+  private async declineCompetingPendingReservations(reservationIds: string[]) {
+    if (!reservationIds.length) {
+      return;
+    }
+
+    for (const reservationId of reservationIds) {
+      try {
+        const reservation = await this.prisma.reservation.findUnique({
+          where: { id: reservationId },
+          include: { venue: true },
+        });
+
+        if (
+          !reservation ||
+          reservation.status !== ReservationStatus.PENDING_VENUE_CONFIRMATION
+        ) {
+          continue;
+        }
+
+        const updated = await this.prisma.reservation.update({
+          where: { id: reservation.id },
+          data: {
+            status: ReservationStatus.DECLINED,
+            declinedAt: new Date(),
+            releasedAt: new Date(),
+            confirmationExpiresAt: null,
+            notes: AUTO_DECLINE_TABLE_TAKEN_NOTE,
+          },
+          include: { venue: true },
+        });
+
+        await this.notifyCustomer(updated, {
+          title: "Kafić je odbio zahtjev",
+          body: `${updated.venue.name} nije mogao potvrditi ${customerFacingTableLabel(updated.tableLabel)} jer je stol u međuvremenu zauzet.`,
+          type: "reservation_declined_table_taken",
+        });
+
+        await this.paymentsService.voidForInactiveReservation(
+          reservation.id,
+          "Reservation request was declined because the table was taken by another accepted reservation.",
+        );
+      } catch (error) {
+        this.logger.warn(
+          `Competing pending reservation ${reservationId} cleanup failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
   }
 
   async checkInReservation(id: string) {
@@ -4538,6 +4604,10 @@ export class ReservationsService {
     const lockedUntil = this.lockedUntilForReservation(reservation);
     const customerCancellationChargeCents =
       this.customerCancellationChargeCents(reservation, new Date());
+    const statusReason =
+      reservation.notes === AUTO_DECLINE_TABLE_TAKEN_NOTE
+        ? "TABLE_TAKEN"
+        : null;
 
     return {
       id: reservation.id,
@@ -4580,7 +4650,8 @@ export class ReservationsService {
       customerName: reservation.customerName,
       customerEmail: reservation.customerEmail,
       customerPhone: reservation.customerPhone,
-      notes: reservation.notes,
+      notes: statusReason ? null : reservation.notes,
+      statusReason,
       source: reservation.source,
       createdAt: reservation.createdAt,
       updatedAt: reservation.updatedAt,
