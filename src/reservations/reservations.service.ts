@@ -541,7 +541,7 @@ export class ReservationsService {
         },
       },
     });
-    if (weeklyReservationCount >= 3) {
+    if (weeklyReservationCount >= 2) {
       throw new BadRequestException("CUSTOMER_WEEKLY_RESERVATION_LIMIT");
     }
 
