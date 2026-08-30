@@ -131,10 +131,13 @@ const STANDARD_ADVANCE_LARGE_PRICE_CENTS = 400;
 const PREMIUM_ADVANCE_STANDARD_PRICE_CENTS = 300;
 const PREMIUM_ADVANCE_LARGE_PRICE_CENTS = 400;
 const CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES = 10;
-const CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW = 7;
-const CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY = 3;
+const CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW = 8;
+const CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY = 6;
+const CUSTOMER_MAX_WEEKLY_CANCELLATIONS = 3;
+const CUSTOMER_MAX_MONTHLY_CANCELLATIONS = 7;
 const CUSTOMER_RELIABLE_CONFIRMED_RESERVATION_COUNT = 3;
 const CUSTOMER_RISKY_WEEKLY_CANCELLATION_COUNT = 3;
+const CUSTOMER_ADMIN_BLOCK_DURATION_HOURS = 24;
 const CUSTOMER_TRUST_CONFIRMED_STATUSES = new Set<ReservationStatus>([
   ReservationStatus.CONFIRMED,
   ReservationStatus.RESERVED,
@@ -555,7 +558,7 @@ export class ReservationsService {
         "Only customer accounts can reserve tables.",
       );
     }
-    if (customer.customerBlockedAt) {
+    if (this.isCustomerAdminBlockActive(customer.customerBlockedAt)) {
       throw new BadRequestException("CUSTOMER_RESERVATION_BLOCKED");
     }
 
@@ -1228,9 +1231,14 @@ export class ReservationsService {
           `${reservationAttemptsLast10Minutes.length} pokušaja u ${CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES} minuta`,
         );
       }
-      if (cancelledByUserLast30 >= 3) {
+      if (cancellationsLast7Days >= CUSTOMER_MAX_WEEKLY_CANCELLATIONS) {
         riskReasons.push(
-          `${cancelledByUserLast30} korisnička otkazivanja u 30 dana`,
+          `${cancellationsLast7Days} korisnička otkazivanja u 7 dana`,
+        );
+      }
+      if (cancelledByUserLast30 >= CUSTOMER_MAX_MONTHLY_CANCELLATIONS) {
+        riskReasons.push(
+          `${cancelledByUserLast30} korisničkih otkazivanja u 30 dana`,
         );
       }
       if (problemReportCount >= 2) {
@@ -1251,13 +1259,19 @@ export class ReservationsService {
         );
       }
 
-      const accountStatus = customer.customerBlockedAt
+      const customerBlockExpiresAt = this.customerAdminBlockExpiresAt(
+        customer.customerBlockedAt,
+      );
+      const isCustomerBlocked = Boolean(
+        customerBlockExpiresAt && customerBlockExpiresAt > now,
+      );
+      const accountStatus = isCustomerBlocked
         ? "BLOCKED"
         : riskReasons.length
           ? "RISKY"
           : "CLEAN";
       const customerTrust = this.buildCustomerTrustSummary({
-        isBlocked: Boolean(customer.customerBlockedAt),
+        isBlocked: isCustomerBlocked,
         confirmedReservationCount,
         cancellationsLast7Days,
         reservationAttemptsLast10Minutes:
@@ -1277,6 +1291,7 @@ export class ReservationsService {
         customerTrustLabel: customerTrust.label,
         customerTrustReasons: customerTrust.reasons,
         customerBlockedAt: customer.customerBlockedAt,
+        customerBlockExpiresAt,
         customerBlockedReason: customer.customerBlockedReason,
         createdAt: customer.createdAt,
         updatedAt: customer.updatedAt,
@@ -1324,7 +1339,7 @@ export class ReservationsService {
       data: {
         customerBlockedAt: new Date(),
         customerBlockedReason:
-          reason?.trim() || "Blokirano iz Chin-Chin admin panela.",
+          reason?.trim() || "Blokirano 24 sata iz Chin-Chin admin panela.",
       },
     });
 
@@ -1358,6 +1373,8 @@ export class ReservationsService {
       now.getTime() - CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES * 60 * 1000,
     );
     const dayWindowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const weekWindowStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const monthWindowStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
     const recentAttempts = await this.prisma.reservation.findMany({
       where: {
@@ -1374,26 +1391,54 @@ export class ReservationsService {
       throw new BadRequestException("CUSTOMER_RESERVATION_RATE_LIMIT_10_MIN");
     }
 
-    const cancelledOrRejectedCount = await this.prisma.reservation.count({
-      where: {
-        customerId,
-        updatedAt: { gte: dayWindowStart },
-        status: {
-          in: [
-            ReservationStatus.CANCELLED_BY_USER,
-            ReservationStatus.DECLINED,
-            ReservationStatus.EXPIRED,
-            ReservationStatus.RELEASED,
-          ],
+    const [
+      cancelledOrRejectedCount,
+      weeklyCancellationCount,
+      monthlyCancellationCount,
+    ] = await this.prisma.$transaction([
+      this.prisma.reservation.count({
+        where: {
+          customerId,
+          updatedAt: { gte: dayWindowStart },
+          status: {
+            in: [
+              ReservationStatus.CANCELLED_BY_USER,
+              ReservationStatus.DECLINED,
+              ReservationStatus.EXPIRED,
+              ReservationStatus.RELEASED,
+            ],
+          },
         },
-      },
-    });
+      }),
+      this.prisma.reservation.count({
+        where: {
+          customerId,
+          updatedAt: { gte: weekWindowStart },
+          status: ReservationStatus.CANCELLED_BY_USER,
+        },
+      }),
+      this.prisma.reservation.count({
+        where: {
+          customerId,
+          updatedAt: { gte: monthWindowStart },
+          status: ReservationStatus.CANCELLED_BY_USER,
+        },
+      }),
+    ]);
 
     if (
       cancelledOrRejectedCount >=
       CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY
     ) {
       throw new BadRequestException("CUSTOMER_RESERVATION_DAILY_ATTEMPT_LIMIT");
+    }
+
+    if (weeklyCancellationCount >= CUSTOMER_MAX_WEEKLY_CANCELLATIONS) {
+      throw new BadRequestException("CUSTOMER_WEEKLY_CANCELLATION_LIMIT");
+    }
+
+    if (monthlyCancellationCount >= CUSTOMER_MAX_MONTHLY_CANCELLATIONS) {
+      throw new BadRequestException("CUSTOMER_MONTHLY_CANCELLATION_LIMIT");
     }
   }
 
@@ -5031,6 +5076,25 @@ export class ReservationsService {
     };
   }
 
+  private customerAdminBlockExpiresAt(blockedAt?: Date | null): Date | null {
+    if (!blockedAt) {
+      return null;
+    }
+
+    return new Date(
+      blockedAt.getTime() +
+        CUSTOMER_ADMIN_BLOCK_DURATION_HOURS * 60 * 60 * 1000,
+    );
+  }
+
+  private isCustomerAdminBlockActive(
+    blockedAt?: Date | null,
+    now = new Date(),
+  ): boolean {
+    const expiresAt = this.customerAdminBlockExpiresAt(blockedAt);
+    return Boolean(expiresAt && expiresAt > now);
+  }
+
   private buildCustomerTrustSummary(input: {
     isBlocked: boolean;
     confirmedReservationCount: number;
@@ -5107,76 +5171,6 @@ export class ReservationsService {
     };
   }
 
-  private async getCustomerTrustSummary(
-    customerId: string | null,
-  ): Promise<CustomerTrustSummary> {
-    if (!customerId) {
-      return this.buildCustomerTrustSummary({
-        isBlocked: false,
-        confirmedReservationCount: 0,
-        cancellationsLast7Days: 0,
-        reservationAttemptsLast10Minutes: 0,
-        cancelledOrRejectedLast24Hours: 0,
-      });
-    }
-
-    const now = new Date();
-    const weekAgo = new Date(now);
-    weekAgo.setDate(weekAgo.getDate() - 7);
-    const dayAgo = new Date(now);
-    dayAgo.setDate(dayAgo.getDate() - 1);
-    const attemptWindowStart = new Date(
-      now.getTime() - CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES * 60 * 1000,
-    );
-
-    const [
-      customer,
-      confirmedReservationCount,
-      cancellationsLast7Days,
-      reservationAttemptsLast10Minutes,
-      cancelledOrRejectedLast24Hours,
-    ] = await this.prisma.$transaction([
-      this.prisma.user.findUnique({
-        where: { id: customerId },
-        select: { customerBlockedAt: true },
-      }),
-      this.prisma.reservation.count({
-        where: {
-          customerId,
-          status: { in: [...CUSTOMER_TRUST_CONFIRMED_STATUSES] },
-        },
-      }),
-      this.prisma.reservation.count({
-        where: {
-          customerId,
-          status: ReservationStatus.CANCELLED_BY_USER,
-          updatedAt: { gte: weekAgo },
-        },
-      }),
-      this.prisma.reservation.count({
-        where: {
-          customerId,
-          createdAt: { gte: attemptWindowStart },
-        },
-      }),
-      this.prisma.reservation.count({
-        where: {
-          customerId,
-          status: { in: [...CUSTOMER_TRUST_DAILY_NEGATIVE_STATUSES] },
-          updatedAt: { gte: dayAgo },
-        },
-      }),
-    ]);
-
-    return this.buildCustomerTrustSummary({
-      isBlocked: Boolean(customer?.customerBlockedAt),
-      confirmedReservationCount,
-      cancellationsLast7Days,
-      reservationAttemptsLast10Minutes,
-      cancelledOrRejectedLast24Hours,
-    });
-  }
-
   private async serializeVenueReservationRequest(reservation: {
     id: string;
     venueId: string;
@@ -5242,9 +5236,6 @@ export class ReservationsService {
       customerPhone: reservation.customerPhone,
       feeCents: reservation.feeCents,
     });
-    const customerTrust = await this.getCustomerTrustSummary(
-      reservation.customerId,
-    );
 
     return {
       ...this.serializeReservation(reservation),
@@ -5252,10 +5243,6 @@ export class ReservationsService {
       venueShareCents: allocation.venueShareCents,
       commissionBps: allocation.commissionBps,
       isNewCustomerReservation: allocation.isNewCustomerReservation,
-      customerTrustStatus: customerTrust.status,
-      customerTrustLabel: customerTrust.label,
-      customerTrustReasons: customerTrust.reasons,
-      customerTrust,
       chinChinSupportRefund:
         reservation.refundRequests?.[0] &&
         reservation.refundRequests[0].status ===
