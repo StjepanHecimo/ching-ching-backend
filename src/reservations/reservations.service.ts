@@ -59,6 +59,18 @@ type ReservationSlot = {
   arrivalDeadlineAt: Date;
 };
 
+type CustomerTrustStatus = "RISKY" | "NEW" | "RELIABLE";
+
+type CustomerTrustSummary = {
+  status: CustomerTrustStatus;
+  label: string;
+  reasons: string[];
+  confirmedReservationCount: number;
+  cancellationsLast7Days: number;
+  reservationAttemptsLast10Minutes: number;
+  cancelledOrRejectedLast24Hours: number;
+};
+
 function customerFacingTableLabel(value?: string | null): string {
   const label = value?.trim() || "Chin-Chin stol";
   return label.replace(/^table\s+/i, "Stol ");
@@ -118,6 +130,25 @@ const STANDARD_ADVANCE_STANDARD_PRICE_CENTS = 300;
 const STANDARD_ADVANCE_LARGE_PRICE_CENTS = 400;
 const PREMIUM_ADVANCE_STANDARD_PRICE_CENTS = 300;
 const PREMIUM_ADVANCE_LARGE_PRICE_CENTS = 400;
+const CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES = 10;
+const CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW = 7;
+const CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY = 3;
+const CUSTOMER_RELIABLE_CONFIRMED_RESERVATION_COUNT = 3;
+const CUSTOMER_RISKY_WEEKLY_CANCELLATION_COUNT = 3;
+const CUSTOMER_TRUST_CONFIRMED_STATUSES = new Set<ReservationStatus>([
+  ReservationStatus.CONFIRMED,
+  ReservationStatus.RESERVED,
+  ReservationStatus.CHECK_IN_PENDING,
+  ReservationStatus.CHECKED_IN,
+  ReservationStatus.SEATED,
+  ReservationStatus.COMPLETED,
+]);
+const CUSTOMER_TRUST_DAILY_NEGATIVE_STATUSES = new Set<ReservationStatus>([
+  ReservationStatus.CANCELLED_BY_USER,
+  ReservationStatus.DECLINED,
+  ReservationStatus.EXPIRED,
+  ReservationStatus.RELEASED,
+]);
 const LIVE_PRICING_BOOSTS: Record<
   LivePricingBoost,
   { standardCents: number; largeCents: number }
@@ -510,6 +541,8 @@ export class ReservationsService {
         firstName: true,
         lastName: true,
         phoneNumber: true,
+        customerBlockedAt: true,
+        customerBlockedReason: true,
         role: true,
       },
     });
@@ -522,6 +555,11 @@ export class ReservationsService {
         "Only customer accounts can reserve tables.",
       );
     }
+    if (customer.customerBlockedAt) {
+      throw new BadRequestException("CUSTOMER_RESERVATION_BLOCKED");
+    }
+
+    await this.assertCustomerReservationRateLimits(customerId);
 
     const weekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const weeklyReservationCount = await this.prisma.reservation.count({
@@ -764,8 +802,10 @@ export class ReservationsService {
       include: { venue: true },
     });
 
-    return reservations.map((reservation) =>
-      this.serializeReservation(reservation),
+    return Promise.all(
+      reservations.map((reservation) =>
+        this.serializeVenueReservationRequest(reservation),
+      ),
     );
   }
 
@@ -1057,6 +1097,304 @@ export class ReservationsService {
       total: refreshedReservations.length,
       generatedAt: new Date(),
     };
+  }
+
+  async listAdminCustomerRiskUsers() {
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now);
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const ninetyDaysAgo = new Date(now);
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+    const customers = await this.prisma.user.findMany({
+      where: { role: UserRole.CUSTOMER },
+      orderBy: [{ customerBlockedAt: "desc" }, { createdAt: "desc" }],
+      take: 500,
+      include: {
+        reservations: {
+          where: { createdAt: { gte: ninetyDaysAgo } },
+          select: {
+            id: true,
+            type: true,
+            status: true,
+            tableId: true,
+            roomLabel: true,
+            feeCents: true,
+            refundCents: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
+        customerProblemReports: {
+          where: { createdAt: { gte: ninetyDaysAgo } },
+          select: {
+            id: true,
+            status: true,
+            resolutionAmountCents: true,
+            createdAt: true,
+          },
+        },
+        paymentMethods: {
+          select: {
+            id: true,
+            status: true,
+            brand: true,
+            last4: true,
+            createdAt: true,
+          },
+        },
+        paymentRefundEvents: {
+          where: { createdAt: { gte: ninetyDaysAgo } },
+          select: {
+            id: true,
+            amountCents: true,
+            createdAt: true,
+          },
+        },
+      },
+    });
+
+    const items = customers.map((customer) => {
+      const reservationsLast30 = customer.reservations.filter(
+        (reservation) => reservation.createdAt >= thirtyDaysAgo,
+      );
+      const reservationAttemptsLast10Minutes = customer.reservations.filter(
+        (reservation) =>
+          reservation.createdAt.getTime() >=
+          now.getTime() -
+            CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES * 60 * 1000,
+      );
+      const activeStatuses = new Set<ReservationStatus>([
+        ReservationStatus.REQUESTED,
+        ReservationStatus.PENDING_VENUE_CONFIRMATION,
+        ReservationStatus.CONFIRMED,
+        ReservationStatus.RESERVED,
+        ReservationStatus.CHECK_IN_PENDING,
+        ReservationStatus.CHECKED_IN,
+        ReservationStatus.SEATED,
+      ]);
+      const activeReservationCount = customer.reservations.filter(
+        (reservation) => activeStatuses.has(reservation.status),
+      ).length;
+      const cancelledByUserLast30 = reservationsLast30.filter(
+        (reservation) =>
+          reservation.status === ReservationStatus.CANCELLED_BY_USER,
+      ).length;
+      const weekAgo = new Date(now);
+      weekAgo.setDate(weekAgo.getDate() - 7);
+      const dayAgo = new Date(now);
+      dayAgo.setDate(dayAgo.getDate() - 1);
+      const confirmedReservationCount = customer.reservations.filter(
+        (reservation) =>
+          CUSTOMER_TRUST_CONFIRMED_STATUSES.has(reservation.status),
+      ).length;
+      const cancellationsLast7Days = customer.reservations.filter(
+        (reservation) =>
+          reservation.status === ReservationStatus.CANCELLED_BY_USER &&
+          reservation.updatedAt >= weekAgo,
+      ).length;
+      const cancelledOrRejectedLast24Hours = customer.reservations.filter(
+        (reservation) =>
+          CUSTOMER_TRUST_DAILY_NEGATIVE_STATUSES.has(reservation.status) &&
+          reservation.updatedAt >= dayAgo,
+      ).length;
+      const noShowLast90 = customer.reservations.filter(
+        (reservation) => reservation.status === ReservationStatus.NO_SHOW,
+      ).length;
+      const declinedOrExpiredLast30 = reservationsLast30.filter(
+        (reservation) =>
+          reservation.status === ReservationStatus.DECLINED ||
+          reservation.status === ReservationStatus.EXPIRED,
+      ).length;
+      const refundedReservationCount = customer.reservations.filter(
+        (reservation) => reservation.refundCents > 0,
+      ).length;
+      const refundEventCount = customer.paymentRefundEvents.length;
+      const problemReportCount = customer.customerProblemReports.length;
+      const paidProblemReportCount = customer.customerProblemReports.filter(
+        (report) => (report.resolutionAmountCents ?? 0) > 0,
+      ).length;
+      const paymentMethodCount = customer.paymentMethods.length;
+      const riskReasons: string[] = [];
+
+      if (noShowLast90 > 0) {
+        riskReasons.push(`${noShowLast90} no-show u zadnjih 90 dana`);
+      }
+      if (
+        reservationAttemptsLast10Minutes.length >=
+        CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW
+      ) {
+        riskReasons.push(
+          `${reservationAttemptsLast10Minutes.length} pokušaja u ${CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES} minuta`,
+        );
+      }
+      if (cancelledByUserLast30 >= 3) {
+        riskReasons.push(
+          `${cancelledByUserLast30} korisnička otkazivanja u 30 dana`,
+        );
+      }
+      if (problemReportCount >= 2) {
+        riskReasons.push(`${problemReportCount} prijave problema u 90 dana`);
+      }
+      if (
+        refundedReservationCount + refundEventCount + paidProblemReportCount >=
+        2
+      ) {
+        riskReasons.push("više refundova ili korekcija u 90 dana");
+      }
+      if (paymentMethodCount >= 3) {
+        riskReasons.push(`${paymentMethodCount} spremljene kartice`);
+      }
+      if (declinedOrExpiredLast30 >= 5) {
+        riskReasons.push(
+          `${declinedOrExpiredLast30} odbijenih ili isteklih zahtjeva u 30 dana`,
+        );
+      }
+
+      const accountStatus = customer.customerBlockedAt
+        ? "BLOCKED"
+        : riskReasons.length
+          ? "RISKY"
+          : "CLEAN";
+      const customerTrust = this.buildCustomerTrustSummary({
+        isBlocked: Boolean(customer.customerBlockedAt),
+        confirmedReservationCount,
+        cancellationsLast7Days,
+        reservationAttemptsLast10Minutes:
+          reservationAttemptsLast10Minutes.length,
+        cancelledOrRejectedLast24Hours,
+      });
+
+      return {
+        id: customer.id,
+        email: customer.email,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        phoneNumber: customer.phoneNumber,
+        accountStatus,
+        riskReasons,
+        customerTrustStatus: customerTrust.status,
+        customerTrustLabel: customerTrust.label,
+        customerTrustReasons: customerTrust.reasons,
+        customerBlockedAt: customer.customerBlockedAt,
+        customerBlockedReason: customer.customerBlockedReason,
+        createdAt: customer.createdAt,
+        updatedAt: customer.updatedAt,
+        metrics: {
+          activeReservationCount,
+          reservationAttemptsLast10Minutes:
+            reservationAttemptsLast10Minutes.length,
+          confirmedReservationCount,
+          cancellationsLast7Days,
+          cancelledOrRejectedLast24Hours,
+          reservationsLast30: reservationsLast30.length,
+          reservationsLast90: customer.reservations.length,
+          cancelledByUserLast30,
+          noShowLast90,
+          declinedOrExpiredLast30,
+          problemReportCount,
+          refundCount:
+            refundedReservationCount +
+            refundEventCount +
+            paidProblemReportCount,
+          paymentMethodCount,
+        },
+      };
+    });
+
+    return {
+      items,
+      total: items.length,
+      generatedAt: now,
+    };
+  }
+
+  async adminBlockCustomer(customerId: string, reason?: string) {
+    const customer = await this.prisma.user.findUnique({
+      where: { id: customerId },
+      select: { id: true, role: true },
+    });
+
+    if (!customer || customer.role !== UserRole.CUSTOMER) {
+      throw new NotFoundException("Customer user was not found.");
+    }
+
+    await this.prisma.user.update({
+      where: { id: customerId },
+      data: {
+        customerBlockedAt: new Date(),
+        customerBlockedReason:
+          reason?.trim() || "Blokirano iz Chin-Chin admin panela.",
+      },
+    });
+
+    return this.listAdminCustomerRiskUsers();
+  }
+
+  async adminUnblockCustomer(customerId: string) {
+    const customer = await this.prisma.user.findUnique({
+      where: { id: customerId },
+      select: { id: true, role: true },
+    });
+
+    if (!customer || customer.role !== UserRole.CUSTOMER) {
+      throw new NotFoundException("Customer user was not found.");
+    }
+
+    await this.prisma.user.update({
+      where: { id: customerId },
+      data: {
+        customerBlockedAt: null,
+        customerBlockedReason: null,
+      },
+    });
+
+    return this.listAdminCustomerRiskUsers();
+  }
+
+  private async assertCustomerReservationRateLimits(customerId: string) {
+    const now = new Date();
+    const attemptWindowStart = new Date(
+      now.getTime() - CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES * 60 * 1000,
+    );
+    const dayWindowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    const recentAttempts = await this.prisma.reservation.findMany({
+      where: {
+        customerId,
+        createdAt: { gte: attemptWindowStart },
+      },
+      select: {
+        tableId: true,
+        roomLabel: true,
+      },
+    });
+
+    if (recentAttempts.length >= CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW) {
+      throw new BadRequestException("CUSTOMER_RESERVATION_RATE_LIMIT_10_MIN");
+    }
+
+    const cancelledOrRejectedCount = await this.prisma.reservation.count({
+      where: {
+        customerId,
+        updatedAt: { gte: dayWindowStart },
+        status: {
+          in: [
+            ReservationStatus.CANCELLED_BY_USER,
+            ReservationStatus.DECLINED,
+            ReservationStatus.EXPIRED,
+            ReservationStatus.RELEASED,
+          ],
+        },
+      },
+    });
+
+    if (
+      cancelledOrRejectedCount >=
+      CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY
+    ) {
+      throw new BadRequestException("CUSTOMER_RESERVATION_DAILY_ATTEMPT_LIMIT");
+    }
   }
 
   async adminCancelReservation(id: string, dto?: DeclineReservationDto) {
@@ -4693,6 +5031,152 @@ export class ReservationsService {
     };
   }
 
+  private buildCustomerTrustSummary(input: {
+    isBlocked: boolean;
+    confirmedReservationCount: number;
+    cancellationsLast7Days: number;
+    reservationAttemptsLast10Minutes: number;
+    cancelledOrRejectedLast24Hours: number;
+  }): CustomerTrustSummary {
+    const reasons: string[] = [];
+
+    if (input.isBlocked) {
+      reasons.push("korisnik je ručno blokiran");
+    }
+    if (
+      input.cancellationsLast7Days >= CUSTOMER_RISKY_WEEKLY_CANCELLATION_COUNT
+    ) {
+      reasons.push(`${input.cancellationsLast7Days} otkazivanja u 7 dana`);
+    }
+    if (
+      input.reservationAttemptsLast10Minutes >=
+      CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW
+    ) {
+      reasons.push(
+        `${input.reservationAttemptsLast10Minutes} pokušaja u ${CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES} minuta`,
+      );
+    }
+    if (
+      input.cancelledOrRejectedLast24Hours >=
+      CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY
+    ) {
+      reasons.push(
+        `${input.cancelledOrRejectedLast24Hours} opozvana ili neuspješna pokušaja u 24 sata`,
+      );
+    }
+
+    if (reasons.length > 0) {
+      return {
+        status: "RISKY",
+        label: "Rizičan",
+        reasons,
+        confirmedReservationCount: input.confirmedReservationCount,
+        cancellationsLast7Days: input.cancellationsLast7Days,
+        reservationAttemptsLast10Minutes:
+          input.reservationAttemptsLast10Minutes,
+        cancelledOrRejectedLast24Hours: input.cancelledOrRejectedLast24Hours,
+      };
+    }
+
+    if (
+      input.confirmedReservationCount >=
+      CUSTOMER_RELIABLE_CONFIRMED_RESERVATION_COUNT
+    ) {
+      return {
+        status: "RELIABLE",
+        label: "Pouzdan",
+        reasons: [`${input.confirmedReservationCount} potvrđene rezervacije`],
+        confirmedReservationCount: input.confirmedReservationCount,
+        cancellationsLast7Days: input.cancellationsLast7Days,
+        reservationAttemptsLast10Minutes:
+          input.reservationAttemptsLast10Minutes,
+        cancelledOrRejectedLast24Hours: input.cancelledOrRejectedLast24Hours,
+      };
+    }
+
+    return {
+      status: "NEW",
+      label: "Novi",
+      reasons: [
+        `manje od ${CUSTOMER_RELIABLE_CONFIRMED_RESERVATION_COUNT} potvrđene rezervacije`,
+      ],
+      confirmedReservationCount: input.confirmedReservationCount,
+      cancellationsLast7Days: input.cancellationsLast7Days,
+      reservationAttemptsLast10Minutes: input.reservationAttemptsLast10Minutes,
+      cancelledOrRejectedLast24Hours: input.cancelledOrRejectedLast24Hours,
+    };
+  }
+
+  private async getCustomerTrustSummary(
+    customerId: string | null,
+  ): Promise<CustomerTrustSummary> {
+    if (!customerId) {
+      return this.buildCustomerTrustSummary({
+        isBlocked: false,
+        confirmedReservationCount: 0,
+        cancellationsLast7Days: 0,
+        reservationAttemptsLast10Minutes: 0,
+        cancelledOrRejectedLast24Hours: 0,
+      });
+    }
+
+    const now = new Date();
+    const weekAgo = new Date(now);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const dayAgo = new Date(now);
+    dayAgo.setDate(dayAgo.getDate() - 1);
+    const attemptWindowStart = new Date(
+      now.getTime() - CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES * 60 * 1000,
+    );
+
+    const [
+      customer,
+      confirmedReservationCount,
+      cancellationsLast7Days,
+      reservationAttemptsLast10Minutes,
+      cancelledOrRejectedLast24Hours,
+    ] = await this.prisma.$transaction([
+      this.prisma.user.findUnique({
+        where: { id: customerId },
+        select: { customerBlockedAt: true },
+      }),
+      this.prisma.reservation.count({
+        where: {
+          customerId,
+          status: { in: [...CUSTOMER_TRUST_CONFIRMED_STATUSES] },
+        },
+      }),
+      this.prisma.reservation.count({
+        where: {
+          customerId,
+          status: ReservationStatus.CANCELLED_BY_USER,
+          updatedAt: { gte: weekAgo },
+        },
+      }),
+      this.prisma.reservation.count({
+        where: {
+          customerId,
+          createdAt: { gte: attemptWindowStart },
+        },
+      }),
+      this.prisma.reservation.count({
+        where: {
+          customerId,
+          status: { in: [...CUSTOMER_TRUST_DAILY_NEGATIVE_STATUSES] },
+          updatedAt: { gte: dayAgo },
+        },
+      }),
+    ]);
+
+    return this.buildCustomerTrustSummary({
+      isBlocked: Boolean(customer?.customerBlockedAt),
+      confirmedReservationCount,
+      cancellationsLast7Days,
+      reservationAttemptsLast10Minutes,
+      cancelledOrRejectedLast24Hours,
+    });
+  }
+
   private async serializeVenueReservationRequest(reservation: {
     id: string;
     venueId: string;
@@ -4758,6 +5242,9 @@ export class ReservationsService {
       customerPhone: reservation.customerPhone,
       feeCents: reservation.feeCents,
     });
+    const customerTrust = await this.getCustomerTrustSummary(
+      reservation.customerId,
+    );
 
     return {
       ...this.serializeReservation(reservation),
@@ -4765,6 +5252,10 @@ export class ReservationsService {
       venueShareCents: allocation.venueShareCents,
       commissionBps: allocation.commissionBps,
       isNewCustomerReservation: allocation.isNewCustomerReservation,
+      customerTrustStatus: customerTrust.status,
+      customerTrustLabel: customerTrust.label,
+      customerTrustReasons: customerTrust.reasons,
+      customerTrust,
       chinChinSupportRefund:
         reservation.refundRequests?.[0] &&
         reservation.refundRequests[0].status ===

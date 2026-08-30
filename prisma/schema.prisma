@@ -193,6 +193,8 @@ model User {
   role            UserRole    @default(VENUE_OWNER)
   status          UserStatus  @default(PENDING_EMAIL_VERIFICATION)
   emailVerifiedAt DateTime?
+  customerBlockedAt     DateTime?
+  customerBlockedReason String?
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
 
@@ -214,6 +216,7 @@ model User {
   followedVenues          VenueFollower[]
 
   @@index([status])
+  @@index([customerBlockedAt])
   @@map("users")
 }
 

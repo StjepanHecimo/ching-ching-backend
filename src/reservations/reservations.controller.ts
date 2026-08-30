@@ -205,6 +205,30 @@ export class ReservationsController {
     });
   }
 
+  @Get("preview/admin/customers/risk")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
+  listAdminCustomerRiskUsers() {
+    return this.reservationsService.listAdminCustomerRiskUsers();
+  }
+
+  @Post("preview/admin/customers/:customerId/block")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
+  adminBlockCustomer(
+    @Param("customerId") customerId: string,
+    @Body("reason") reason?: string,
+  ) {
+    return this.reservationsService.adminBlockCustomer(customerId, reason);
+  }
+
+  @Delete("preview/admin/customers/:customerId/block")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
+  adminUnblockCustomer(@Param("customerId") customerId: string) {
+    return this.reservationsService.adminUnblockCustomer(customerId);
+  }
+
   @Post("preview/admin/:id/cancel")
   @UseGuards(JwtAuthGuard, AdminRolesGuard)
   @AdminRoles(UserRole.ADMIN)
