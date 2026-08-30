@@ -67,8 +67,8 @@ type CustomerTrustSummary = {
   reasons: string[];
   confirmedReservationCount: number;
   cancellationsLast7Days: number;
-  reservationAttemptsLast10Minutes: number;
-  cancelledOrRejectedLast24Hours: number;
+  reservationAttemptsToday: number;
+  requestWithdrawalsToday: number;
 };
 
 function customerFacingTableLabel(value?: string | null): string {
@@ -130,9 +130,8 @@ const STANDARD_ADVANCE_STANDARD_PRICE_CENTS = 300;
 const STANDARD_ADVANCE_LARGE_PRICE_CENTS = 400;
 const PREMIUM_ADVANCE_STANDARD_PRICE_CENTS = 300;
 const PREMIUM_ADVANCE_LARGE_PRICE_CENTS = 400;
-const CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES = 10;
-const CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW = 8;
-const CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY = 6;
+const CUSTOMER_MAX_DAILY_RESERVATION_ATTEMPTS = 8;
+const CUSTOMER_MAX_DAILY_REQUEST_WITHDRAWALS = 8;
 const CUSTOMER_MAX_WEEKLY_CANCELLATIONS = 3;
 const CUSTOMER_MAX_MONTHLY_CANCELLATIONS = 7;
 const CUSTOMER_RELIABLE_CONFIRMED_RESERVATION_COUNT = 3;
@@ -145,12 +144,6 @@ const CUSTOMER_TRUST_CONFIRMED_STATUSES = new Set<ReservationStatus>([
   ReservationStatus.CHECKED_IN,
   ReservationStatus.SEATED,
   ReservationStatus.COMPLETED,
-]);
-const CUSTOMER_TRUST_DAILY_NEGATIVE_STATUSES = new Set<ReservationStatus>([
-  ReservationStatus.CANCELLED_BY_USER,
-  ReservationStatus.DECLINED,
-  ReservationStatus.EXPIRED,
-  ReservationStatus.RELEASED,
 ]);
 const LIVE_PRICING_BOOSTS: Record<
   LivePricingBoost,
@@ -1124,6 +1117,7 @@ export class ReservationsService {
             roomLabel: true,
             feeCents: true,
             refundCents: true,
+            confirmedAt: true,
             createdAt: true,
             updatedAt: true,
           },
@@ -1158,14 +1152,17 @@ export class ReservationsService {
     });
 
     const items = customers.map((customer) => {
+      const todayStart = this.startOfLocalCalendarDay(now);
+      const tomorrowStart = new Date(
+        todayStart.getTime() + 24 * 60 * 60 * 1000,
+      );
       const reservationsLast30 = customer.reservations.filter(
         (reservation) => reservation.createdAt >= thirtyDaysAgo,
       );
-      const reservationAttemptsLast10Minutes = customer.reservations.filter(
+      const reservationAttemptsToday = customer.reservations.filter(
         (reservation) =>
-          reservation.createdAt.getTime() >=
-          now.getTime() -
-            CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES * 60 * 1000,
+          reservation.createdAt >= todayStart &&
+          reservation.createdAt < tomorrowStart,
       );
       const activeStatuses = new Set<ReservationStatus>([
         ReservationStatus.REQUESTED,
@@ -1181,12 +1178,11 @@ export class ReservationsService {
       ).length;
       const cancelledByUserLast30 = reservationsLast30.filter(
         (reservation) =>
-          reservation.status === ReservationStatus.CANCELLED_BY_USER,
+          reservation.status === ReservationStatus.CANCELLED_BY_USER &&
+          reservation.confirmedAt != null,
       ).length;
       const weekAgo = new Date(now);
       weekAgo.setDate(weekAgo.getDate() - 7);
-      const dayAgo = new Date(now);
-      dayAgo.setDate(dayAgo.getDate() - 1);
       const confirmedReservationCount = customer.reservations.filter(
         (reservation) =>
           CUSTOMER_TRUST_CONFIRMED_STATUSES.has(reservation.status),
@@ -1194,12 +1190,15 @@ export class ReservationsService {
       const cancellationsLast7Days = customer.reservations.filter(
         (reservation) =>
           reservation.status === ReservationStatus.CANCELLED_BY_USER &&
+          reservation.confirmedAt != null &&
           reservation.updatedAt >= weekAgo,
       ).length;
-      const cancelledOrRejectedLast24Hours = customer.reservations.filter(
+      const requestWithdrawalsToday = customer.reservations.filter(
         (reservation) =>
-          CUSTOMER_TRUST_DAILY_NEGATIVE_STATUSES.has(reservation.status) &&
-          reservation.updatedAt >= dayAgo,
+          reservation.status === ReservationStatus.CANCELLED_BY_USER &&
+          reservation.confirmedAt == null &&
+          reservation.updatedAt >= todayStart &&
+          reservation.updatedAt < tomorrowStart,
       ).length;
       const noShowLast90 = customer.reservations.filter(
         (reservation) => reservation.status === ReservationStatus.NO_SHOW,
@@ -1224,12 +1223,15 @@ export class ReservationsService {
         riskReasons.push(`${noShowLast90} no-show u zadnjih 90 dana`);
       }
       if (
-        reservationAttemptsLast10Minutes.length >=
-        CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW
+        reservationAttemptsToday.length >=
+        CUSTOMER_MAX_DAILY_RESERVATION_ATTEMPTS
       ) {
         riskReasons.push(
-          `${reservationAttemptsLast10Minutes.length} pokušaja u ${CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES} minuta`,
+          `${reservationAttemptsToday.length} pokušaja rezervacije danas`,
         );
+      }
+      if (requestWithdrawalsToday >= CUSTOMER_MAX_DAILY_REQUEST_WITHDRAWALS) {
+        riskReasons.push(`${requestWithdrawalsToday} opoziva zahtjeva danas`);
       }
       if (cancellationsLast7Days >= CUSTOMER_MAX_WEEKLY_CANCELLATIONS) {
         riskReasons.push(
@@ -1274,9 +1276,8 @@ export class ReservationsService {
         isBlocked: isCustomerBlocked,
         confirmedReservationCount,
         cancellationsLast7Days,
-        reservationAttemptsLast10Minutes:
-          reservationAttemptsLast10Minutes.length,
-        cancelledOrRejectedLast24Hours,
+        reservationAttemptsToday: reservationAttemptsToday.length,
+        requestWithdrawalsToday,
       });
 
       return {
@@ -1297,11 +1298,10 @@ export class ReservationsService {
         updatedAt: customer.updatedAt,
         metrics: {
           activeReservationCount,
-          reservationAttemptsLast10Minutes:
-            reservationAttemptsLast10Minutes.length,
+          reservationAttemptsToday: reservationAttemptsToday.length,
           confirmedReservationCount,
           cancellationsLast7Days,
-          cancelledOrRejectedLast24Hours,
+          requestWithdrawalsToday,
           reservationsLast30: reservationsLast30.length,
           reservationsLast90: customer.reservations.length,
           cancelledByUserLast30,
@@ -1369,45 +1369,29 @@ export class ReservationsService {
 
   private async assertCustomerReservationRateLimits(customerId: string) {
     const now = new Date();
-    const attemptWindowStart = new Date(
-      now.getTime() - CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES * 60 * 1000,
-    );
-    const dayWindowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const todayStart = this.startOfLocalCalendarDay(now);
+    const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
     const weekWindowStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const monthWindowStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const recentAttempts = await this.prisma.reservation.findMany({
-      where: {
-        customerId,
-        createdAt: { gte: attemptWindowStart },
-      },
-      select: {
-        tableId: true,
-        roomLabel: true,
-      },
-    });
-
-    if (recentAttempts.length >= CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW) {
-      throw new BadRequestException("CUSTOMER_RESERVATION_RATE_LIMIT_10_MIN");
-    }
-
     const [
-      cancelledOrRejectedCount,
+      reservationAttemptsToday,
+      requestWithdrawalsToday,
       weeklyCancellationCount,
       monthlyCancellationCount,
     ] = await this.prisma.$transaction([
       this.prisma.reservation.count({
         where: {
           customerId,
-          updatedAt: { gte: dayWindowStart },
-          status: {
-            in: [
-              ReservationStatus.CANCELLED_BY_USER,
-              ReservationStatus.DECLINED,
-              ReservationStatus.EXPIRED,
-              ReservationStatus.RELEASED,
-            ],
-          },
+          createdAt: { gte: todayStart, lt: tomorrowStart },
+        },
+      }),
+      this.prisma.reservation.count({
+        where: {
+          customerId,
+          updatedAt: { gte: todayStart, lt: tomorrowStart },
+          status: ReservationStatus.CANCELLED_BY_USER,
+          confirmedAt: null,
         },
       }),
       this.prisma.reservation.count({
@@ -1415,6 +1399,7 @@ export class ReservationsService {
           customerId,
           updatedAt: { gte: weekWindowStart },
           status: ReservationStatus.CANCELLED_BY_USER,
+          confirmedAt: { not: null },
         },
       }),
       this.prisma.reservation.count({
@@ -1422,15 +1407,17 @@ export class ReservationsService {
           customerId,
           updatedAt: { gte: monthWindowStart },
           status: ReservationStatus.CANCELLED_BY_USER,
+          confirmedAt: { not: null },
         },
       }),
     ]);
 
-    if (
-      cancelledOrRejectedCount >=
-      CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY
-    ) {
-      throw new BadRequestException("CUSTOMER_RESERVATION_DAILY_ATTEMPT_LIMIT");
+    if (reservationAttemptsToday >= CUSTOMER_MAX_DAILY_RESERVATION_ATTEMPTS) {
+      throw new BadRequestException("CUSTOMER_DAILY_RESERVATION_ATTEMPT_LIMIT");
+    }
+
+    if (requestWithdrawalsToday >= CUSTOMER_MAX_DAILY_REQUEST_WITHDRAWALS) {
+      throw new BadRequestException("CUSTOMER_DAILY_REQUEST_WITHDRAWAL_LIMIT");
     }
 
     if (weeklyCancellationCount >= CUSTOMER_MAX_WEEKLY_CANCELLATIONS) {
@@ -5099,8 +5086,8 @@ export class ReservationsService {
     isBlocked: boolean;
     confirmedReservationCount: number;
     cancellationsLast7Days: number;
-    reservationAttemptsLast10Minutes: number;
-    cancelledOrRejectedLast24Hours: number;
+    reservationAttemptsToday: number;
+    requestWithdrawalsToday: number;
   }): CustomerTrustSummary {
     const reasons: string[] = [];
 
@@ -5113,20 +5100,16 @@ export class ReservationsService {
       reasons.push(`${input.cancellationsLast7Days} otkazivanja u 7 dana`);
     }
     if (
-      input.reservationAttemptsLast10Minutes >=
-      CUSTOMER_MAX_RESERVATION_ATTEMPTS_PER_WINDOW
+      input.reservationAttemptsToday >= CUSTOMER_MAX_DAILY_RESERVATION_ATTEMPTS
     ) {
       reasons.push(
-        `${input.reservationAttemptsLast10Minutes} pokušaja u ${CUSTOMER_RESERVATION_ATTEMPT_WINDOW_MINUTES} minuta`,
+        `${input.reservationAttemptsToday} pokušaja rezervacije danas`,
       );
     }
     if (
-      input.cancelledOrRejectedLast24Hours >=
-      CUSTOMER_MAX_CANCELLED_OR_REJECTED_ATTEMPTS_PER_DAY
+      input.requestWithdrawalsToday >= CUSTOMER_MAX_DAILY_REQUEST_WITHDRAWALS
     ) {
-      reasons.push(
-        `${input.cancelledOrRejectedLast24Hours} opozvana ili neuspješna pokušaja u 24 sata`,
-      );
+      reasons.push(`${input.requestWithdrawalsToday} opoziva zahtjeva danas`);
     }
 
     if (reasons.length > 0) {
@@ -5136,9 +5119,8 @@ export class ReservationsService {
         reasons,
         confirmedReservationCount: input.confirmedReservationCount,
         cancellationsLast7Days: input.cancellationsLast7Days,
-        reservationAttemptsLast10Minutes:
-          input.reservationAttemptsLast10Minutes,
-        cancelledOrRejectedLast24Hours: input.cancelledOrRejectedLast24Hours,
+        reservationAttemptsToday: input.reservationAttemptsToday,
+        requestWithdrawalsToday: input.requestWithdrawalsToday,
       };
     }
 
@@ -5152,9 +5134,8 @@ export class ReservationsService {
         reasons: [`${input.confirmedReservationCount} potvrđene rezervacije`],
         confirmedReservationCount: input.confirmedReservationCount,
         cancellationsLast7Days: input.cancellationsLast7Days,
-        reservationAttemptsLast10Minutes:
-          input.reservationAttemptsLast10Minutes,
-        cancelledOrRejectedLast24Hours: input.cancelledOrRejectedLast24Hours,
+        reservationAttemptsToday: input.reservationAttemptsToday,
+        requestWithdrawalsToday: input.requestWithdrawalsToday,
       };
     }
 
@@ -5166,8 +5147,8 @@ export class ReservationsService {
       ],
       confirmedReservationCount: input.confirmedReservationCount,
       cancellationsLast7Days: input.cancellationsLast7Days,
-      reservationAttemptsLast10Minutes: input.reservationAttemptsLast10Minutes,
-      cancelledOrRejectedLast24Hours: input.cancelledOrRejectedLast24Hours,
+      reservationAttemptsToday: input.reservationAttemptsToday,
+      requestWithdrawalsToday: input.requestWithdrawalsToday,
     };
   }
 
