@@ -48,7 +48,7 @@ export class SmsService {
 
     const body = new URLSearchParams({
       To: input.to,
-      Body: `Chin-Chin verifikacijski kod: ${input.code}`,
+      Body: this.verificationMessage(input.code),
     });
     if (messagingServiceSid) {
       body.set("MessagingServiceSid", messagingServiceSid);
@@ -140,7 +140,7 @@ export class SmsService {
               sender,
               destinations: [{ to: destination }],
               content: {
-                text: `Chin-Chin verifikacijski kod: ${input.code}`,
+                text: this.verificationMessage(input.code),
               },
             },
           ],
@@ -180,6 +180,15 @@ export class SmsService {
       return phone;
     }
     return `${phone.slice(0, 4)}***${phone.slice(-3)}`;
+  }
+
+  private verificationMessage(code: string) {
+    // The default is the debug signing hash used by the beta Android build.
+    // Set ANDROID_SMS_APP_HASH to the release hash before publishing.
+    const appHash =
+      this.configService.get<string>("ANDROID_SMS_APP_HASH")?.trim() ||
+      "wABlDKaGyBj";
+    return `Chin-Chin verifikacijski kod: ${code}\n${appHash}`;
   }
 
   private twilioErrorMessage(responseText: string) {
