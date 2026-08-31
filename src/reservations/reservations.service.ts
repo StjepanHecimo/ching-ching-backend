@@ -4079,7 +4079,7 @@ export class ReservationsService {
 
       await this.notifyCustomer(reservation, {
         title: "Potvrdi dolazak",
-        body: `Potvrdi dolazak kada stigneš u ${reservation.venue.name}.`,
+        body: "Potvrdi check-in.",
         type: "reservation_check_in_reminder",
       });
     }
