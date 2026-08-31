@@ -4684,6 +4684,7 @@ export class ReservationsService {
       customerId: string | null;
       customerEmail?: string | null;
       tableLabel: string | null;
+      type?: ReservationType | string | null;
       venue: { id: string; name: string };
     },
     notification: { title: string; body: string; type: string },
@@ -4717,6 +4718,13 @@ export class ReservationsService {
           type: notification.type,
           reservationId: reservation.id,
           venueId: reservation.venue.id,
+          reservationType: reservation.type?.toString() ?? "",
+          checkInFocus:
+            notification.type === "reservation_check_in_reminder" ||
+            (notification.type === "reservation_confirmed" &&
+              reservation.type === ReservationType.ADVANCE)
+              ? "true"
+              : "false",
         },
       });
       this.logger.log(

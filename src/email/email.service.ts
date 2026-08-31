@@ -73,15 +73,14 @@ export class EmailService {
       to: input.to,
       subject: "Chin-Chin verifikacijski link",
       text: [
-        "Dobrodosli u Chin-Chin.",
+        "Dobrodošli u Chin-Chin.",
         "",
         "Otvorite ovaj link za potvrdu maila:",
         input.appVerificationLink,
         "",
-        "Ako se aplikacija ne otvori, koristite ovaj fallback link:",
-        input.verificationLink,
+        "Ako se aplikacija ne otvori automatski, otvorite Chin-Chin aplikaciju i nastavite verifikaciju.",
         "",
-        "Ako niste zatrazili ovaj link, slobodno ignorirajte ovu poruku.",
+        "Ako niste zatražili ovaj link, slobodno ignorirajte ovu poruku.",
       ].join("\n"),
       html: this.verificationHtml(input),
     });
@@ -379,14 +378,8 @@ export class EmailService {
             <a href="${input.appVerificationLink}" style="display:inline-block;background:#2d1a10;color:#ffffff !important;padding:15px 26px;border-radius:10px;text-decoration:none;font-size:17px;font-weight:900;border:2px solid #2d1a10;">
               Verificiraj email
             </a>
-            <p style="font-size:13px;line-height:1.5;margin:24px 0 8px;color:#79533d;">
-              Ako se aplikacija ne otvori, koristi fallback link:
-            </p>
-            <a href="${input.verificationLink}" style="display:inline-block;color:#2d1a10 !important;background:#ffffff;border:1px solid #d8a33b;border-radius:8px;padding:10px 14px;text-decoration:none;font-size:13px;font-weight:900;">
-              Potvrdi preko browsera
-            </a>
-            <p style="font-size:11px;line-height:1.45;margin:14px 0 0;color:#8a6047;word-break:break-all;">
-              ${input.verificationLink}
+            <p style="font-size:13px;line-height:1.5;margin:24px 0 0;color:#79533d;">
+              Ako se aplikacija ne otvori automatski, otvori Chin-Chin aplikaciju i nastavi verifikaciju.
             </p>
           </div>
         </div>
