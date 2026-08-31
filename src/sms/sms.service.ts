@@ -7,7 +7,11 @@ export class SmsService {
 
   constructor(private readonly configService: ConfigService) {}
 
-  async sendVerificationCode(input: { to: string; code: string }) {
+  async sendVerificationCode(input: {
+    to: string;
+    code: string;
+    androidAppHash?: string;
+  }) {
     const provider =
       this.configService.get<string>("SMS_PROVIDER")?.trim().toUpperCase() ||
       "TWILIO";
@@ -48,7 +52,7 @@ export class SmsService {
 
     const body = new URLSearchParams({
       To: input.to,
-      Body: this.verificationMessage(input.code),
+      Body: this.verificationMessage(input.code, input.androidAppHash),
     });
     if (messagingServiceSid) {
       body.set("MessagingServiceSid", messagingServiceSid);
@@ -103,7 +107,11 @@ export class SmsService {
     return { delivered: true, provider: "TWILIO" as const };
   }
 
-  private async sendWithInfobip(input: { to: string; code: string }) {
+  private async sendWithInfobip(input: {
+    to: string;
+    code: string;
+    androidAppHash?: string;
+  }) {
     const baseUrl = this.configService
       .get<string>("INFOBIP_BASE_URL")
       ?.trim()
@@ -140,7 +148,10 @@ export class SmsService {
               sender,
               destinations: [{ to: destination }],
               content: {
-                text: this.verificationMessage(input.code),
+                text: this.verificationMessage(
+                  input.code,
+                  input.androidAppHash,
+                ),
               },
             },
           ],
@@ -182,13 +193,19 @@ export class SmsService {
     return `${phone.slice(0, 4)}***${phone.slice(-3)}`;
   }
 
-  private verificationMessage(code: string) {
+  private verificationMessage(code: string, androidAppHash?: string) {
     // The default is the debug signing hash used by the beta Android build.
     // Set ANDROID_SMS_APP_HASH to the release hash before publishing.
     const appHash =
+      this.sanitizeAndroidAppHash(androidAppHash) ||
       this.configService.get<string>("ANDROID_SMS_APP_HASH")?.trim() ||
       "wABlDKaGyBj";
-    return `Chin-Chin verifikacijski kod: ${code}\n${appHash}`;
+    return `<#> Chin-Chin verifikacijski kod: ${code}\n${appHash}`;
+  }
+
+  private sanitizeAndroidAppHash(hash?: string) {
+    const trimmed = hash?.trim();
+    return trimmed && /^[A-Za-z0-9+/]{11}$/.test(trimmed) ? trimmed : undefined;
   }
 
   private twilioErrorMessage(responseText: string) {

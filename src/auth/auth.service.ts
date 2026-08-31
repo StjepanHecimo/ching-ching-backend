@@ -458,6 +458,7 @@ export class AuthService {
     const smsResult = await this.smsService.sendVerificationCode({
       to: phoneNumber,
       code,
+      androidAppHash: dto.androidAppHash,
     });
 
     return {
@@ -1085,6 +1086,7 @@ export class AuthService {
     const smsResult = await this.smsService.sendVerificationCode({
       to: phoneNumber,
       code,
+      androidAppHash: dto.androidAppHash,
     });
 
     return {
