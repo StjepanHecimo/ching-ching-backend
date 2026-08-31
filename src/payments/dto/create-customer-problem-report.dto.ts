@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsString,
   Length,
+  Matches,
   MaxLength,
   ValidateNested,
 } from "class-validator";
@@ -14,12 +15,23 @@ class CustomerProblemReportPhotoDto {
   fileName!: string;
 
   @IsString()
-  @Length(5, 80)
+  @Matches(/^image\/(jpeg|jpg|png|webp)$/)
   mimeType!: string;
 
   @IsString()
+  @IsOptional()
   @MaxLength(3_000_000)
-  dataUrl!: string;
+  dataUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(1000)
+  remoteUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  @MaxLength(500)
+  key?: string;
 }
 
 export class CreateCustomerProblemReportDto {
@@ -32,4 +44,14 @@ export class CreateCustomerProblemReportDto {
   @ValidateNested()
   @Type(() => CustomerProblemReportPhotoDto)
   photo?: CustomerProblemReportPhotoDto;
+}
+
+export class CreateCustomerProblemReportPhotoUploadUrlDto {
+  @IsString()
+  @Length(2, 180)
+  fileName!: string;
+
+  @IsString()
+  @Matches(/^image\/(jpeg|jpg|png|webp)$/)
+  mimeType!: string;
 }

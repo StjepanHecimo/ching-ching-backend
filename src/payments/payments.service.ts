@@ -1,10 +1,14 @@
 import {
   BadRequestException,
   Injectable,
+  InternalServerErrorException,
   Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { randomUUID } from "crypto";
 import { Prisma } from "../../generated/prisma/client";
 import {
   CustomerPaymentMethodStatus,
@@ -23,7 +27,10 @@ import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
-import { CreateCustomerProblemReportDto } from "./dto/create-customer-problem-report.dto";
+import {
+  CreateCustomerProblemReportDto,
+  CreateCustomerProblemReportPhotoUploadUrlDto,
+} from "./dto/create-customer-problem-report.dto";
 import { CreateReservationCheckoutDto } from "./dto/create-reservation-checkout.dto";
 import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto";
 import { CreateVenueRefundRequestDto } from "./dto/create-venue-refund-request.dto";
@@ -44,6 +51,7 @@ function customerFacingTableLabel(value?: string | null): string {
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
+  private s3Client: S3Client | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -911,17 +919,28 @@ export class PaymentsService {
     });
 
     const photo = dto.photo
-      ? {
+      ? ({
           fileName: dto.photo.fileName.trim(),
           mimeType: dto.photo.mimeType.trim(),
-          dataUrl: dto.photo.dataUrl.trim(),
-        }
+          dataUrl: dto.photo.dataUrl?.trim() ?? "",
+          remoteUrl: dto.photo.remoteUrl?.trim() ?? "",
+          key: dto.photo.key?.trim() ?? "",
+        } satisfies Prisma.InputJsonObject)
       : {
           fileName: "",
           mimeType: "",
           dataUrl: "",
           testModeWithoutPhoto: true,
         };
+
+    if (
+      dto.photo &&
+      !dto.photo.dataUrl?.trim() &&
+      !dto.photo.remoteUrl?.trim() &&
+      !dto.photo.key?.trim()
+    ) {
+      throw new BadRequestException("Fotografija nije ispravno poslana.");
+    }
 
     const report = existingPending
       ? await this.prisma.customerProblemReport.update({
@@ -945,6 +964,68 @@ export class PaymentsService {
         });
 
     return this.serializeCustomerProblemReport(report);
+  }
+
+  async createCustomerProblemReportPhotoUploadUrl(
+    reservationId: string,
+    customerUserId: string,
+    dto: CreateCustomerProblemReportPhotoUploadUrlDto,
+  ) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      select: { id: true, venueId: true, customerId: true },
+    });
+
+    if (!reservation || reservation.customerId !== customerUserId) {
+      throw new NotFoundException("Reservation was not found for this user.");
+    }
+
+    const bucket = this.configService.get<string>("R2_BUCKET")?.trim();
+    const publicBaseUrl = this.configService
+      .get<string>("R2_PUBLIC_BASE_URL")
+      ?.trim()
+      .replace(/\/+$/, "");
+
+    if (!bucket || !publicBaseUrl) {
+      throw new InternalServerErrorException(
+        "R2 storage is not configured for customer problem report uploads.",
+      );
+    }
+
+    const photoId = `customer-problem-photo-${randomUUID()}`;
+    const extension = this.extensionFromMimeType(dto.mimeType);
+    const key = [
+      "venues",
+      this.slugForObjectKey(reservation.venueId),
+      "customer-problem-reports",
+      this.slugForObjectKey(reservation.id),
+      `${photoId}${extension}`,
+    ].join("/");
+
+    const uploadUrl = await getSignedUrl(
+      this.getS3Client(),
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: dto.mimeType,
+      }),
+      { expiresIn: 15 * 60 },
+    );
+    const remoteUrl = `${publicBaseUrl}/${key}`;
+
+    return {
+      uploadUrl,
+      method: "PUT",
+      expiresInSeconds: 15 * 60,
+      key,
+      photo: {
+        id: photoId,
+        fileName: dto.fileName.trim(),
+        mimeType: dto.mimeType,
+        remoteUrl,
+        key,
+      },
+    };
   }
 
   async listAdminCustomerProblemReports() {
@@ -2129,6 +2210,57 @@ export class PaymentsService {
         request.resolutionCurrency ?? request.reservation.currency ?? "EUR",
       adminNotes: request.adminNotes,
     });
+  }
+
+  private getS3Client() {
+    if (this.s3Client) {
+      return this.s3Client;
+    }
+
+    const endpoint = this.configService.get<string>("R2_ENDPOINT")?.trim();
+    const accessKeyId = this.configService
+      .get<string>("R2_ACCESS_KEY_ID")
+      ?.trim();
+    const secretAccessKey = this.configService
+      .get<string>("R2_SECRET_ACCESS_KEY")
+      ?.trim();
+
+    if (!endpoint || !accessKeyId || !secretAccessKey) {
+      throw new InternalServerErrorException(
+        "R2 storage credentials are not configured.",
+      );
+    }
+
+    this.s3Client = new S3Client({
+      region: this.configService.get<string>("R2_REGION")?.trim() || "auto",
+      endpoint,
+      credentials: {
+        accessKeyId,
+        secretAccessKey,
+      },
+    });
+    return this.s3Client;
+  }
+
+  private extensionFromMimeType(mimeType: string) {
+    if (mimeType === "image/png") {
+      return ".png";
+    }
+    if (mimeType === "image/webp") {
+      return ".webp";
+    }
+    return ".jpg";
+  }
+
+  private slugForObjectKey(value: string) {
+    return (
+      value
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 80) || "item"
+    );
   }
 
   private async notifyVenueAboutAdminPaymentAction(
