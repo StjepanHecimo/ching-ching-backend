@@ -4,6 +4,7 @@ import { AdminRolesGuard } from "../auth/guards/admin-roles.guard";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { DeviceTokensModule } from "../device-tokens/device-tokens.module";
 import { EmailModule } from "../email/email.module";
+import { MonitoringModule } from "../monitoring/monitoring.module";
 import { PrismaModule } from "../prisma/prisma.module";
 import { PaymentsController } from "./payments.controller";
 import { PaymentsService } from "./payments.service";
@@ -15,6 +16,7 @@ import { WorldlinePaymentProvider } from "./worldline-payment.provider";
     PrismaModule,
     DeviceTokensModule,
     EmailModule,
+    MonitoringModule,
   ],
   controllers: [PaymentsController],
   providers: [
