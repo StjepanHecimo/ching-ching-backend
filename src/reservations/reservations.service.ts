@@ -562,6 +562,7 @@ export class ReservationsService {
       where: {
         customerId,
         createdAt: { gte: weekStart },
+        refundCents: 0,
         status: {
           in: [
             ReservationStatus.REQUESTED,
