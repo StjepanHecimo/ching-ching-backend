@@ -1,8 +1,11 @@
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
+import { APP_FILTER } from "@nestjs/core";
 import { AppController } from "./app.controller";
 import { AuthModule } from "./auth/auth.module";
 import { DeviceTokensModule } from "./device-tokens/device-tokens.module";
+import { ApiExceptionFilter } from "./monitoring/api-exception.filter";
+import { MonitoringModule } from "./monitoring/monitoring.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { PaymentsModule } from "./payments/payments.module";
 import { ReservationsModule } from "./reservations/reservations.module";
@@ -15,6 +18,7 @@ import { VenueDocumentsModule } from "./venue-documents/venue-documents.module";
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    MonitoringModule,
     PrismaModule,
     AuthModule,
     DeviceTokensModule,
@@ -25,5 +29,11 @@ import { VenueDocumentsModule } from "./venue-documents/venue-documents.module";
     VenueChinChinPanelModule,
   ],
   controllers: [AppController],
+  providers: [
+    {
+      provide: APP_FILTER,
+      useClass: ApiExceptionFilter,
+    },
+  ],
 })
 export class AppModule {}

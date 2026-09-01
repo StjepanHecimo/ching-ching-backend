@@ -1,6 +1,7 @@
 import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import nodemailer, { Transporter } from "nodemailer";
+import { MonitoringService } from "../monitoring/monitoring.service";
 
 type VerificationEmailInput = {
   to: string;
@@ -57,7 +58,10 @@ export class EmailService {
   private readonly logger = new Logger(EmailService.name);
   private transporter: Transporter | null = null;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly monitoringService: MonitoringService,
+  ) {}
 
   async sendVerificationEmail(input: VerificationEmailInput) {
     const transporter = this.getTransporter();
@@ -68,7 +72,7 @@ export class EmailService {
       return;
     }
 
-    await transporter.sendMail({
+    await this.sendTrackedMail(transporter, "verification", input.to, {
       from,
       to: input.to,
       subject: "Chin-Chin verifikacijski link",
@@ -101,7 +105,7 @@ export class EmailService {
     const venueName = input.venueName.trim() || "kafić";
     const tableLabel = input.tableLabel?.trim() || "Chin-Chin stol";
 
-    await transporter.sendMail({
+    await this.sendTrackedMail(transporter, "reservation_refund", input.to, {
       from,
       to: input.to,
       subject: "Chin-Chin povrat sredstava",
@@ -137,7 +141,7 @@ export class EmailService {
     const reservationTime = this.formatDateTime(input.startAt);
     const checkInWindow = this.formatCheckInWindow(input);
 
-    await transporter.sendMail({
+    await this.sendTrackedMail(transporter, "reservation_confirmed", input.to, {
       from,
       to: input.to,
       subject: "Chin-Chin rezervacija je prihvaćena",
@@ -179,28 +183,33 @@ export class EmailService {
         ? "Prijava je pregledana i označena kao refundirana od strane Chin-Chin."
         : "Prijava je pregledana i riješena od strane Chin-Chin admina.");
 
-    await transporter.sendMail({
-      from,
-      to: input.to,
-      subject: "Chin-Chin prijava problema je riješena",
-      text: [
-        "Chin-Chin prijava problema je riješena",
-        "",
-        `Kafić: ${venueName}`,
-        `ID rezervacije: ${input.reservationId}`,
-        ...(input.amountCents != null && input.amountCents > 0
-          ? [`Iznos korekcije: ${amount}`]
-          : []),
-        "",
-        "Odgovor admina:",
-        adminNotes,
-        "",
-        input.amountCents != null && input.amountCents > 0
-          ? "Ova korekcija je evidentirana kao Chin-Chin support trošak prema ugostitelju."
-          : "Prijava je zatvorena prema odgovoru admina.",
-      ].join("\n"),
-      html: this.venueProblemReportResolvedHtml(input),
-    });
+    await this.sendTrackedMail(
+      transporter,
+      "venue_problem_report_resolved",
+      input.to,
+      {
+        from,
+        to: input.to,
+        subject: "Chin-Chin prijava problema je riješena",
+        text: [
+          "Chin-Chin prijava problema je riješena",
+          "",
+          `Kafić: ${venueName}`,
+          `ID rezervacije: ${input.reservationId}`,
+          ...(input.amountCents != null && input.amountCents > 0
+            ? [`Iznos korekcije: ${amount}`]
+            : []),
+          "",
+          "Odgovor admina:",
+          adminNotes,
+          "",
+          input.amountCents != null && input.amountCents > 0
+            ? "Ova korekcija je evidentirana kao Chin-Chin support trošak prema ugostitelju."
+            : "Prijava je zatvorena prema odgovoru admina.",
+        ].join("\n"),
+        html: this.venueProblemReportResolvedHtml(input),
+      },
+    );
 
     this.logger.log(`Venue problem report resolved email sent to ${input.to}`);
   }
@@ -225,29 +234,34 @@ export class EmailService {
         ? "Prijava je pregledana i povrat sredstava je evidentiran."
         : "Prijava je pregledana i riješena od strane Chin-Chin podrške.");
 
-    await transporter.sendMail({
-      from,
-      to: input.to,
-      subject: "Chin-Chin odgovor na prijavu problema",
-      text: [
-        "Chin-Chin odgovor na prijavu problema",
-        "",
-        `Kafić: ${venueName}`,
-        `Stol: ${tableLabel}`,
-        `ID rezervacije: ${input.reservationId}`,
-        ...(input.amountCents != null && input.amountCents > 0
-          ? [`Iznos povrata: ${amount}`]
-          : []),
-        "",
-        "Odgovor admina:",
-        adminNotes,
-        "",
-        input.amountCents != null && input.amountCents > 0
-          ? "Povrat je evidentiran kroz Chin-Chin sustav plaćanja."
-          : "Prijava je zatvorena prema odgovoru admina.",
-      ].join("\n"),
-      html: this.customerProblemReportResolvedHtml(input),
-    });
+    await this.sendTrackedMail(
+      transporter,
+      "customer_problem_report_resolved",
+      input.to,
+      {
+        from,
+        to: input.to,
+        subject: "Chin-Chin odgovor na prijavu problema",
+        text: [
+          "Chin-Chin odgovor na prijavu problema",
+          "",
+          `Kafić: ${venueName}`,
+          `Stol: ${tableLabel}`,
+          `ID rezervacije: ${input.reservationId}`,
+          ...(input.amountCents != null && input.amountCents > 0
+            ? [`Iznos povrata: ${amount}`]
+            : []),
+          "",
+          "Odgovor admina:",
+          adminNotes,
+          "",
+          input.amountCents != null && input.amountCents > 0
+            ? "Povrat je evidentiran kroz Chin-Chin sustav plaćanja."
+            : "Prijava je zatvorena prema odgovoru admina.",
+        ].join("\n"),
+        html: this.customerProblemReportResolvedHtml(input),
+      },
+    );
 
     this.logger.log(
       `Customer problem report resolved email sent to ${input.to}`,
@@ -266,7 +280,7 @@ export class EmailService {
     const venueName = input.venueName.trim() || "kafić";
     const roomLabel = input.roomLabel.trim() || "odabrani prostor";
 
-    await transporter.sendMail({
+    await this.sendTrackedMail(transporter, "venue_room_deleted", input.to, {
       from,
       to: input.to,
       subject: "Chin-Chin prostor je obrisan",
@@ -311,6 +325,29 @@ export class EmailService {
     });
 
     return this.transporter;
+  }
+
+  private async sendTrackedMail(
+    transporter: Transporter,
+    context: string,
+    to: string,
+    mail: Parameters<Transporter["sendMail"]>[0],
+  ) {
+    try {
+      await transporter.sendMail(mail);
+    } catch (error) {
+      this.monitoringService.record({
+        level: "warning",
+        source: "email",
+        message: "Email nije poslan.",
+        details: {
+          context,
+          to,
+          error: error instanceof Error ? error.message : "SMTP error.",
+        },
+      });
+      throw error;
+    }
   }
 
   private infoFrom() {

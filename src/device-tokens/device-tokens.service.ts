@@ -7,6 +7,7 @@ import {
   DevicePushPlatform,
   PushNotificationStatus,
 } from "../../generated/prisma/enums";
+import { MonitoringService } from "../monitoring/monitoring.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { UpsertDeviceTokenDto } from "./dto/upsert-device-token.dto";
 
@@ -28,6 +29,7 @@ export class DeviceTokensService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly configService: ConfigService,
+    private readonly monitoringService: MonitoringService,
   ) {}
 
   async upsertForUser(userId: string, dto: UpsertDeviceTokenDto) {
@@ -129,6 +131,17 @@ export class DeviceTokensService {
         where: { id: log.id },
         data: {
           status: PushNotificationStatus.FAILED,
+          error: result,
+        },
+      });
+      this.monitoringService.record({
+        level: "warning",
+        source: "push",
+        message: "Push notifikacija nije poslana.",
+        details: {
+          userId: payload.userId,
+          app: payload.app ?? null,
+          title: payload.title,
           error: result,
         },
       });

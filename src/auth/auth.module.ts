@@ -11,5 +11,6 @@ import { AdminRolesGuard } from "./guards/admin-roles.guard";
   imports: [JwtModule.register({}), EmailModule, SmsModule],
   controllers: [AuthController],
   providers: [AuthService, JwtAuthGuard, AdminRolesGuard],
+  exports: [JwtAuthGuard, AdminRolesGuard],
 })
 export class AuthModule {}

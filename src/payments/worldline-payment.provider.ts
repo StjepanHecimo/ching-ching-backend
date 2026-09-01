@@ -1,6 +1,7 @@
 import { Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "crypto";
+import { MonitoringService } from "../monitoring/monitoring.service";
 
 type CreateAuthorizationCheckoutInput = {
   reservationId: string;
@@ -31,7 +32,10 @@ type ProviderCheckoutResult = {
 
 @Injectable()
 export class WorldlinePaymentProvider {
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly monitoringService: MonitoringService,
+  ) {}
 
   async createAuthorizationCheckout(input: CreateAuthorizationCheckoutInput) {
     if (this.useMockProvider()) {
@@ -611,25 +615,48 @@ export class WorldlinePaymentProvider {
     path: string,
     payload: Record<string, unknown>,
   ): Promise<T> {
-    const response = await fetch(`${this.saferpayBaseUrl()}${path}`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        accept: "application/json",
-        authorization: `Basic ${Buffer.from(
-          `${this.saferpayUsername()}:${this.saferpayPassword()}`,
-        ).toString("base64")}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const responseText = await response.text();
-    const responseBody = this.parseProviderResponse(responseText);
-    if (!response.ok) {
-      throw new Error(
-        `Saferpay ${path} failed with ${response.status}: ${responseText}`,
-      );
+    try {
+      const response = await fetch(`${this.saferpayBaseUrl()}${path}`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          authorization: `Basic ${Buffer.from(
+            `${this.saferpayUsername()}:${this.saferpayPassword()}`,
+          ).toString("base64")}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      const responseText = await response.text();
+      if (!response.ok) {
+        const message = `Saferpay ${path} failed with ${response.status}: ${responseText}`;
+        this.recordPaymentFailure(path, message, response.status);
+        throw new Error(message);
+      }
+
+      const responseBody = this.parseProviderResponse(responseText);
+      return responseBody as T;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Saferpay request failed.";
+      if (!message.startsWith(`Saferpay ${path} failed with`)) {
+        this.recordPaymentFailure(path, message);
+      }
+      throw error;
     }
-    return responseBody as T;
+  }
+
+  private recordPaymentFailure(path: string, message: string, status?: number) {
+    this.monitoringService.record({
+      level: "error",
+      source: "payment",
+      message: "Worldline/Saferpay poziv nije uspio.",
+      details: {
+        path,
+        status: status ?? null,
+        error: message,
+      },
+    });
   }
 
   private parseProviderResponse(responseText: string) {
