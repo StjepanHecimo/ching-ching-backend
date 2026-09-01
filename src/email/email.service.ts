@@ -149,9 +149,8 @@ export class EmailService {
         "",
         `Molimo vas da potvrdu dolaska, odnosno check-in, napravite u Chin-Chin aplikaciji u periodu ${checkInWindow}.`,
         "",
-        "U slučaju otkazivanja bit ćete obaviješteni.",
-        "",
         "Rezervaciju kao i potrebnu potvrdu Vašeg dolaska možete pronaći u Chin-Chin aplikaciji pod Rezervacije.",
+        "U slučaju otkazivanja bit ćete obaviješteni.",
       ].join("\n"),
       html: this.reservationConfirmedHtml(input),
     });
