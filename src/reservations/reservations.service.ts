@@ -557,12 +557,17 @@ export class ReservationsService {
 
     await this.assertCustomerReservationRateLimits(customerId);
 
-    const weekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const weeklyReservationCount = await this.prisma.reservation.count({
+    const now = new Date();
+    const activeReservationCount = await this.prisma.reservation.count({
       where: {
         customerId,
-        createdAt: { gte: weekStart },
+        timeSlotEnd: { gt: now },
         refundCents: 0,
+        payments: {
+          none: {
+            refundedCents: { gt: 0 },
+          },
+        },
         status: {
           in: [
             ReservationStatus.REQUESTED,
@@ -576,7 +581,7 @@ export class ReservationsService {
         },
       },
     });
-    if (weeklyReservationCount >= 2) {
+    if (activeReservationCount >= 2) {
       throw new BadRequestException("CUSTOMER_WEEKLY_RESERVATION_LIMIT");
     }
 
