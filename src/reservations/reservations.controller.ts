@@ -17,6 +17,7 @@ import { AdminRolesGuard } from "../auth/guards/admin-roles.guard";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { UserRole } from "../../generated/prisma/enums";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
+import { CreateReservationTimeChangeRequestDto } from "./dto/create-reservation-time-change-request.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailable-slots-query.dto";
 import { UpdateVenueLiveStatusDto } from "./dto/update-venue-live-status.dto";
@@ -108,6 +109,20 @@ export class ReservationsController {
     return this.paymentsService.createCustomerProblemReport(
       reservationId,
       request.user.userId,
+      dto,
+    );
+  }
+
+  @Post("customers/me/reservations/:reservationId/time-change-requests")
+  @UseGuards(JwtAuthGuard)
+  createCustomerReservationTimeChangeRequest(
+    @Param("reservationId") reservationId: string,
+    @Body() dto: CreateReservationTimeChangeRequestDto,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.reservationsService.createCustomerReservationTimeChangeRequest(
+      request.user.userId,
+      reservationId,
       dto,
     );
   }
@@ -324,6 +339,20 @@ export class ReservationsController {
   @Post("preview/:id/accept")
   acceptReservation(@Param("id") id: string) {
     return this.reservationsService.acceptReservation(id);
+  }
+
+  @Post("preview/time-change-requests/:requestId/accept")
+  acceptReservationTimeChangeRequest(@Param("requestId") requestId: string) {
+    return this.reservationsService.acceptReservationTimeChangeRequest(
+      requestId,
+    );
+  }
+
+  @Post("preview/time-change-requests/:requestId/decline")
+  declineReservationTimeChangeRequest(@Param("requestId") requestId: string) {
+    return this.reservationsService.declineReservationTimeChangeRequest(
+      requestId,
+    );
   }
 
   @Post("preview/:id/check-in")

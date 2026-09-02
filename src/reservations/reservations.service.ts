@@ -15,6 +15,7 @@ import {
   DevicePushApp,
   CustomerProblemReportStatus,
   ReservationStatus,
+  ReservationTimeChangeRequestStatus,
   ReservationType,
   SpaceLayoutStatus,
   UserRole,
@@ -26,6 +27,7 @@ import { EmailService } from "../email/email.service";
 import { PaymentsService } from "../payments/payments.service";
 import { PrismaService } from "../prisma/prisma.service";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
+import { CreateReservationTimeChangeRequestDto } from "./dto/create-reservation-time-change-request.dto";
 import { DeclineReservationDto } from "./dto/decline-reservation.dto";
 import { ReservationAvailabilityQueryDto } from "./dto/reservation-availability-query.dto";
 import { ReservationUnavailableSlotsQueryDto } from "./dto/reservation-unavailable-slots-query.dto";
@@ -113,6 +115,22 @@ type ReservationWithVenueRefundRequests = ReservationWithVenue & {
     resolvedAt: Date | null;
     updatedAt: Date;
   }[];
+  timeChangeRequests?: ReservationTimeChangeRequestSummary[];
+};
+
+type ReservationTimeChangeRequestSummary = {
+  id: string;
+  status: ReservationTimeChangeRequestStatus;
+  requestedStartAt: Date;
+  requestedEndAt: Date;
+  requestedCheckInOpensAt: Date | null;
+  requestedCheckInClosesAt: Date | null;
+  requestedArrivalDeadlineAt: Date | null;
+  acceptedAt: Date | null;
+  declinedAt: Date | null;
+  cancelledAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 type LivePricingBoost =
@@ -145,6 +163,11 @@ const CUSTOMER_TRUST_CONFIRMED_STATUSES = new Set<ReservationStatus>([
   ReservationStatus.SEATED,
   ReservationStatus.COMPLETED,
 ]);
+const ADVANCE_TIME_CHANGE_ELIGIBLE_STATUSES: ReservationStatus[] = [
+  ReservationStatus.CONFIRMED,
+  ReservationStatus.RESERVED,
+  ReservationStatus.CHECK_IN_PENDING,
+];
 const LIVE_PRICING_BOOSTS: Record<
   LivePricingBoost,
   { standardCents: number; largeCents: number }
@@ -598,6 +621,261 @@ export class ReservationsService {
     );
   }
 
+  async createCustomerReservationTimeChangeRequest(
+    customerId: string,
+    reservationId: string,
+    dto: CreateReservationTimeChangeRequestDto,
+  ) {
+    const reservation = await this.prisma.reservation.findFirst({
+      where: { id: reservationId, customerId },
+      include: {
+        venue: true,
+        timeChangeRequests: {
+          where: { status: ReservationTimeChangeRequestStatus.PENDING },
+          take: 1,
+        },
+      },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException("Rezervacija nije pronađena.");
+    }
+
+    if (reservation.type !== ReservationType.ADVANCE) {
+      throw new BadRequestException(
+        "Promjena termina dostupna je samo za rezervacije unaprijed.",
+      );
+    }
+
+    if (!ADVANCE_TIME_CHANGE_ELIGIBLE_STATUSES.includes(reservation.status)) {
+      throw new BadRequestException(
+        "Termin se može promijeniti samo za potvrđenu rezervaciju.",
+      );
+    }
+
+    if (reservation.customerCheckedInAt || reservation.checkedInAt) {
+      throw new BadRequestException(
+        "Termin nije moguće promijeniti nakon potvrde dolaska.",
+      );
+    }
+
+    const now = new Date();
+    const checkInOpensAt =
+      this.effectiveCustomerCheckInWindow(reservation).opensAt;
+    if (now.getTime() >= checkInOpensAt.getTime()) {
+      throw new BadRequestException(
+        "Termin nije moguće promijeniti nakon otvaranja potvrde dolaska.",
+      );
+    }
+
+    if (reservation.timeChangeRequests.length > 0) {
+      throw new ConflictException(
+        "Zahtjev za promjenu termina već čeka potvrdu kafića.",
+      );
+    }
+
+    const venue = await this.getVenueReservationState(reservation.venueId);
+    const requestedStartAt = dto.requestedStartAt;
+    const requestedEndAt =
+      dto.requestedEndAt ??
+      new Date(
+        new Date(dto.requestedStartAt).getTime() +
+          (reservation.timeSlotEnd.getTime() -
+            reservation.timeSlotStart.getTime()),
+      ).toISOString();
+    const slot = this.parseSlot(requestedStartAt, requestedEndAt, venue);
+    this.assertAdvanceReservationHorizon("ADVANCE", slot.startAt);
+
+    if (
+      Math.abs(slot.startAt.getTime() - reservation.timeSlotStart.getTime()) <
+        60 * 1000 &&
+      Math.abs(slot.endAt.getTime() - reservation.timeSlotEnd.getTime()) <
+        60 * 1000
+    ) {
+      throw new BadRequestException("Odaberite novi termin rezervacije.");
+    }
+
+    const blockers = await this.findBlockingReservations(
+      reservation.venueId,
+      slot.startAt,
+      slot.endAt,
+      {
+        tableId: reservation.tableId,
+        tableLabel: reservation.tableLabel,
+        roomLabel: reservation.roomLabel,
+      },
+      reservation.id,
+    );
+    if (blockers.length > 0) {
+      throw new ConflictException(
+        "Odabrani stol je već rezerviran za novi termin.",
+      );
+    }
+
+    const request = await this.prisma.reservationTimeChangeRequest.create({
+      data: {
+        reservationId: reservation.id,
+        venueId: reservation.venueId,
+        customerId,
+        requestedStartAt: slot.startAt,
+        requestedEndAt: slot.endAt,
+        requestedCheckInOpensAt: slot.checkInOpensAt,
+        requestedCheckInClosesAt: slot.checkInClosesAt,
+        requestedArrivalDeadlineAt: slot.arrivalDeadlineAt,
+      },
+    });
+
+    await this.notifyVenueOwner(reservation, {
+      title: "Zahtjev za promjenu termina",
+      body: `${reservation.customerName ?? "Chin-Chin gost"} želi promijeniti termin za ${customerFacingTableLabel(reservation.tableLabel)}.`,
+      type: "advance_reservation_time_change_request",
+    });
+
+    void this.emitVenueLiveSync(reservation.venueId, "reservation_time_change");
+
+    return {
+      pendingTimeChangeRequest:
+        this.serializeReservationTimeChangeRequest(request),
+    };
+  }
+
+  async acceptReservationTimeChangeRequest(requestId: string) {
+    const request = await this.prisma.reservationTimeChangeRequest.findUnique({
+      where: { id: requestId },
+      include: { reservation: { include: { venue: true } } },
+    });
+
+    if (!request) {
+      throw new NotFoundException("Zahtjev za promjenu termina nije pronađen.");
+    }
+    if (request.status !== ReservationTimeChangeRequestStatus.PENDING) {
+      throw new BadRequestException(
+        "Zahtjev za promjenu termina više nije aktivan.",
+      );
+    }
+
+    const reservation = request.reservation;
+    if (reservation.type !== ReservationType.ADVANCE) {
+      throw new BadRequestException(
+        "Promjena termina dostupna je samo za rezervacije unaprijed.",
+      );
+    }
+    if (!ADVANCE_TIME_CHANGE_ELIGIBLE_STATUSES.includes(reservation.status)) {
+      throw new BadRequestException("Rezervacija više nije aktivna.");
+    }
+
+    const blockers = await this.findBlockingReservations(
+      reservation.venueId,
+      request.requestedStartAt,
+      request.requestedEndAt,
+      {
+        tableId: reservation.tableId,
+        tableLabel: reservation.tableLabel,
+        roomLabel: reservation.roomLabel,
+      },
+      reservation.id,
+    );
+    if (blockers.length > 0) {
+      throw new ConflictException(
+        "Odabrani stol je već rezerviran za novi termin.",
+      );
+    }
+
+    const now = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.reservationTimeChangeRequest.update({
+        where: { id: request.id },
+        data: {
+          status: ReservationTimeChangeRequestStatus.ACCEPTED,
+          acceptedAt: now,
+        },
+      });
+      await tx.reservationTimeChangeRequest.updateMany({
+        where: {
+          reservationId: reservation.id,
+          status: ReservationTimeChangeRequestStatus.PENDING,
+          id: { not: request.id },
+        },
+        data: {
+          status: ReservationTimeChangeRequestStatus.CANCELLED,
+          cancelledAt: now,
+        },
+      });
+      return tx.reservation.update({
+        where: { id: reservation.id },
+        data: {
+          timeSlotStart: request.requestedStartAt,
+          timeSlotEnd: request.requestedEndAt,
+          checkInOpensAt: request.requestedCheckInOpensAt,
+          checkInClosesAt: request.requestedCheckInClosesAt,
+          checkInReminderSentAt: null,
+          checkInFinalReminderSentAt: null,
+          arrivalDeadlineAt: request.requestedArrivalDeadlineAt,
+        },
+        include: {
+          venue: true,
+          timeChangeRequests: {
+            where: { status: ReservationTimeChangeRequestStatus.PENDING },
+            orderBy: { createdAt: "desc" },
+            take: 1,
+          },
+        },
+      });
+    });
+
+    await this.notifyCustomer(updated, {
+      title: "Novi termin je prihvaćen",
+      body: `${updated.venue.name} je prihvatio novi termin rezervacije za ${customerFacingTableLabel(updated.tableLabel)}.`,
+      type: "reservation_time_change_accepted",
+    });
+    await this.notifyDueCustomerCheckInReminders(updated.venueId);
+
+    void this.emitVenueLiveSync(updated.venueId, "reservation_time_changed");
+
+    return this.serializeReservation(updated);
+  }
+
+  async declineReservationTimeChangeRequest(requestId: string) {
+    const request = await this.prisma.reservationTimeChangeRequest.findUnique({
+      where: { id: requestId },
+      include: { reservation: { include: { venue: true } } },
+    });
+
+    if (!request) {
+      throw new NotFoundException("Zahtjev za promjenu termina nije pronađen.");
+    }
+    if (request.status !== ReservationTimeChangeRequestStatus.PENDING) {
+      throw new BadRequestException(
+        "Zahtjev za promjenu termina više nije aktivan.",
+      );
+    }
+
+    const updatedRequest =
+      await this.prisma.reservationTimeChangeRequest.update({
+        where: { id: request.id },
+        data: {
+          status: ReservationTimeChangeRequestStatus.DECLINED,
+          declinedAt: new Date(),
+        },
+      });
+
+    await this.notifyCustomer(request.reservation, {
+      title: "Promjena termina nije prihvaćena",
+      body: `${request.reservation.venue.name} ne može prihvatiti novi termin. Rezervacija ostaje na starom terminu.`,
+      type: "reservation_time_change_declined",
+    });
+
+    void this.emitVenueLiveSync(
+      request.reservation.venueId,
+      "reservation_time_change_declined",
+    );
+
+    return {
+      pendingTimeChangeRequest:
+        this.serializeReservationTimeChangeRequest(updatedRequest),
+    };
+  }
+
   async listVenueReservations(
     venueId: string,
     query: VenueReservationsQueryDto = {},
@@ -640,6 +918,11 @@ export class ReservationsService {
       take: query.limit ?? 100,
       include: {
         venue: true,
+        timeChangeRequests: {
+          where: { status: ReservationTimeChangeRequestStatus.PENDING },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
         refundRequests: {
           where: {
             status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
@@ -766,6 +1049,11 @@ export class ReservationsService {
       take: Math.min(query.limit ?? 10, 10),
       include: {
         venue: true,
+        timeChangeRequests: {
+          where: { status: ReservationTimeChangeRequestStatus.PENDING },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
         refundRequests: {
           where: {
             status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
@@ -799,17 +1087,42 @@ export class ReservationsService {
     const reservations = await this.prisma.reservation.findMany({
       where: {
         venueId,
-        status: ReservationStatus.PENDING_VENUE_CONFIRMATION,
+        OR: [
+          { status: ReservationStatus.PENDING_VENUE_CONFIRMATION },
+          {
+            type: ReservationType.ADVANCE,
+            timeChangeRequests: {
+              some: { status: ReservationTimeChangeRequestStatus.PENDING },
+            },
+          },
+        ],
       },
       orderBy: { createdAt: "asc" },
-      include: { venue: true },
+      include: {
+        venue: true,
+        timeChangeRequests: {
+          where: { status: ReservationTimeChangeRequestStatus.PENDING },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+      },
     });
 
-    return Promise.all(
+    const items = await Promise.all(
       reservations.map((reservation) =>
         this.serializeVenueReservationRequest(reservation),
       ),
     );
+
+    return items.sort((left, right) => {
+      const leftDate = new Date(
+        left.pendingTimeChangeRequest?.createdAt ?? left.createdAt,
+      ).getTime();
+      const rightDate = new Date(
+        right.pendingTimeChangeRequest?.createdAt ?? right.createdAt,
+      ).getTime();
+      return leftDate - rightDate;
+    });
   }
 
   async listVenueReservedTableIds(
@@ -988,6 +1301,11 @@ export class ReservationsService {
       take: Math.min(query.limit ?? 100, 100),
       include: {
         venue: true,
+        timeChangeRequests: {
+          where: { status: ReservationTimeChangeRequestStatus.PENDING },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+        },
         refundRequests: {
           where: {
             status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
@@ -5061,6 +5379,7 @@ export class ReservationsService {
       name: string;
       slug: string;
     };
+    timeChangeRequests?: ReservationTimeChangeRequestSummary[];
   }) {
     const lockedUntil = this.lockedUntilForReservation(reservation);
     const customerCancellationChargeCents =
@@ -5113,9 +5432,33 @@ export class ReservationsService {
       customerPhone: reservation.customerPhone,
       notes: statusReason ? null : reservation.notes,
       statusReason,
+      pendingTimeChangeRequest: reservation.timeChangeRequests?.[0]
+        ? this.serializeReservationTimeChangeRequest(
+            reservation.timeChangeRequests[0],
+          )
+        : null,
       source: reservation.source,
       createdAt: reservation.createdAt,
       updatedAt: reservation.updatedAt,
+    };
+  }
+
+  private serializeReservationTimeChangeRequest(
+    request: ReservationTimeChangeRequestSummary,
+  ) {
+    return {
+      id: request.id,
+      status: request.status,
+      requestedStartAt: request.requestedStartAt,
+      requestedEndAt: request.requestedEndAt,
+      requestedCheckInOpensAt: request.requestedCheckInOpensAt,
+      requestedCheckInClosesAt: request.requestedCheckInClosesAt,
+      requestedArrivalDeadlineAt: request.requestedArrivalDeadlineAt,
+      acceptedAt: request.acceptedAt,
+      declinedAt: request.declinedAt,
+      cancelledAt: request.cancelledAt,
+      createdAt: request.createdAt,
+      updatedAt: request.updatedAt,
     };
   }
 
@@ -5284,6 +5627,7 @@ export class ReservationsService {
       name: string;
       slug: string;
     };
+    timeChangeRequests?: ReservationTimeChangeRequestSummary[];
     refundRequests?: {
       id: string;
       status: VenueRefundRequestStatus;

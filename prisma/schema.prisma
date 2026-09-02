@@ -71,6 +71,14 @@ enum ReservationType {
   LIVE
 }
 
+enum ReservationTimeChangeRequestStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  CANCELLED
+  EXPIRED
+}
+
 enum PaymentProvider {
   WORLDLINE
   MOCK
@@ -181,39 +189,40 @@ enum PushNotificationStatus {
 }
 
 model User {
-  id              String      @id @default(uuid())
-  email           String      @unique
-  passwordHash    String
-  firstName       String
-  lastName        String
-  phoneNumber     String?
-  phoneVerifiedAt DateTime?
-  age             Int?
-  gender          UserGender?
-  role            UserRole    @default(VENUE_OWNER)
-  status          UserStatus  @default(PENDING_EMAIL_VERIFICATION)
-  emailVerifiedAt DateTime?
+  id                    String      @id @default(uuid())
+  email                 String      @unique
+  passwordHash          String
+  firstName             String
+  lastName              String
+  phoneNumber           String?
+  phoneVerifiedAt       DateTime?
+  age                   Int?
+  gender                UserGender?
+  role                  UserRole    @default(VENUE_OWNER)
+  status                UserStatus  @default(PENDING_EMAIL_VERIFICATION)
+  emailVerifiedAt       DateTime?
   customerBlockedAt     DateTime?
   customerBlockedReason String?
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
 
-  venues                  Venue[]
-  emailVerificationTokens EmailVerificationToken[]
-  phoneVerificationCodes  PhoneVerificationCode[]
-  refreshTokens           RefreshToken[]
-  spaceLayoutProjects     SpaceLayoutProject[]
-  venueDocumentRequests   VenueDocumentRequest[]
-  reservations            Reservation[]
-  reservationPayments     ReservationPayment[]
-  paymentMethods          CustomerPaymentMethod[]
-  ledgerEntries           LedgerEntry[]
-  venueRefundRequests     VenueRefundRequest[]
-  customerProblemReports  CustomerProblemReport[]
-  paymentRefundEvents     ReservationPaymentRefund[]
-  devicePushTokens        DevicePushToken[]
-  pushNotificationLogs    PushNotificationLog[]
-  followedVenues          VenueFollower[]
+  venues                        Venue[]
+  emailVerificationTokens       EmailVerificationToken[]
+  phoneVerificationCodes        PhoneVerificationCode[]
+  refreshTokens                 RefreshToken[]
+  spaceLayoutProjects           SpaceLayoutProject[]
+  venueDocumentRequests         VenueDocumentRequest[]
+  reservations                  Reservation[]
+  reservationPayments           ReservationPayment[]
+  paymentMethods                CustomerPaymentMethod[]
+  ledgerEntries                 LedgerEntry[]
+  venueRefundRequests           VenueRefundRequest[]
+  customerProblemReports        CustomerProblemReport[]
+  paymentRefundEvents           ReservationPaymentRefund[]
+  devicePushTokens              DevicePushToken[]
+  pushNotificationLogs          PushNotificationLog[]
+  followedVenues                VenueFollower[]
+  reservationTimeChangeRequests ReservationTimeChangeRequest[]
 
   @@index([status])
   @@index([customerBlockedAt])
@@ -310,20 +319,21 @@ model Venue {
   createdAt                     DateTime  @default(now())
   updatedAt                     DateTime  @updatedAt
 
-  owner                  User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  spaceLayoutProjects    SpaceLayoutProject[]
-  documentRequests       VenueDocumentRequest[]
-  reservations           Reservation[]
-  chinChinPanel          VenueChinChinPanel?
-  reservationPenalties   VenueReservationPenalty[]
-  reservationPayments    ReservationPayment[]
-  refundRequests         VenueRefundRequest[]
-  customerProblemReports CustomerProblemReport[]
-  ledgerEntries          LedgerEntry[]
-  paymentRefundEvents    ReservationPaymentRefund[]
-  payoutBatches          VenuePayoutBatch[]
-  followers              VenueFollower[]
-  eventNotifications     VenueEventNotification[]
+  owner                         User                           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  spaceLayoutProjects           SpaceLayoutProject[]
+  documentRequests              VenueDocumentRequest[]
+  reservations                  Reservation[]
+  chinChinPanel                 VenueChinChinPanel?
+  reservationPenalties          VenueReservationPenalty[]
+  reservationPayments           ReservationPayment[]
+  refundRequests                VenueRefundRequest[]
+  customerProblemReports        CustomerProblemReport[]
+  ledgerEntries                 LedgerEntry[]
+  paymentRefundEvents           ReservationPaymentRefund[]
+  payoutBatches                 VenuePayoutBatch[]
+  followers                     VenueFollower[]
+  eventNotifications            VenueEventNotification[]
+  reservationTimeChangeRequests ReservationTimeChangeRequest[]
 
   @@index([ownerId])
   @@map("venues")
@@ -413,51 +423,52 @@ model VenueDocumentRequest {
 }
 
 model Reservation {
-  id                    String            @id @default(uuid())
-  venueId               String
-  customerId            String?
-  tableId               String
-  tableLabel            String?
-  roomLabel             String?
-  type                  ReservationType   @default(ADVANCE)
-  status                ReservationStatus @default(REQUESTED)
-  partySize             Int
-  timeSlotStart         DateTime
-  timeSlotEnd           DateTime
-  checkInOpensAt        DateTime?
-  checkInClosesAt       DateTime?
-  checkInReminderSentAt DateTime?
+  id                         String            @id @default(uuid())
+  venueId                    String
+  customerId                 String?
+  tableId                    String
+  tableLabel                 String?
+  roomLabel                  String?
+  type                       ReservationType   @default(ADVANCE)
+  status                     ReservationStatus @default(REQUESTED)
+  partySize                  Int
+  timeSlotStart              DateTime
+  timeSlotEnd                DateTime
+  checkInOpensAt             DateTime?
+  checkInClosesAt            DateTime?
+  checkInReminderSentAt      DateTime?
   checkInFinalReminderSentAt DateTime?
-  arrivalDeadlineAt     DateTime?
-  confirmationExpiresAt DateTime?
-  confirmedAt           DateTime?
-  declinedAt            DateTime?
-  customerCheckedInAt   DateTime?
-  checkedInAt           DateTime?
-  seatedAt              DateTime?
-  cancelledAt           DateTime?
-  releasedAt            DateTime?
-  feeCents              Int               @default(0)
-  refundCents           Int               @default(0)
-  currency              String            @default("EUR")
-  userLatitude          Float?
-  userLongitude         Float?
-  distanceMeters        Float?
-  customerName          String?
-  customerEmail         String?
-  customerPhone         String?
-  notes                 String?
-  source                String            @default("user-app")
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  arrivalDeadlineAt          DateTime?
+  confirmationExpiresAt      DateTime?
+  confirmedAt                DateTime?
+  declinedAt                 DateTime?
+  customerCheckedInAt        DateTime?
+  checkedInAt                DateTime?
+  seatedAt                   DateTime?
+  cancelledAt                DateTime?
+  releasedAt                 DateTime?
+  feeCents                   Int               @default(0)
+  refundCents                Int               @default(0)
+  currency                   String            @default("EUR")
+  userLatitude               Float?
+  userLongitude              Float?
+  distanceMeters             Float?
+  customerName               String?
+  customerEmail              String?
+  customerPhone              String?
+  notes                      String?
+  source                     String            @default("user-app")
+  createdAt                  DateTime          @default(now())
+  updatedAt                  DateTime          @updatedAt
 
-  venue                  Venue                      @relation(fields: [venueId], references: [id], onDelete: Cascade)
-  customer               User?                      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  venue                  Venue                          @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer               User?                          @relation(fields: [customerId], references: [id], onDelete: SetNull)
   payments               ReservationPayment[]
   ledgerEntries          LedgerEntry[]
   refundRequests         VenueRefundRequest[]
   customerProblemReports CustomerProblemReport[]
   refundEvents           ReservationPaymentRefund[]
+  timeChangeRequests     ReservationTimeChangeRequest[]
 
   @@index([venueId])
   @@index([customerId])
@@ -468,6 +479,33 @@ model Reservation {
   @@index([confirmationExpiresAt])
   @@index([venueId, tableId, timeSlotStart, timeSlotEnd])
   @@map("reservations")
+}
+
+model ReservationTimeChangeRequest {
+  id                         String                             @id @default(uuid())
+  reservationId              String
+  venueId                    String
+  customerId                 String?
+  status                     ReservationTimeChangeRequestStatus @default(PENDING)
+  requestedStartAt           DateTime
+  requestedEndAt             DateTime
+  requestedCheckInOpensAt    DateTime?
+  requestedCheckInClosesAt   DateTime?
+  requestedArrivalDeadlineAt DateTime?
+  acceptedAt                 DateTime?
+  declinedAt                 DateTime?
+  cancelledAt                DateTime?
+  createdAt                  DateTime                           @default(now())
+  updatedAt                  DateTime                           @updatedAt
+
+  reservation Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  venue       Venue       @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  customer    User?       @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([reservationId])
+  @@index([venueId, status])
+  @@index([customerId, status])
+  @@map("reservation_time_change_requests")
 }
 
 model ReservationPayment {
