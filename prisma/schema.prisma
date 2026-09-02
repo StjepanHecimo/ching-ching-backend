@@ -427,6 +427,7 @@ model Reservation {
   checkInOpensAt        DateTime?
   checkInClosesAt       DateTime?
   checkInReminderSentAt DateTime?
+  checkInFinalReminderSentAt DateTime?
   arrivalDeadlineAt     DateTime?
   confirmationExpiresAt DateTime?
   confirmedAt           DateTime?

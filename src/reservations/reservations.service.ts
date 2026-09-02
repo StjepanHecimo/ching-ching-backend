@@ -168,6 +168,7 @@ const ARRIVAL_GRACE_MINUTES = 15;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES = 4 * 60;
 const ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES = 60;
+const ADVANCE_CUSTOMER_CHECK_IN_FINAL_REMINDER_BEFORE_MINUTES = 10;
 const MAX_ADVANCE_RESERVATION_DAYS = 7;
 const RESERVATION_WINDOW_MIN_START_MINUTES = 12 * 60;
 const RESERVATION_WINDOW_MAX_END_MINUTES = 26 * 60;
@@ -4033,6 +4034,8 @@ export class ReservationsService {
 
   private async notifyDueCustomerCheckInReminders(venueId: string) {
     const now = new Date();
+    await this.notifyDueCustomerCheckInFinalReminders(venueId, now);
+
     const latestRelevantStart = new Date(
       now.getTime() +
         ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES * 60 * 1000,
@@ -4041,6 +4044,7 @@ export class ReservationsService {
       where: {
         venueId,
         checkInReminderSentAt: null,
+        checkInFinalReminderSentAt: null,
         type: ReservationType.ADVANCE,
         status: {
           in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
@@ -4070,6 +4074,7 @@ export class ReservationsService {
         where: {
           id: reservation.id,
           checkInReminderSentAt: null,
+          checkInFinalReminderSentAt: null,
           type: ReservationType.ADVANCE,
           customerCheckedInAt: null,
           status: {
@@ -4085,7 +4090,79 @@ export class ReservationsService {
 
       await this.notifyCustomer(reservation, {
         title: "Potvrdi dolazak",
-        body: "Potvrdi check-in.",
+        body: "Potvrdi dolazak u aplikaciji.",
+        type: "reservation_check_in_reminder",
+      });
+    }
+  }
+
+  private async notifyDueCustomerCheckInFinalReminders(
+    venueId: string,
+    now: Date,
+  ) {
+    const latestRelevantStart = new Date(
+      now.getTime() +
+        ADVANCE_CUSTOMER_CHECK_IN_OPENS_BEFORE_MINUTES * 60 * 1000,
+    );
+    const candidates = await this.prisma.reservation.findMany({
+      where: {
+        venueId,
+        checkInFinalReminderSentAt: null,
+        type: ReservationType.ADVANCE,
+        status: {
+          in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
+        },
+        customerCheckedInAt: null,
+        timeSlotStart: {
+          gte: now,
+          lte: latestRelevantStart,
+        },
+      },
+      include: { venue: true },
+      take: 100,
+      orderBy: { timeSlotStart: "asc" },
+    });
+
+    for (const reservation of candidates) {
+      const { opensAt, closesAt } =
+        this.effectiveCustomerCheckInWindow(reservation);
+      const millisecondsUntilClose = closesAt.getTime() - now.getTime();
+      if (
+        now.getTime() < opensAt.getTime() ||
+        millisecondsUntilClose < 0 ||
+        millisecondsUntilClose >
+          ADVANCE_CUSTOMER_CHECK_IN_FINAL_REMINDER_BEFORE_MINUTES * 60 * 1000
+      ) {
+        continue;
+      }
+
+      const updateData: Prisma.ReservationUpdateManyMutationInput = {
+        checkInFinalReminderSentAt: now,
+      };
+      if (!reservation.checkInReminderSentAt) {
+        updateData.checkInReminderSentAt = now;
+      }
+
+      const locked = await this.prisma.reservation.updateMany({
+        where: {
+          id: reservation.id,
+          checkInFinalReminderSentAt: null,
+          type: ReservationType.ADVANCE,
+          customerCheckedInAt: null,
+          status: {
+            in: [ReservationStatus.CONFIRMED, ReservationStatus.RESERVED],
+          },
+        },
+        data: updateData,
+      });
+
+      if (locked.count !== 1) {
+        continue;
+      }
+
+      await this.notifyCustomer(reservation, {
+        title: "Još 10 minuta za potvrdu dolaska",
+        body: "Potvrdi dolazak u aplikaciji. Nakon isteka rezervacija se otkazuje i zadržava se 50% naknade.",
         type: "reservation_check_in_reminder",
       });
     }
