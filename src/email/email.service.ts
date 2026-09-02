@@ -337,7 +337,7 @@ export class EmailService {
       await transporter.sendMail(mail);
     } catch (error) {
       this.monitoringService.record({
-        level: "warning",
+        level: "error",
         source: "email",
         message: "Email nije poslan.",
         details: {

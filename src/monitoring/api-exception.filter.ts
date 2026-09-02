@@ -33,16 +33,18 @@ export class ApiExceptionFilter implements ExceptionFilter {
         : HttpStatus.INTERNAL_SERVER_ERROR;
     const message = this.getMessage(exception);
 
-    this.monitoringService.record({
-      level: status >= 500 ? "error" : "warning",
-      source: "api",
-      message,
-      details: {
-        method: request.method ?? null,
-        path: request.originalUrl ?? request.url ?? null,
-        status,
-      },
-    });
+    if (status >= 500) {
+      this.monitoringService.record({
+        level: "error",
+        source: "api",
+        message,
+        details: {
+          method: request.method ?? null,
+          path: request.originalUrl ?? request.url ?? null,
+          status,
+        },
+      });
+    }
 
     if (response.headersSent) {
       return;

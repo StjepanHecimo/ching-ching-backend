@@ -127,6 +127,7 @@ export class DeviceTokensService {
       }
 
       failed += 1;
+      const invalidDeviceToken = this.isInvalidFcmDeviceTokenError(result);
       await this.prisma.pushNotificationLog.update({
         where: { id: log.id },
         data: {
@@ -134,20 +135,49 @@ export class DeviceTokensService {
           error: result,
         },
       });
-      this.monitoringService.record({
-        level: "warning",
-        source: "push",
-        message: "Push notifikacija nije poslana.",
-        details: {
-          userId: payload.userId,
-          app: payload.app ?? null,
-          title: payload.title,
-          error: result,
-        },
-      });
+
+      if (invalidDeviceToken) {
+        await this.prisma.devicePushToken.update({
+          where: { id: token.id },
+          data: { disabledAt: new Date() },
+        });
+        continue;
+      }
+
+      this.recordPushFailure(payload, result);
+    }
+
+    if (failed > 0 && sent === 0 && queued === 0) {
+      this.recordPushFailure(
+        payload,
+        "Nijedan spremljeni push token nije uspješno primio obavijest.",
+      );
     }
 
     return { sent, queued, failed };
+  }
+
+  private recordPushFailure(payload: PushPayload, error: string) {
+    this.monitoringService.record({
+      level: "warning",
+      source: "push",
+      message: "Push notifikacija nije poslana.",
+      details: {
+        userId: payload.userId,
+        app: payload.app ?? null,
+        title: payload.title,
+        error,
+      },
+    });
+  }
+
+  private isInvalidFcmDeviceTokenError(error: string) {
+    return (
+      error.includes("UNREGISTERED") ||
+      error.includes("NotRegistered") ||
+      error.includes("SENDER_ID_MISMATCH") ||
+      error.includes("SenderId mismatch")
+    );
   }
 
   private async sendFcmNotification(

@@ -71,6 +71,17 @@ export class AppController {
         ? "warning"
         : "ok";
 
+    checks
+      .filter((check) => check.status === "error")
+      .forEach((check) => {
+        this.monitoringService.record({
+          level: "error",
+          source: check.key,
+          message: check.message,
+          details: check.details,
+        });
+      });
+
     return {
       status,
       service: "chin-chin-backend",
