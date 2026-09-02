@@ -3,6 +3,7 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  IsOptional,
   IsString,
   Length,
   Max,
@@ -25,4 +26,9 @@ export class ReservationUnavailableSlotsQueryDto {
   @Min(1)
   @Max(6)
   partySize!: number;
+
+  @IsOptional()
+  @IsString()
+  @Length(2, 120)
+  excludeReservationId?: string;
 }

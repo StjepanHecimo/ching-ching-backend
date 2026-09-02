@@ -93,6 +93,8 @@ type VenueReservationState = {
   liveStartedAt: Date | null;
   reservationWindowStartMinutes: number;
   reservationWindowEndMinutes: number;
+  liveReservationWindowStartMinutes: number;
+  liveReservationWindowEndMinutes: number;
 };
 
 type ReservationWithVenue = Prisma.ReservationGetPayload<{
@@ -414,6 +416,7 @@ export class ReservationsService {
           tableLabel: table.tableLabel,
           roomLabel: table.roomLabel,
         },
+        query.excludeReservationId,
       );
       if (blocked.length) {
         unavailableMinutes.push(minutes);
@@ -2566,7 +2569,8 @@ export class ReservationsService {
       canGoLive,
       liveRadiusMeters: LIVE_RADIUS_METERS,
       liveStartWindow: this.liveStartWindowStatus(
-        venue.reservationWindowEndMinutes,
+        venue.liveReservationWindowStartMinutes,
+        venue.liveReservationWindowEndMinutes,
       ),
       liveBlockReason: !hasApprovedLayout
         ? "LAYOUT_NOT_APPROVED"
@@ -2584,6 +2588,9 @@ export class ReservationsService {
       livePrices: this.livePricingForBoost(effectiveLivePricingBoost),
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+      liveReservationWindowStartMinutes:
+        venue.liveReservationWindowStartMinutes,
+      liveReservationWindowEndMinutes: venue.liveReservationWindowEndMinutes,
     };
   }
 
@@ -2593,8 +2600,13 @@ export class ReservationsService {
       venueId: venue.id,
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+      liveReservationWindowStartMinutes:
+        venue.liveReservationWindowStartMinutes,
+      liveReservationWindowEndMinutes: venue.liveReservationWindowEndMinutes,
       minReservationWindowStartMinutes: RESERVATION_WINDOW_MIN_START_MINUTES,
       maxReservationWindowEndMinutes: RESERVATION_WINDOW_MAX_END_MINUTES,
+      minLiveReservationWindowStartMinutes: LIVE_START_WINDOW_START_MINUTES,
+      maxLiveReservationWindowEndMinutes: LIVE_START_WINDOW_END_MINUTES,
     };
   }
 
@@ -2606,17 +2618,29 @@ export class ReservationsService {
       dto.reservationWindowStartMinutes,
       dto.reservationWindowEndMinutes,
     );
+    const liveReservationWindowStartMinutes =
+      dto.liveReservationWindowStartMinutes ?? LIVE_START_WINDOW_START_MINUTES;
+    const liveReservationWindowEndMinutes =
+      dto.liveReservationWindowEndMinutes ?? LIVE_START_WINDOW_END_MINUTES;
+    this.assertLiveReservationWindow(
+      liveReservationWindowStartMinutes,
+      liveReservationWindowEndMinutes,
+    );
 
     const venue = await this.prisma.venue.update({
       where: { id: venueId },
       data: {
         reservationWindowStartMinutes: dto.reservationWindowStartMinutes,
         reservationWindowEndMinutes: dto.reservationWindowEndMinutes,
+        liveReservationWindowStartMinutes,
+        liveReservationWindowEndMinutes,
       },
       select: {
         id: true,
         reservationWindowStartMinutes: true,
         reservationWindowEndMinutes: true,
+        liveReservationWindowStartMinutes: true,
+        liveReservationWindowEndMinutes: true,
       },
     });
 
@@ -2626,8 +2650,13 @@ export class ReservationsService {
       venueId: venue.id,
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+      liveReservationWindowStartMinutes:
+        venue.liveReservationWindowStartMinutes,
+      liveReservationWindowEndMinutes: venue.liveReservationWindowEndMinutes,
       minReservationWindowStartMinutes: RESERVATION_WINDOW_MIN_START_MINUTES,
       maxReservationWindowEndMinutes: RESERVATION_WINDOW_MAX_END_MINUTES,
+      minLiveReservationWindowStartMinutes: LIVE_START_WINDOW_START_MINUTES,
+      maxLiveReservationWindowEndMinutes: LIVE_START_WINDOW_END_MINUTES,
     };
   }
 
@@ -2645,6 +2674,8 @@ export class ReservationsService {
         advanceChinChinTableIds: true,
         liveChinChinTableIds: true,
         reservationWindowEndMinutes: true,
+        liveReservationWindowStartMinutes: true,
+        liveReservationWindowEndMinutes: true,
         liveStartedAt: true,
       },
     });
@@ -2662,12 +2693,14 @@ export class ReservationsService {
     const existingVenueIsEffectivelyLive = this.isVenueLiveWithinGraceWindow({
       isLive: existingVenue.isLive,
       liveStartedAt: existingVenue.liveStartedAt,
-      reservationWindowEndMinutes: existingVenue.reservationWindowEndMinutes,
+      liveReservationWindowEndMinutes:
+        existingVenue.liveReservationWindowEndMinutes,
     });
 
     if (dto.isLive && !existingVenueIsEffectivelyLive) {
       this.assertLiveStartWindowAllowed(
-        existingVenue.reservationWindowEndMinutes,
+        existingVenue.liveReservationWindowStartMinutes,
+        existingVenue.liveReservationWindowEndMinutes,
       );
     }
 
@@ -3255,6 +3288,8 @@ export class ReservationsService {
         liveStartedAt: true,
         reservationWindowStartMinutes: true,
         reservationWindowEndMinutes: true,
+        liveReservationWindowStartMinutes: true,
+        liveReservationWindowEndMinutes: true,
       },
     });
 
@@ -3267,9 +3302,9 @@ export class ReservationsService {
       isLive: this.isVenueLiveWithinGraceWindow({
         isLive: venue.isLive,
         liveStartedAt: venue.liveStartedAt,
-        reservationWindowEndMinutes:
-          venue.reservationWindowEndMinutes ??
-          DEFAULT_RESERVATION_WINDOW_END_MINUTES,
+        liveReservationWindowEndMinutes:
+          venue.liveReservationWindowEndMinutes ??
+          LIVE_START_WINDOW_END_MINUTES,
       }),
       advanceChinChinTableIds: this.jsonStringArray(
         venue.advanceChinChinTableIds,
@@ -3285,6 +3320,11 @@ export class ReservationsService {
       reservationWindowEndMinutes:
         venue.reservationWindowEndMinutes ??
         DEFAULT_RESERVATION_WINDOW_END_MINUTES,
+      liveReservationWindowStartMinutes:
+        venue.liveReservationWindowStartMinutes ??
+        LIVE_START_WINDOW_START_MINUTES,
+      liveReservationWindowEndMinutes:
+        venue.liveReservationWindowEndMinutes ?? LIVE_START_WINDOW_END_MINUTES,
     };
   }
 
@@ -4002,6 +4042,21 @@ export class ReservationsService {
     }
   }
 
+  private assertLiveReservationWindow(
+    startMinutes: number,
+    endMinutes: number,
+  ) {
+    if (
+      startMinutes < LIVE_START_WINDOW_START_MINUTES ||
+      endMinutes > LIVE_START_WINDOW_END_MINUTES ||
+      endMinutes < startMinutes
+    ) {
+      throw new BadRequestException(
+        "Vrijeme live rezervacija mora biti između 18:00 i 02:00 sljedećeg dana.",
+      );
+    }
+  }
+
   private assertAdvanceReservationHorizon(
     reservationType: "ADVANCE" | "LIVE",
     startAt: Date,
@@ -4037,49 +4092,57 @@ export class ReservationsService {
   }
 
   private liveStartWindowStatus(
-    reservationWindowEndMinutes = LIVE_START_WINDOW_END_MINUTES,
+    liveReservationWindowStartMinutes = LIVE_START_WINDOW_START_MINUTES,
+    liveReservationWindowEndMinutes = LIVE_START_WINDOW_END_MINUTES,
     now = new Date(),
   ) {
+    const startMinutes = this.effectiveLiveStartMinutes(
+      liveReservationWindowStartMinutes,
+    );
     const endMinutes = this.effectiveLiveEndMinutes(
-      reservationWindowEndMinutes,
+      liveReservationWindowEndMinutes,
     );
     const enforced = this.isLiveStartWindowEnforced();
     return {
       enforced,
-      startMinutes: LIVE_START_WINDOW_START_MINUTES,
+      startMinutes,
       endMinutes,
       graceEndMinutes: endMinutes + LIVE_END_GRACE_MINUTES,
-      startLabel: this.formatMinutes(LIVE_START_WINDOW_START_MINUTES),
+      startLabel: this.formatMinutes(startMinutes),
       endLabel: this.formatMinutes(endMinutes),
       graceEndLabel: this.formatMinutes(endMinutes + LIVE_END_GRACE_MINUTES),
       canStartNow:
         !enforced ||
         this.isMinuteInsideWindow(
-          this.zagrebReservationWindowMinutes(
-            now,
-            LIVE_START_WINDOW_START_MINUTES,
-            endMinutes,
-          ),
-          LIVE_START_WINDOW_START_MINUTES,
+          this.zagrebReservationWindowMinutes(now, startMinutes, endMinutes),
+          startMinutes,
           endMinutes,
         ),
-      message: this.liveStartWindowMessage(endMinutes),
+      message: this.liveStartWindowMessage(startMinutes, endMinutes),
     };
   }
 
   private assertLiveStartWindowAllowed(
-    reservationWindowEndMinutes: number,
+    liveReservationWindowStartMinutes: number,
+    liveReservationWindowEndMinutes: number,
     now = new Date(),
   ) {
-    const status = this.liveStartWindowStatus(reservationWindowEndMinutes, now);
+    const status = this.liveStartWindowStatus(
+      liveReservationWindowStartMinutes,
+      liveReservationWindowEndMinutes,
+      now,
+    );
     if (!status.canStartNow) {
       throw new BadRequestException(status.message);
     }
   }
 
-  private liveStartWindowMessage(endMinutes = LIVE_START_WINDOW_END_MINUTES) {
+  private liveStartWindowMessage(
+    startMinutes = LIVE_START_WINDOW_START_MINUTES,
+    endMinutes = LIVE_START_WINDOW_END_MINUTES,
+  ) {
     return `Live sesiju možete pokrenuti od ${this.formatMinutes(
-      LIVE_START_WINDOW_START_MINUTES,
+      startMinutes,
     )} do ${this.formatMinutes(
       endMinutes,
     )}. Ako live ostane uključen, automatski se gasi u ${this.formatMinutes(
@@ -4110,11 +4173,23 @@ export class ReservationsService {
   }
 
   private effectiveLiveEndMinutes(
-    reservationWindowEndMinutes = LIVE_START_WINDOW_END_MINUTES,
+    liveReservationWindowEndMinutes = LIVE_START_WINDOW_END_MINUTES,
   ) {
     return Math.min(
       LIVE_START_WINDOW_END_MINUTES,
-      Math.max(0, reservationWindowEndMinutes),
+      Math.max(0, liveReservationWindowEndMinutes),
+    );
+  }
+
+  private effectiveLiveStartMinutes(
+    liveReservationWindowStartMinutes = LIVE_START_WINDOW_START_MINUTES,
+  ) {
+    return Math.max(
+      LIVE_START_WINDOW_START_MINUTES,
+      Math.min(
+        LIVE_START_WINDOW_END_MINUTES - 1,
+        liveReservationWindowStartMinutes,
+      ),
     );
   }
 
@@ -4139,7 +4214,7 @@ export class ReservationsService {
     venue: {
       isLive: boolean;
       liveStartedAt?: Date | null;
-      reservationWindowEndMinutes?: number | null;
+      liveReservationWindowEndMinutes?: number | null;
     },
     now = new Date(),
   ) {
@@ -4160,7 +4235,7 @@ export class ReservationsService {
       daysSinceLiveStarted * 24 * 60 + this.zagrebMinutesOfDay(now);
     const liveEndWithGraceMinutes =
       this.effectiveLiveEndMinutes(
-        venue.reservationWindowEndMinutes ?? LIVE_START_WINDOW_END_MINUTES,
+        venue.liveReservationWindowEndMinutes ?? LIVE_START_WINDOW_END_MINUTES,
       ) + LIVE_END_GRACE_MINUTES;
 
     return minutesSinceLiveDayStart < liveEndWithGraceMinutes;
@@ -4220,7 +4295,7 @@ export class ReservationsService {
         isLive: true,
         liveChinChinTableIds: true,
         liveStartedAt: true,
-        reservationWindowEndMinutes: true,
+        liveReservationWindowEndMinutes: true,
       },
     });
 
@@ -4236,7 +4311,7 @@ export class ReservationsService {
       !this.isVenueLiveWithinGraceWindow({
         isLive: venue.isLive,
         liveStartedAt: venue.liveStartedAt,
-        reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+        liveReservationWindowEndMinutes: venue.liveReservationWindowEndMinutes,
       })
     ) {
       return this.disableVenueLive(
@@ -4245,7 +4320,8 @@ export class ReservationsService {
         trigger,
         {
           liveStartedAt: venue.liveStartedAt,
-          reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+          liveReservationWindowEndMinutes:
+            venue.liveReservationWindowEndMinutes,
           graceMinutes: LIVE_END_GRACE_MINUTES,
         },
       );

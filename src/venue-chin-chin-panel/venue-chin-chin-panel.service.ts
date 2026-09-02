@@ -487,7 +487,7 @@ export class VenueChinChinPanelService {
           liveChinChinTableIds,
           venue.liveStartedAt,
           venue.liveEndedAt,
-          venue.reservationWindowEndMinutes,
+          venue.liveReservationWindowEndMinutes,
         );
 
         return {
@@ -506,6 +506,10 @@ export class VenueChinChinPanelService {
           liveChinChinTableIds: isLive ? liveChinChinTableIds : [],
           reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
           reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+          liveReservationWindowStartMinutes:
+            venue.liveReservationWindowStartMinutes,
+          liveReservationWindowEndMinutes:
+            venue.liveReservationWindowEndMinutes,
           profile: this.serializeVenueProfile(venue),
           panel: venue.chinChinPanel
             ? this.serializePanel({
@@ -601,7 +605,7 @@ export class VenueChinChinPanelService {
           liveChinChinTableIds,
           venue.liveStartedAt,
           venue.liveEndedAt,
-          venue.reservationWindowEndMinutes,
+          venue.liveReservationWindowEndMinutes,
         );
 
         return {
@@ -620,6 +624,10 @@ export class VenueChinChinPanelService {
           liveChinChinTableIds: isLive ? liveChinChinTableIds : [],
           reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
           reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
+          liveReservationWindowStartMinutes:
+            venue.liveReservationWindowStartMinutes,
+          liveReservationWindowEndMinutes:
+            venue.liveReservationWindowEndMinutes,
           profile: this.serializeVenueProfile(venue),
           panel,
         };
@@ -1152,7 +1160,7 @@ export class VenueChinChinPanelService {
     liveChinChinTableIds: string[],
     liveStartedAt: Date | null,
     liveEndedAt: Date | null,
-    reservationWindowEndMinutes: number | null,
+    liveReservationWindowEndMinutes: number | null,
   ) {
     if (!isLive || liveChinChinTableIds.length === 0 || !liveStartedAt) {
       return false;
@@ -1176,7 +1184,7 @@ export class VenueChinChinPanelService {
       daysSinceLiveStarted * 24 * 60 + this.zagrebMinutesOfDay(now);
     const liveEndWithGraceMinutes =
       this.effectiveLiveEndMinutes(
-        reservationWindowEndMinutes ?? DEFAULT_RESERVATION_WINDOW_END_MINUTES,
+        liveReservationWindowEndMinutes ?? LIVE_START_WINDOW_END_MINUTES,
       ) + LIVE_END_GRACE_MINUTES;
 
     return minutesSinceLiveDayStart < liveEndWithGraceMinutes;

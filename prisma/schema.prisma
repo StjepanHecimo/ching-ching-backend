@@ -294,30 +294,32 @@ model PushNotificationLog {
 }
 
 model Venue {
-  id                            String    @id @default(uuid())
-  ownerId                       String
-  name                          String
-  slug                          String    @unique
-  businessOib                   String?
-  address                       String?
-  city                          String?
-  country                       String    @default("HR")
-  venueType                     String    @default("NIGHT_CAFFE")
-  latitude                      Float?
-  longitude                     Float?
-  profileDescription            String?
-  profileImages                 Json      @default("[]")
-  isLive                        Boolean   @default(false)
-  livePricingBoost              String    @default("DEFAULT")
-  isChinChinPanelListed         Boolean   @default(true)
-  advanceChinChinTableIds       Json      @default("[]")
-  liveChinChinTableIds          Json      @default("[]")
-  liveStartedAt                 DateTime?
-  liveEndedAt                   DateTime?
-  reservationWindowStartMinutes Int       @default(1080)
-  reservationWindowEndMinutes   Int       @default(1320)
-  createdAt                     DateTime  @default(now())
-  updatedAt                     DateTime  @updatedAt
+  id                                String    @id @default(uuid())
+  ownerId                           String
+  name                              String
+  slug                              String    @unique
+  businessOib                       String?
+  address                           String?
+  city                              String?
+  country                           String    @default("HR")
+  venueType                         String    @default("NIGHT_CAFFE")
+  latitude                          Float?
+  longitude                         Float?
+  profileDescription                String?
+  profileImages                     Json      @default("[]")
+  isLive                            Boolean   @default(false)
+  livePricingBoost                  String    @default("DEFAULT")
+  isChinChinPanelListed             Boolean   @default(true)
+  advanceChinChinTableIds           Json      @default("[]")
+  liveChinChinTableIds              Json      @default("[]")
+  liveStartedAt                     DateTime?
+  liveEndedAt                       DateTime?
+  reservationWindowStartMinutes     Int       @default(1080)
+  reservationWindowEndMinutes       Int       @default(1320)
+  liveReservationWindowStartMinutes Int       @default(1080)
+  liveReservationWindowEndMinutes   Int       @default(1560)
+  createdAt                         DateTime  @default(now())
+  updatedAt                         DateTime  @updatedAt
 
   owner                         User                           @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   spaceLayoutProjects           SpaceLayoutProject[]
