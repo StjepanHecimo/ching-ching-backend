@@ -911,6 +911,12 @@ export class ReservationsService {
 
       where.OR = [
         { status: ReservationStatus.PENDING_VENUE_CONFIRMATION },
+        {
+          type: ReservationType.ADVANCE,
+          timeChangeRequests: {
+            some: { status: ReservationTimeChangeRequestStatus.PENDING },
+          },
+        },
         { timeSlotStart },
       ];
     }
