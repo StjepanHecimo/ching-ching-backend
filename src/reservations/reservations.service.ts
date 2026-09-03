@@ -154,6 +154,10 @@ const CUSTOMER_MAX_DAILY_RESERVATION_ATTEMPTS = 8;
 const CUSTOMER_MAX_DAILY_REQUEST_WITHDRAWALS = 8;
 const CUSTOMER_MAX_WEEKLY_CANCELLATIONS = 3;
 const CUSTOMER_MAX_MONTHLY_CANCELLATIONS = 7;
+const CUSTOMER_MAX_TIME_CHANGE_REQUESTS_PER_SHORT_WINDOW = 2;
+const CUSTOMER_TIME_CHANGE_SHORT_WINDOW_MS = 10 * 60 * 1000;
+const CUSTOMER_MAX_TIME_CHANGE_REQUESTS_PER_HOUR = 5;
+const CUSTOMER_TIME_CHANGE_COOLDOWN_MS = 60 * 60 * 1000;
 const CUSTOMER_RELIABLE_CONFIRMED_RESERVATION_COUNT = 3;
 const CUSTOMER_RISKY_WEEKLY_CANCELLATION_COUNT = 3;
 const CUSTOMER_ADMIN_BLOCK_DURATION_HOURS = 24;
@@ -676,6 +680,11 @@ export class ReservationsService {
         "Zahtjev za promjenu termina već čeka potvrdu kafića.",
       );
     }
+
+    await this.assertCustomerTimeChangeRequestRateLimits(
+      customerId,
+      reservation.id,
+    );
 
     const venue = await this.getVenueReservationState(reservation.venueId);
     const requestedStartAt = dto.requestedStartAt;
@@ -1760,6 +1769,53 @@ export class ReservationsService {
 
     if (monthlyCancellationCount >= CUSTOMER_MAX_MONTHLY_CANCELLATIONS) {
       throw new BadRequestException("CUSTOMER_MONTHLY_CANCELLATION_LIMIT");
+    }
+  }
+
+  private async assertCustomerTimeChangeRequestRateLimits(
+    customerId: string,
+    reservationId: string,
+  ) {
+    const now = new Date();
+    const cooldownWindowStart = new Date(
+      now.getTime() - CUSTOMER_TIME_CHANGE_COOLDOWN_MS,
+    );
+
+    const recentRequests =
+      await this.prisma.reservationTimeChangeRequest.findMany({
+        where: {
+          customerId,
+          reservationId,
+          createdAt: { gte: cooldownWindowStart },
+        },
+        select: { createdAt: true },
+        orderBy: { createdAt: "asc" },
+      });
+
+    if (recentRequests.length >= CUSTOMER_MAX_TIME_CHANGE_REQUESTS_PER_HOUR) {
+      throw new BadRequestException("CUSTOMER_TIME_CHANGE_RATE_LIMIT");
+    }
+
+    for (
+      let index = 0;
+      index <=
+      recentRequests.length -
+        CUSTOMER_MAX_TIME_CHANGE_REQUESTS_PER_SHORT_WINDOW;
+      index += 1
+    ) {
+      const firstRequestAt = recentRequests[index].createdAt.getTime();
+      const lastRequestAt =
+        recentRequests[
+          index + CUSTOMER_MAX_TIME_CHANGE_REQUESTS_PER_SHORT_WINDOW - 1
+        ].createdAt.getTime();
+
+      if (
+        lastRequestAt - firstRequestAt <=
+          CUSTOMER_TIME_CHANGE_SHORT_WINDOW_MS &&
+        now.getTime() - lastRequestAt < CUSTOMER_TIME_CHANGE_COOLDOWN_MS
+      ) {
+        throw new BadRequestException("CUSTOMER_TIME_CHANGE_RATE_LIMIT");
+      }
     }
   }
 
