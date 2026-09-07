@@ -3356,11 +3356,87 @@ export class SpaceLayoutsService {
         roomMap.isTemporarySpace =
           roomMap.isTemporarySpace === true ||
           this.isTemporarySpaceForIncomingRoom(spaceRooms, roomMap, roomIndex);
+        this.normalizeVisibleLineFixturesInRoom(roomMap);
         this.applyVipLabelOverridesToRoom(roomMap, venueType);
       }
     }
 
     return nextSuggestion;
+  }
+
+  private normalizeVisibleLineFixturesInRoom(roomMap: Record<string, unknown>) {
+    const fixtures = Array.isArray(roomMap.fixtures) ? roomMap.fixtures : [];
+    const canvas =
+      typeof roomMap.canvas === "object" &&
+      roomMap.canvas &&
+      !Array.isArray(roomMap.canvas)
+        ? (roomMap.canvas as Record<string, unknown>)
+        : {};
+    const canvasWidth = this.numberFrom(canvas.width, 0);
+    const canvasLength = this.numberFrom(canvas.length, 0);
+
+    for (const fixture of fixtures) {
+      if (typeof fixture !== "object" || !fixture || Array.isArray(fixture)) {
+        continue;
+      }
+
+      const fixtureMap = fixture as Record<string, unknown>;
+      const shape = fixtureMap.shape?.toString().trim().toLowerCase();
+      const type = fixtureMap.type?.toString().trim().toLowerCase();
+      if (shape !== "line" || type !== "wall") {
+        continue;
+      }
+      if (
+        this.isLikelyRoomBoundaryLine(fixtureMap, canvasWidth, canvasLength)
+      ) {
+        continue;
+      }
+
+      fixtureMap.type = "partition";
+      if (!fixtureMap.label?.toString().trim()) {
+        fixtureMap.label = "Pregrada";
+      }
+    }
+  }
+
+  private isLikelyRoomBoundaryLine(
+    fixtureMap: Record<string, unknown>,
+    canvasWidth: number,
+    canvasLength: number,
+  ) {
+    if (canvasWidth <= 0 || canvasLength <= 0) {
+      return false;
+    }
+
+    const x = this.numberFrom(fixtureMap.x, 0);
+    const y = this.numberFrom(fixtureMap.y, 0);
+    const dx = this.numberFrom(fixtureMap.width, 0);
+    const dy = this.numberFrom(fixtureMap.height, 0);
+    const endX = x + dx;
+    const endY = y + dy;
+    const minX = Math.min(x, endX);
+    const maxX = Math.max(x, endX);
+    const minY = Math.min(y, endY);
+    const maxY = Math.max(y, endY);
+    const tolerance = Math.max(canvasWidth, canvasLength) * 0.035;
+    const length = Math.hypot(dx, dy);
+    const isHorizontal = Math.abs(dy) <= tolerance;
+    const isVertical = Math.abs(dx) <= tolerance;
+    const nearTop = Math.abs(minY) <= tolerance && Math.abs(maxY) <= tolerance;
+    const nearBottom =
+      Math.abs(minY - canvasLength) <= tolerance &&
+      Math.abs(maxY - canvasLength) <= tolerance;
+    const nearLeft = Math.abs(minX) <= tolerance && Math.abs(maxX) <= tolerance;
+    const nearRight =
+      Math.abs(minX - canvasWidth) <= tolerance &&
+      Math.abs(maxX - canvasWidth) <= tolerance;
+
+    return (
+      (isHorizontal &&
+        (nearTop || nearBottom) &&
+        length >= canvasWidth * 0.6) ||
+      (isVertical && (nearLeft || nearRight) && length >= canvasLength * 0.6)
+    );
   }
 
   private applyVipLabelOverridesToRoom(
@@ -3500,6 +3576,10 @@ export class SpaceLayoutsService {
             },
             {
               type: "input_text",
+              text: "Interior partition override: every plain hand-drawn line inside the room outline is a physical divider/pregrada unless it is clearly part of a labelled table, bar, stage, toilet, stair, door, or text glyph. Return each such line as its own fixture with type=partition and shape=line, using x/y as the visible line start and width/height as the delta to the visible line end. Preserve vertical and horizontal divider lines exactly where drawn, including partial lines that separate VIP/table groups, plus-table groups, bar areas, stage/bina areas, booths/separe cells, or walkways. Do not omit, merge, shorten, stylize, curve, recolor, or replace these plain lines with zones or large rectangles.",
+            },
+            {
+              type: "input_text",
               text: "VIP table override: a VIP Chin-Chin table is represented only by a round table/circle with uppercase VIP written inside the table shape. Do not mark standalone VIP text or VIP written outside a table as a VIP table.",
             },
             {
@@ -3527,6 +3607,10 @@ export class SpaceLayoutsService {
             {
               type: "input_text",
               text: "Support marker rule: treat standalone small square marks as postolje tende, tende supports, stupići, or posts and return them as column/feature fixtures, not customer tables. Do not change Chin-Chin table interpretation: plus marks stay STANDARD, square/box markers inside table circles stay LARGE, and round table/circle shapes with uppercase VIP written inside stay VIP.",
+            },
+            {
+              type: "input_text",
+              text: "Before placing tables, extract all interior sketch lines as partitions. A simple straight line drawn inside the room is a pregrada/divider, not decoration. Return it as type=partition, shape=line with the same approximate start point, end point, length, angle, and position. In particular, lines drawn between table clusters, beside VIP circles, beside plus-marked circles, or along a bar/stage area must remain visible divider fixtures in the draft.",
             },
             {
               type: "input_text",
