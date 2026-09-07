@@ -30,8 +30,8 @@ export class RequestTableUpdatePreviewDto {
   seats?: number;
 
   @IsOptional()
-  @IsIn(["STANDARD", "LARGE"])
-  chinChinTier?: "STANDARD" | "LARGE";
+  @IsIn(["STANDARD", "LARGE", "VIP"])
+  chinChinTier?: "STANDARD" | "LARGE" | "VIP";
 
   @IsOptional()
   @IsIn(["UPDATE", "DELETE"])

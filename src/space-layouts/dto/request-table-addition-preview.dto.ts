@@ -28,8 +28,8 @@ export class RequestTableAdditionPreviewDto {
   seats?: number;
 
   @IsOptional()
-  @IsIn(["STANDARD", "LARGE"])
-  chinChinTier?: "STANDARD" | "LARGE";
+  @IsIn(["STANDARD", "LARGE", "VIP"])
+  chinChinTier?: "STANDARD" | "LARGE" | "VIP";
 
   @IsOptional()
   @IsString()

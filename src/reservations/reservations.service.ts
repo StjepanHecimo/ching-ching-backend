@@ -40,7 +40,7 @@ type ReservableTable = {
   tableId: string;
   tableLabel: string;
   roomLabel: string;
-  chinChinTier: "STANDARD" | "LARGE";
+  chinChinTier: ChinChinTier;
   minPartySize: number;
   maxPartySize: number;
   reservable: boolean;
@@ -141,6 +141,7 @@ type LivePricingBoost =
   | "EVENT"
   | "PREMIUM_STRONG_DAY"
   | "PREMIUM_EVENT";
+type ChinChinTier = "STANDARD" | "LARGE" | "VIP";
 type ConfiguredLivePricingPackage = "DEFAULT" | "PREMIUM";
 type PanelLiveEvent = {
   day: string;
@@ -148,8 +149,7 @@ type PanelLiveEvent = {
 
 const STANDARD_ADVANCE_STANDARD_PRICE_CENTS = 300;
 const STANDARD_ADVANCE_LARGE_PRICE_CENTS = 400;
-const PREMIUM_ADVANCE_STANDARD_PRICE_CENTS = 300;
-const PREMIUM_ADVANCE_LARGE_PRICE_CENTS = 400;
+const STANDARD_ADVANCE_VIP_PRICE_CENTS = 600;
 const CUSTOMER_MAX_DAILY_RESERVATION_ATTEMPTS = 8;
 const CUSTOMER_MAX_DAILY_REQUEST_WITHDRAWALS = 8;
 const CUSTOMER_MAX_WEEKLY_CANCELLATIONS = 3;
@@ -174,15 +174,25 @@ const ADVANCE_TIME_CHANGE_ELIGIBLE_STATUSES: ReservationStatus[] = [
   ReservationStatus.RESERVED,
   ReservationStatus.CHECK_IN_PENDING,
 ];
-const LIVE_PRICING_BOOSTS: Record<
+const NIGHT_CAFFE_LIVE_PRICING_BOOSTS: Record<
   LivePricingBoost,
-  { standardCents: number; largeCents: number }
+  { standardCents: number; largeCents: number; vipCents: number }
 > = {
-  DEFAULT: { standardCents: 300, largeCents: 400 },
-  STRONG_DAY: { standardCents: 500, largeCents: 700 },
-  EVENT: { standardCents: 700, largeCents: 1000 },
-  PREMIUM_STRONG_DAY: { standardCents: 800, largeCents: 1200 },
-  PREMIUM_EVENT: { standardCents: 1000, largeCents: 1500 },
+  DEFAULT: { standardCents: 300, largeCents: 400, vipCents: 600 },
+  STRONG_DAY: { standardCents: 500, largeCents: 700, vipCents: 700 },
+  EVENT: { standardCents: 700, largeCents: 1000, vipCents: 1000 },
+  PREMIUM_STRONG_DAY: { standardCents: 800, largeCents: 1200, vipCents: 1200 },
+  PREMIUM_EVENT: { standardCents: 1000, largeCents: 1500, vipCents: 1500 },
+};
+const CLUB_LIVE_PRICING_BOOSTS: Record<
+  LivePricingBoost,
+  { standardCents: number; largeCents: number; vipCents: number }
+> = {
+  DEFAULT: { standardCents: 300, largeCents: 400, vipCents: 600 },
+  STRONG_DAY: { standardCents: 1000, largeCents: 1500, vipCents: 2000 },
+  EVENT: { standardCents: 1000, largeCents: 1500, vipCents: 2000 },
+  PREMIUM_STRONG_DAY: { standardCents: 1000, largeCents: 1500, vipCents: 2000 },
+  PREMIUM_EVENT: { standardCents: 1000, largeCents: 1500, vipCents: 2000 },
 };
 const LARGE_TABLE_MIN_CAPACITY = 6;
 const MIN_PUBLIC_SELECTION_ALLOWED_RATIO = 0.3;
@@ -306,6 +316,7 @@ export class ReservationsService {
         reservationType,
         slot.startAt,
         this.effectiveConfiguredLivePricingPackage(venue),
+        venue.venueType,
       );
     await this.releaseExpiredReservationLocks(venueId);
     const tables = await this.filterTablesForReservationType(
@@ -344,7 +355,7 @@ export class ReservationsService {
         reservationType === "LIVE" ? effectiveLivePricingBoost : null,
       livePrices:
         reservationType === "LIVE"
-          ? this.livePricingForBoost(effectiveLivePricingBoost)
+          ? this.livePricingForBoost(effectiveLivePricingBoost, venue.venueType)
           : null,
       tables: tables.map((table) => {
         const reserved = this.isTableReservedByKeys(table, blockedTableKeys);
@@ -354,7 +365,7 @@ export class ReservationsService {
             reservationType,
             table,
             effectiveLivePricingBoost,
-            slot.startAt,
+            venue.venueType,
           ),
           livePricingBoost:
             reservationType === "LIVE" ? effectiveLivePricingBoost : null,
@@ -461,6 +472,7 @@ export class ReservationsService {
         reservationType,
         slot.startAt,
         this.effectiveConfiguredLivePricingPackage(venue),
+        venue.venueType,
       );
     await this.releaseExpiredReservationLocks(venueId);
     const tables = await this.filterTablesForReservationType(
@@ -535,7 +547,7 @@ export class ReservationsService {
           reservationType,
           table,
           effectiveLivePricingBoost,
-          slot.startAt,
+          venue.venueType,
         ),
         refundCents: 0,
         currency: "EUR",
@@ -2615,6 +2627,7 @@ export class ReservationsService {
       await this.getAutomaticLivePricingBoostForSlot(
         venueId,
         livePricingReferenceAt,
+        venue.venueType,
       );
     const effectiveLivePricingBoost =
       await this.getEffectiveLivePricingBoostForSlot(
@@ -2622,6 +2635,7 @@ export class ReservationsService {
         "LIVE",
         livePricingReferenceAt,
         configuredLivePricingBoost,
+        venue.venueType,
       );
     return {
       id: venue.id,
@@ -2647,7 +2661,10 @@ export class ReservationsService {
       automaticLivePricingBoost,
       effectiveLivePricingBoost,
       livePricingBoost: effectiveLivePricingBoost,
-      livePrices: this.livePricingForBoost(effectiveLivePricingBoost),
+      livePrices: this.livePricingForBoost(
+        effectiveLivePricingBoost,
+        venue.venueType,
+      ),
       reservationWindowStartMinutes: venue.reservationWindowStartMinutes,
       reservationWindowEndMinutes: venue.reservationWindowEndMinutes,
       liveReservationWindowStartMinutes:
@@ -2889,6 +2906,7 @@ export class ReservationsService {
       await this.getAutomaticLivePricingBoostForSlot(
         venueId,
         livePricingReferenceAt,
+        venue.venueType,
       );
     const effectiveLivePricingBoost =
       await this.getEffectiveLivePricingBoostForSlot(
@@ -2896,6 +2914,7 @@ export class ReservationsService {
         "LIVE",
         livePricingReferenceAt,
         configuredLivePricingBoost,
+        venue.venueType,
       );
 
     const result = {
@@ -2912,7 +2931,10 @@ export class ReservationsService {
       automaticLivePricingBoost,
       effectiveLivePricingBoost,
       livePricingBoost: effectiveLivePricingBoost,
-      livePrices: this.livePricingForBoost(effectiveLivePricingBoost),
+      livePrices: this.livePricingForBoost(
+        effectiveLivePricingBoost,
+        venue.venueType,
+      ),
       liveStartedAt: venue.liveStartedAt,
       liveEndedAt: venue.liveEndedAt,
     };
@@ -3410,7 +3432,11 @@ export class ReservationsService {
         return [];
       }
 
-      return tables.filter((table) => advanceTableIds.has(table.tableId));
+      return tables.filter(
+        (table) =>
+          advanceTableIds.has(table.tableId) &&
+          this.isTableTierAvailableForVenue(table, venue),
+      );
     }
 
     const liveTableIds = new Set(venue.liveChinChinTableIds);
@@ -3418,7 +3444,18 @@ export class ReservationsService {
       return [];
     }
 
-    return tables.filter((table) => liveTableIds.has(table.tableId));
+    return tables.filter(
+      (table) =>
+        liveTableIds.has(table.tableId) &&
+        this.isTableTierAvailableForVenue(table, venue),
+    );
+  }
+
+  private isTableTierAvailableForVenue(
+    table: ReservableTable,
+    venue: VenueReservationState,
+  ) {
+    return table.chinChinTier !== "VIP" || venue.venueType === "CLUB";
   }
 
   private resolveReservationType(
@@ -3489,27 +3526,46 @@ export class ReservationsService {
     type: "ADVANCE" | "LIVE",
     table: ReservableTable,
     livePricingBoost: LivePricingBoost,
-    startAt: Date,
+    venueType: string,
   ) {
+    const isClub = this.normalizeVenueType(venueType) === "CLUB";
+    const tier = this.effectiveChinChinTier(table, isClub);
     const isLarge =
-      table.chinChinTier === "LARGE" ||
-      table.maxPartySize >= LARGE_TABLE_MIN_CAPACITY;
+      tier === "LARGE" || table.maxPartySize >= LARGE_TABLE_MIN_CAPACITY;
 
     if (type === "LIVE") {
-      const livePrices = this.livePricingForBoost(livePricingBoost);
+      const livePrices = this.livePricingForBoost(livePricingBoost, venueType);
+      if (tier === "VIP") {
+        return livePrices.vipCents;
+      }
       return isLarge ? livePrices.largeCents : livePrices.standardCents;
     }
 
-    const isPremiumDay = this.isPremiumLiveBusinessDay(startAt);
-    if (isPremiumDay) {
-      return isLarge
-        ? PREMIUM_ADVANCE_LARGE_PRICE_CENTS
-        : PREMIUM_ADVANCE_STANDARD_PRICE_CENTS;
+    if (tier === "VIP") {
+      return STANDARD_ADVANCE_VIP_PRICE_CENTS;
     }
-
     return isLarge
       ? STANDARD_ADVANCE_LARGE_PRICE_CENTS
       : STANDARD_ADVANCE_STANDARD_PRICE_CENTS;
+  }
+
+  private effectiveChinChinTier(
+    table: {
+      chinChinTier?: ChinChinTier | string | null;
+      maxPartySize: number;
+    },
+    isClub = false,
+  ): ChinChinTier {
+    if (isClub && table.chinChinTier === "VIP") {
+      return "VIP";
+    }
+    if (
+      table.chinChinTier === "LARGE" ||
+      table.maxPartySize >= LARGE_TABLE_MIN_CAPACITY
+    ) {
+      return "LARGE";
+    }
+    return "STANDARD";
   }
 
   private async getEffectiveLivePricingBoostForSlot(
@@ -3517,16 +3573,18 @@ export class ReservationsService {
     type: "ADVANCE" | "LIVE",
     startAt: Date,
     configuredBoost: unknown,
+    venueType: string,
   ): Promise<LivePricingBoost> {
     const normalizedConfiguredBoost =
       this.normalizeConfiguredLivePricingPackage(configuredBoost);
-    if (type !== "LIVE") {
+    if (type !== "LIVE" || this.normalizeVenueType(venueType) !== "CLUB") {
       return "DEFAULT";
     }
 
     return this.getAutomaticLivePricingBoostForSlot(
       venueId,
       startAt,
+      venueType,
       normalizedConfiguredBoost === "PREMIUM",
     );
   }
@@ -3534,27 +3592,24 @@ export class ReservationsService {
   private async getAutomaticLivePricingBoostForSlot(
     venueId: string,
     startAt: Date,
+    venueType: string,
     hasPremiumPricingPackage = false,
   ): Promise<LivePricingBoost> {
+    if (this.normalizeVenueType(venueType) !== "CLUB") {
+      return "DEFAULT";
+    }
+
     const isPremiumLiveDay = this.isPremiumLiveBusinessDay(startAt);
     const hasEvent = await this.venueHasEventForLiveBusinessDay(
       venueId,
       startAt,
     );
 
-    if (hasPremiumPricingPackage && isPremiumLiveDay && hasEvent) {
-      return "PREMIUM_EVENT";
+    if (!isPremiumLiveDay || !hasEvent) {
+      return "DEFAULT";
     }
-    if (hasPremiumPricingPackage && isPremiumLiveDay) {
-      return "PREMIUM_STRONG_DAY";
-    }
-    if (hasEvent) {
-      return "EVENT";
-    }
-    if (isPremiumLiveDay) {
-      return "STRONG_DAY";
-    }
-    return "DEFAULT";
+
+    return hasPremiumPricingPackage ? "PREMIUM_EVENT" : "EVENT";
   }
 
   private async venueHasEventForLiveBusinessDay(
@@ -3741,8 +3796,12 @@ export class ReservationsService {
       : "NIGHT_CAFFE";
   }
 
-  private livePricingForBoost(value: unknown) {
-    return LIVE_PRICING_BOOSTS[this.normalizeLivePricingBoost(value)];
+  private livePricingForBoost(value: unknown, venueType?: string | null) {
+    const pricing =
+      this.normalizeVenueType(venueType) === "CLUB"
+        ? CLUB_LIVE_PRICING_BOOSTS
+        : NIGHT_CAFFE_LIVE_PRICING_BOOSTS;
+    return pricing[this.normalizeLivePricingBoost(value)];
   }
 
   private async assertAdminPassword(adminUserId: string, password: string) {
@@ -4068,6 +4127,10 @@ export class ReservationsService {
 
   private chinChinTierFrom(tableMap: Record<string, unknown>) {
     const tier = tableMap.chinChinTier?.toString().trim().toUpperCase();
+    if (tier === "VIP") {
+      return "VIP" as const;
+    }
+
     if (tier === "LARGE") {
       return "LARGE" as const;
     }
@@ -4080,15 +4143,15 @@ export class ReservationsService {
   }
 
   private maxPartySizeFrom(tableMap: Record<string, unknown>) {
+    const tier = this.chinChinTierFrom(tableMap);
     const fallback =
-      this.chinChinTierFrom(tableMap) === "LARGE"
-        ? LARGE_TABLE_MIN_CAPACITY
-        : 4;
+      tier === "LARGE" || tier === "VIP" ? LARGE_TABLE_MIN_CAPACITY : 4;
     return Math.max(fallback, this.numberFrom(tableMap.maxPartySize, fallback));
   }
 
   private minPartySizeFrom(tableMap: Record<string, unknown>) {
-    const fallback = this.chinChinTierFrom(tableMap) === "LARGE" ? 4 : 2;
+    const tier = this.chinChinTierFrom(tableMap);
+    const fallback = tier === "LARGE" || tier === "VIP" ? 4 : 2;
     return Math.max(fallback, this.numberFrom(tableMap.minPartySize, fallback));
   }
 
