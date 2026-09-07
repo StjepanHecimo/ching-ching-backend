@@ -2,6 +2,7 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
+  IsIn,
   IsOptional,
   IsString,
   Length,
@@ -24,6 +25,12 @@ export class VenueChinChinPanelPromotionalDrinkDto {
   @IsString()
   @Length(1, 40)
   promoSizeLabel?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(3)
+  @IsIn(["STANDARD", "LARGE", "VIP"], { each: true })
+  tableConditionTiers?: Array<"STANDARD" | "LARGE" | "VIP">;
 }
 
 export class VenueChinChinPanelEventDto {

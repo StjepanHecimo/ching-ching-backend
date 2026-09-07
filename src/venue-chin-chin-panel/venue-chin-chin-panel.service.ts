@@ -35,13 +35,17 @@ type NormalizedDrink = {
   sourceText: string;
   promoPriceLabel?: string | null;
   promoSizeLabel?: string | null;
+  tableConditionTiers?: TableConditionTier[];
 };
 
 type DrinkPanelInput = {
   name: string;
   promoPriceLabel?: string | null;
   promoSizeLabel?: string | null;
+  tableConditionTiers?: TableConditionTier[];
 };
+
+type TableConditionTier = "STANDARD" | "LARGE" | "VIP";
 
 const LIVE_START_WINDOW_END_MINUTES = 26 * 60;
 const LIVE_END_GRACE_MINUTES = 0;
@@ -743,7 +747,9 @@ export class VenueChinChinPanelService {
 
     const currency = this.currencyForCountry(venue.country);
     const promotionalDrinkInputs = dto.promotionalDrinks
-      .map((drink) => this.parsePanelDrinkInput(drink, currency))
+      .map((drink) =>
+        this.parsePanelDrinkInput(drink, currency, venue.venueType),
+      )
       .filter((drink): drink is DrinkPanelInput => drink !== null)
       .slice(0, 12);
     if (!promotionalDrinkInputs.length) {
@@ -1101,6 +1107,7 @@ export class VenueChinChinPanelService {
       name: string;
       slug: string;
       country?: string | null;
+      venueType?: string | null;
     };
     currency?: string;
   }) {
@@ -1143,7 +1150,10 @@ export class VenueChinChinPanelService {
       venueId: panel.venueId,
       venue: panel.venue,
       currency,
-      promotionalDrinks: this.serializeDrinkList(panel.promotionalDrinks),
+      promotionalDrinks: this.serializeDrinkList(
+        panel.promotionalDrinks,
+        panel.venue.venueType,
+      ),
       hasDraftBeer: panel.hasDraftBeer,
       draftBeers: this.serializeDrinkList(panel.draftBeers),
       hasEvent: panel.hasEvent,
@@ -1249,7 +1259,10 @@ export class VenueChinChinPanelService {
     return new Date(utcGuess.getTime() + desiredAsUtc - zonedAsUtc);
   }
 
-  private serializeDrinkList(value: Prisma.JsonValue): NormalizedDrink[] {
+  private serializeDrinkList(
+    value: Prisma.JsonValue,
+    venueType?: string | null,
+  ): NormalizedDrink[] {
     if (!Array.isArray(value)) {
       return [];
     }
@@ -1282,6 +1295,10 @@ export class VenueChinChinPanelService {
             item.priceLabel?.toString().trim() ||
             null,
           promoSizeLabel: item.promoSizeLabel?.toString().trim() || null,
+          tableConditionTiers: this.normalizeTableConditionTiers(
+            item.tableConditionTiers,
+            venueType,
+          ),
         };
       })
       .filter((entry): entry is NormalizedDrink => entry !== null);
@@ -1290,6 +1307,7 @@ export class VenueChinChinPanelService {
   private parsePanelDrinkInput(
     value: unknown,
     currency: string,
+    venueType?: string | null,
   ): DrinkPanelInput | null {
     if (typeof value === "string") {
       const name = value.trim();
@@ -1316,7 +1334,47 @@ export class VenueChinChinPanelService {
       : null;
     const rawSize = item.promoSizeLabel?.toString().trim() || "";
     const promoSizeLabel = rawSize ? rawSize.slice(0, 40) : null;
-    return { name, promoPriceLabel, promoSizeLabel };
+    const tableConditionTiers = this.normalizeTableConditionTiers(
+      item.tableConditionTiers,
+      venueType,
+    );
+    return { name, promoPriceLabel, promoSizeLabel, tableConditionTiers };
+  }
+
+  private normalizeTableConditionTiers(
+    value: unknown,
+    venueType?: string | null,
+  ): TableConditionTier[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    const allowed = new Set(this.tableConditionTiersForVenue(venueType));
+    const seen = new Set<TableConditionTier>();
+    const tiers: TableConditionTier[] = [];
+
+    for (const entry of value) {
+      const tier = entry?.toString().trim().toUpperCase();
+      if (tier !== "STANDARD" && tier !== "LARGE" && tier !== "VIP") {
+        continue;
+      }
+      if (!allowed.has(tier) || seen.has(tier)) {
+        continue;
+      }
+
+      seen.add(tier);
+      tiers.push(tier);
+    }
+
+    return tiers;
+  }
+
+  private tableConditionTiersForVenue(
+    venueType?: string | null,
+  ): TableConditionTier[] {
+    return venueType?.trim().toUpperCase() === "CLUB"
+      ? ["STANDARD", "LARGE", "VIP"]
+      : ["STANDARD", "LARGE"];
   }
 
   private formatPromoPriceLabel(rawPrice: string, currency: string) {
@@ -1856,6 +1914,7 @@ export class VenueChinChinPanelService {
       ...this.normalizeDrinkFromBrands(drink.name, fallbackType, brands),
       promoPriceLabel: drink.promoPriceLabel ?? null,
       promoSizeLabel: drink.promoSizeLabel ?? null,
+      tableConditionTiers: drink.tableConditionTiers ?? [],
     }));
   }
 
@@ -1886,6 +1945,7 @@ export class VenueChinChinPanelService {
       sourceText,
       promoPriceLabel: null,
       promoSizeLabel: null,
+      tableConditionTiers: [],
     };
   }
 
