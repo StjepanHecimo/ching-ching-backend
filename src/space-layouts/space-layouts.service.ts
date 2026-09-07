@@ -225,8 +225,12 @@ export class SpaceLayoutsService {
     this.ensureUsableSetupPhotos(dto);
     this.ensureUsableFloorPlanFile(dto.floorPlanFile);
     this.ensureUsableSpace(normalizedSpace.primaryRoom);
+    const venueType = await this.lookupVenueType(dto.venueId);
 
-    return this.createSuggestion(normalizedSpace as Prisma.JsonValue);
+    return this.createSuggestion(
+      normalizedSpace as Prisma.JsonValue,
+      venueType,
+    );
   }
 
   startGeneratePreviewJob(dto: GenerateSpaceLayoutPreviewDto) {
@@ -248,6 +252,7 @@ export class SpaceLayoutsService {
     void this.runGeneratePreviewJob(
       job.id,
       normalizedSpace as Prisma.JsonValue,
+      dto.venueId,
     );
 
     return {
@@ -275,11 +280,13 @@ export class SpaceLayoutsService {
   private async runGeneratePreviewJob(
     jobId: string,
     normalizedSpace: Prisma.JsonValue,
+    venueId?: string,
   ) {
     this.updateGeneratePreviewJob(jobId, { status: "running" });
 
     try {
-      const result = await this.createSuggestion(normalizedSpace);
+      const venueType = await this.lookupVenueType(venueId);
+      const result = await this.createSuggestion(normalizedSpace, venueType);
       this.updateGeneratePreviewJob(jobId, {
         status: "succeeded",
         result,
@@ -315,6 +322,20 @@ export class SpaceLayoutsService {
     });
   }
 
+  private async lookupVenueType(venueId?: string | null) {
+    const id = venueId?.trim();
+    if (!id) {
+      return null;
+    }
+
+    const venue = await this.prisma.venue.findUnique({
+      where: { id },
+      select: { venueType: true },
+    });
+
+    return venue?.venueType ?? null;
+  }
+
   private cleanupGeneratePreviewJobs() {
     const maxAgeMs = 30 * 60 * 1000;
     const now = Date.now();
@@ -328,7 +349,10 @@ export class SpaceLayoutsService {
 
   async generateSuggestion(userId: string, id: string) {
     const project = await this.findOwnedProject(userId, id);
-    const suggestion = await this.createSuggestion(project.space);
+    const suggestion = await this.createSuggestion(
+      project.space,
+      project.venue.venueType,
+    );
 
     const updatedProject = await this.prisma.spaceLayoutProject.update({
       where: { id },
@@ -344,10 +368,13 @@ export class SpaceLayoutsService {
     return this.serializeProject(updatedProject);
   }
 
-  private async createSuggestion(space: Prisma.JsonValue) {
+  private async createSuggestion(
+    space: Prisma.JsonValue,
+    venueType?: string | null,
+  ) {
     return this.configService.get<string>("SPACE_LAYOUT_AI_PROVIDER") ===
       "openai"
-      ? this.createOpenAiSuggestion(space)
+      ? this.createOpenAiSuggestion(space, venueType)
       : this.createStubSuggestion(space);
   }
 
@@ -3227,7 +3254,10 @@ export class SpaceLayoutsService {
     };
   }
 
-  private async createOpenAiSuggestion(spaceJson: Prisma.JsonValue) {
+  private async createOpenAiSuggestion(
+    spaceJson: Prisma.JsonValue,
+    venueType?: string | null,
+  ) {
     const apiKey = this.configService.get<string>("OPENAI_API_KEY");
 
     if (!apiKey) {
@@ -3241,7 +3271,11 @@ export class SpaceLayoutsService {
       this.configService.get<string>("OPENAI_MODEL") ??
       "gpt-4o-mini";
 
-    const requestBody = this.createOpenAiLayoutRequest(model, spaceJson);
+    const requestBody = this.createOpenAiLayoutRequest(
+      model,
+      spaceJson,
+      venueType,
+    );
     const requestSummary = this.createOpenAiRequestSummary(
       spaceJson,
       requestBody,
@@ -3281,7 +3315,7 @@ export class SpaceLayoutsService {
     );
 
     return {
-      ...this.applySpaceRoomMetadataToSuggestion(parsed, spaceJson),
+      ...this.applySpaceRoomMetadataToSuggestion(parsed, spaceJson, venueType),
       source: "openai",
       model,
     };
@@ -3290,6 +3324,7 @@ export class SpaceLayoutsService {
   private applySpaceRoomMetadataToSuggestion(
     suggestion: Record<string, unknown>,
     spaceJson: Prisma.JsonValue,
+    venueType?: string | null,
   ) {
     const spaceRooms = this.readSpaceRooms(spaceJson);
     if (!spaceRooms.length || !Array.isArray(suggestion.layoutOptions)) {
@@ -3321,10 +3356,53 @@ export class SpaceLayoutsService {
         roomMap.isTemporarySpace =
           roomMap.isTemporarySpace === true ||
           this.isTemporarySpaceForIncomingRoom(spaceRooms, roomMap, roomIndex);
+        this.applyVipLabelOverridesToRoom(roomMap, venueType);
       }
     }
 
     return nextSuggestion;
+  }
+
+  private applyVipLabelOverridesToRoom(
+    roomMap: Record<string, unknown>,
+    venueType?: string | null,
+  ) {
+    if (this.normalizeVenueType(venueType) !== "CLUB") {
+      return;
+    }
+
+    const tables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+    for (const table of tables) {
+      if (typeof table !== "object" || !table || Array.isArray(table)) {
+        continue;
+      }
+
+      const tableMap = table as Record<string, unknown>;
+      if (!this.tableLabelContainsVip(tableMap.label)) {
+        continue;
+      }
+
+      tableMap.tableRole = "CHIN_CHIN_TABLE";
+      tableMap.chinChinCandidate = true;
+      tableMap.chinChinTier = "VIP";
+      tableMap.seats = Math.max(this.numberFrom(tableMap.seats, 6), 6);
+      tableMap.maxPartySize = Math.max(
+        this.numberFrom(tableMap.maxPartySize, 6),
+        6,
+      );
+      tableMap.minPartySize = Math.min(
+        this.numberFrom(tableMap.minPartySize, 2),
+        4,
+      );
+      tableMap.tablePhotoStatus = tableMap.tablePhotoId
+        ? "APPROVED_WITH_PHOTO"
+        : "MISSING_PHOTO";
+    }
+  }
+
+  private tableLabelContainsVip(value: unknown) {
+    const label = value?.toString().trim().toUpperCase() ?? "";
+    return /(^|[^A-Z0-9])VIP([^A-Z0-9]|$)/.test(label);
   }
 
   private createOpenAiRequestSummary(
@@ -3394,8 +3472,10 @@ export class SpaceLayoutsService {
   private createOpenAiLayoutRequest(
     model: string,
     spaceJson: Prisma.JsonValue,
+    venueType?: string | null,
   ) {
     const promptSpaceJson = this.createPromptSafeSpaceJson(spaceJson);
+    const normalizedVenueType = this.normalizeVenueType(venueType);
     const imageDetail =
       this.configService.get<string>("OPENAI_SPACE_LAYOUT_IMAGE_DETAIL") ??
       "high";
@@ -3424,6 +3504,13 @@ export class SpaceLayoutsService {
             },
             {
               type: "input_text",
+              text:
+                normalizedVenueType === "CLUB"
+                  ? "Venue type is CLUB. VIP tables are allowed and important. During OCR/text inspection, if you see uppercase VIP inside a round table/circle, that table must be returned as tableRole=CHIN_CHIN_TABLE, chinChinCandidate=true, chinChinTier=VIP, label=VIP, seats>=6, and maxPartySize>=6. VIP inside a circle has priority over generic ordinary-table rules."
+                  : "Venue type is NIGHT_CAFFE or unknown. Do not create VIP tables unless the input explicitly supports club VIP handling.",
+            },
+            {
+              type: "input_text",
               text: "Room feature flags in JSON, such as hasToilet, hasBar, hasStage, hasBilliardsOrDarts, hasTv, hasDjMusicCorner, hasStairs, and hasMainWalkway, are auxiliary hints only. Use them to pay extra attention to matching labels and shapes in the uploaded sketch, but do not invent or force a fixture solely because a flag is true. The uploaded floor plan/sketch remains the primary source for exact position, size, and whether the object is actually visible.",
             },
           ],
@@ -3444,6 +3531,13 @@ export class SpaceLayoutsService {
             {
               type: "input_text",
               text: "Final VIP override: only a round table/circle with uppercase VIP inside the circle may produce chinChinTier=VIP. If VIP is outside the circle, use the other table markers instead.",
+            },
+            {
+              type: "input_text",
+              text:
+                normalizedVenueType === "CLUB"
+                  ? "Club VIP OCR check: before final JSON, scan every round/circle table for the letters VIP drawn inside the circle. For each such table, force label=VIP, tableRole=CHIN_CHIN_TABLE, chinChinCandidate=true, chinChinTier=VIP, seats>=6, maxPartySize>=6, and tablePhotoStatus=MISSING_PHOTO if no photo id is available."
+                  : "VIP is not part of the normal night-caffe table tiers. Use STANDARD/LARGE table tiers unless this request is explicitly for a CLUB.",
             },
             {
               type: "input_text",

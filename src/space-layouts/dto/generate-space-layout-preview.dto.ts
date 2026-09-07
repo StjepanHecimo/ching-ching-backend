@@ -5,6 +5,7 @@ import {
   IsArray,
   IsDefined,
   IsOptional,
+  IsUUID,
   ValidateNested,
 } from "class-validator";
 import { LayoutPhotoDto } from "./layout-photo.dto";
@@ -12,6 +13,10 @@ import { LayoutReferenceFileDto } from "./layout-reference-file.dto";
 import { SpaceShapeDto } from "./space-shape.dto";
 
 export class GenerateSpaceLayoutPreviewDto {
+  @IsOptional()
+  @IsUUID()
+  venueId?: string;
+
   @IsDefined()
   @ValidateNested()
   @Type(() => LayoutReferenceFileDto)
