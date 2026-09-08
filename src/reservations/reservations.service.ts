@@ -4934,11 +4934,15 @@ export class ReservationsService {
       ? this.normalizeTableIdentity(roomLabel)
       : "";
 
-    if (normalizedRoomLabel && normalizedTableId) {
-      keys.add(`room:${normalizedRoomLabel}|id:${normalizedTableId}`);
-    } else if (normalizedTableId) {
-      keys.add(`id:${normalizedTableId}`);
+    if (normalizedTableId) {
+      keys.add(
+        normalizedRoomLabel
+          ? `room:${normalizedRoomLabel}|id:${normalizedTableId}`
+          : `id:${normalizedTableId}`,
+      );
+      return [...keys];
     }
+
     if (normalizedRoomLabel && normalizedTableLabel) {
       keys.add(`room:${normalizedRoomLabel}|label:${normalizedTableLabel}`);
     }
