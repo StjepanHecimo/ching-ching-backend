@@ -1628,6 +1628,9 @@ export class SpaceLayoutsService {
     }
 
     const approved = dto.decision === "approve";
+    const adjustedLayout = dto.adjustedLayout
+      ? this.ensureUniqueLayoutTableIds(dto.adjustedLayout)
+      : null;
     const updatedProject = await this.prisma.spaceLayoutProject.update({
       where: { id },
       data: {
@@ -1635,11 +1638,11 @@ export class SpaceLayoutsService {
           ? SpaceLayoutStatus.APPROVED
           : SpaceLayoutStatus.CHIN_CHIN_CHANGES_REQUESTED,
         approvedAt: approved ? new Date() : null,
-        savedLayout: dto.adjustedLayout
+        savedLayout: adjustedLayout
           ? ({
               adjustedBy: "chin-chin-team",
               adjustedAt: new Date().toISOString(),
-              layout: dto.adjustedLayout,
+              layout: adjustedLayout,
               previousSavedLayout: project.savedLayout,
             } as Prisma.InputJsonValue)
           : undefined,
@@ -2257,6 +2260,7 @@ export class SpaceLayoutsService {
     previousStatus: SpaceLayoutStatus;
     adminTablePhotos: Array<Record<string, unknown>>;
   }) {
+    const layoutWithUniqueTableIds = this.ensureUniqueLayoutTableIds(layout);
     const existingHistory = Array.isArray(previousSavedLayout.versionHistory)
       ? previousSavedLayout.versionHistory.filter(
           (entry): entry is Record<string, unknown> =>
@@ -2279,7 +2283,7 @@ export class SpaceLayoutsService {
       adjustedBy,
       adjustedAt: approvedAt,
       approvedAt,
-      layout,
+      layout: layoutWithUniqueTableIds,
       photos: mergedPhotos,
     };
 
@@ -2292,9 +2296,54 @@ export class SpaceLayoutsService {
       adjustedAt: approvedAt,
       approvedAt,
       layoutVersion: nextVersion,
-      layout,
+      layout: layoutWithUniqueTableIds,
       versionHistory: [...existingHistory, versionEntry],
     };
+  }
+
+  private ensureUniqueLayoutTableIds(layout: Record<string, unknown>) {
+    const clonedLayout = JSON.parse(JSON.stringify(layout)) as Record<
+      string,
+      unknown
+    >;
+    const rooms = Array.isArray(clonedLayout.rooms) ? clonedLayout.rooms : [];
+    const usedTableIds = new Set<string>();
+
+    clonedLayout.rooms = rooms.map((room, roomIndex) => {
+      if (typeof room !== "object" || !room || Array.isArray(room)) {
+        return room;
+      }
+
+      const roomMap = room as Record<string, unknown>;
+      const roomLabel =
+        roomMap.roomLabel?.toString().trim() || `Prostorija ${roomIndex + 1}`;
+      const roomSlug =
+        this.slugForLayoutId(roomLabel) || `room-${roomIndex + 1}`;
+      const tables = Array.isArray(roomMap.tables) ? roomMap.tables : [];
+
+      roomMap.tables = tables.map((table, tableIndex) => {
+        if (typeof table !== "object" || !table || Array.isArray(table)) {
+          return table;
+        }
+
+        const tableMap = table as Record<string, unknown>;
+        const rawId = tableMap.id?.toString().trim() || "";
+        const rawLabel = tableMap.label?.toString().trim() || "";
+        const fallbackId = `table-${tableIndex + 1}`;
+        const baseId =
+          rawId && !usedTableIds.has(rawId)
+            ? rawId
+            : `${roomSlug}-${this.slugForLayoutId(rawId || rawLabel || fallbackId) || fallbackId}`;
+        const uniqueId = this.nextUniqueLayoutTableId(baseId, usedTableIds);
+        tableMap.id = uniqueId;
+        usedTableIds.add(uniqueId);
+        return tableMap;
+      });
+
+      return roomMap;
+    });
+
+    return clonedLayout;
   }
 
   private normalizeAdminTablePhotos(photos?: Array<Record<string, unknown>>) {
