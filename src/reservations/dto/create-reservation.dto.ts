@@ -1,16 +1,40 @@
 import { Type } from "class-transformer";
 import {
+  ArrayMaxSize,
   IsDateString,
   IsEmail,
   IsIn,
   IsInt,
+  IsArray,
   IsNumber,
   IsOptional,
   IsString,
   Length,
   Max,
   Min,
+  ValidateNested,
 } from "class-validator";
+
+export class PreferredReservationDrinkDto {
+  @IsString()
+  @Length(1, 120)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  sizeLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  priceLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  mixerLabel?: string;
+}
 
 export class CreateReservationDto {
   @IsIn(["ADVANCE", "LIVE"])
@@ -80,4 +104,11 @@ export class CreateReservationDto {
   @IsString()
   @Length(1, 40)
   preferredDrinkPriceLabel?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(12)
+  @ValidateNested({ each: true })
+  @Type(() => PreferredReservationDrinkDto)
+  preferredDrinks?: PreferredReservationDrinkDto[];
 }

@@ -35,6 +35,7 @@ type NormalizedDrink = {
   sourceText: string;
   promoPriceLabel?: string | null;
   promoSizeLabel?: string | null;
+  mixerLabel?: string | null;
   tableConditionTiers?: TableConditionTier[];
 };
 
@@ -42,6 +43,7 @@ type DrinkPanelInput = {
   name: string;
   promoPriceLabel?: string | null;
   promoSizeLabel?: string | null;
+  mixerLabel?: string | null;
   tableConditionTiers?: TableConditionTier[];
 };
 
@@ -1297,6 +1299,7 @@ export class VenueChinChinPanelService {
             item.priceLabel?.toString().trim() ||
             null,
           promoSizeLabel: item.promoSizeLabel?.toString().trim() || null,
+          mixerLabel: item.mixerLabel?.toString().trim() || null,
           tableConditionTiers: this.normalizeTableConditionTiers(
             item.tableConditionTiers,
             venueType,
@@ -1336,11 +1339,19 @@ export class VenueChinChinPanelService {
       : null;
     const rawSize = item.promoSizeLabel?.toString().trim() || "";
     const promoSizeLabel = rawSize ? rawSize.slice(0, 40) : null;
+    const rawMixer = item.mixerLabel?.toString().trim() || "";
+    const mixerLabel = rawMixer ? rawMixer.slice(0, 40) : null;
     const tableConditionTiers = this.normalizeTableConditionTiers(
       item.tableConditionTiers,
       venueType,
     );
-    return { name, promoPriceLabel, promoSizeLabel, tableConditionTiers };
+    return {
+      name,
+      promoPriceLabel,
+      promoSizeLabel,
+      mixerLabel,
+      tableConditionTiers,
+    };
   }
 
   private normalizeTableConditionTiers(
@@ -1916,6 +1927,7 @@ export class VenueChinChinPanelService {
       ...this.normalizeDrinkFromBrands(drink.name, fallbackType, brands),
       promoPriceLabel: drink.promoPriceLabel ?? null,
       promoSizeLabel: drink.promoSizeLabel ?? null,
+      mixerLabel: drink.mixerLabel ?? null,
       tableConditionTiers: drink.tableConditionTiers ?? [],
     }));
   }

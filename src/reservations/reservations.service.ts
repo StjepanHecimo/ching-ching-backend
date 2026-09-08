@@ -527,6 +527,9 @@ export class ReservationsService {
       options?.customerId,
     );
 
+    const preferredDrinks = this.normalizeReservationPreferredDrinks(dto);
+    const firstPreferredDrink = preferredDrinks[0];
+
     const reservation = await this.prisma.reservation.create({
       data: {
         venueId,
@@ -557,9 +560,16 @@ export class ReservationsService {
         customerName: dto.customerName?.trim(),
         customerEmail: dto.customerEmail?.trim().toLowerCase(),
         customerPhone: dto.customerPhone?.trim(),
-        preferredDrinkName: dto.preferredDrinkName?.trim(),
-        preferredDrinkSizeLabel: dto.preferredDrinkSizeLabel?.trim(),
-        preferredDrinkPriceLabel: dto.preferredDrinkPriceLabel?.trim(),
+        preferredDrinkName:
+          firstPreferredDrink?.name ?? dto.preferredDrinkName?.trim(),
+        preferredDrinkSizeLabel:
+          firstPreferredDrink?.sizeLabel ?? dto.preferredDrinkSizeLabel?.trim(),
+        preferredDrinkPriceLabel:
+          firstPreferredDrink?.priceLabel ??
+          dto.preferredDrinkPriceLabel?.trim(),
+        preferredDrinks: preferredDrinks.length
+          ? (preferredDrinks as Prisma.InputJsonValue)
+          : undefined,
         notes: dto.notes?.trim(),
       },
       include: { venue: true },
@@ -5545,6 +5555,95 @@ export class ReservationsService {
     }
   }
 
+  private normalizeReservationPreferredDrinks(dto: CreateReservationDto) {
+    const source = Array.isArray(dto.preferredDrinks)
+      ? dto.preferredDrinks
+      : [];
+    const normalized = source
+      .map((drink) => ({
+        name: drink.name?.toString().trim().slice(0, 120) ?? "",
+        sizeLabel: drink.sizeLabel?.toString().trim().slice(0, 40) || undefined,
+        priceLabel:
+          drink.priceLabel?.toString().trim().slice(0, 40) || undefined,
+        mixerLabel:
+          drink.mixerLabel?.toString().trim().slice(0, 40) || undefined,
+      }))
+      .filter((drink) => drink.name.length > 0);
+
+    if (normalized.length) {
+      return normalized;
+    }
+
+    const fallbackName = dto.preferredDrinkName?.trim().slice(0, 120);
+    if (!fallbackName) {
+      return [];
+    }
+
+    return [
+      {
+        name: fallbackName,
+        sizeLabel:
+          dto.preferredDrinkSizeLabel?.trim().slice(0, 40) || undefined,
+        priceLabel:
+          dto.preferredDrinkPriceLabel?.trim().slice(0, 40) || undefined,
+        mixerLabel: undefined,
+      },
+    ];
+  }
+
+  private serializePreferredReservationDrinks(
+    value: Prisma.JsonValue | null,
+    fallback: {
+      name?: string | null;
+      sizeLabel?: string | null;
+      priceLabel?: string | null;
+    },
+  ) {
+    if (Array.isArray(value)) {
+      return value
+        .map((entry) => {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+            return null;
+          }
+          const item = entry as Record<string, unknown>;
+          const name = item.name?.toString().trim() ?? "";
+          if (!name) {
+            return null;
+          }
+          return {
+            name,
+            sizeLabel: item.sizeLabel?.toString().trim() || null,
+            priceLabel: item.priceLabel?.toString().trim() || null,
+            mixerLabel: item.mixerLabel?.toString().trim() || null,
+          };
+        })
+        .filter(
+          (
+            drink,
+          ): drink is {
+            name: string;
+            sizeLabel: string | null;
+            priceLabel: string | null;
+            mixerLabel: string | null;
+          } => drink !== null,
+        );
+    }
+
+    const fallbackName = fallback.name?.trim();
+    if (!fallbackName) {
+      return [];
+    }
+
+    return [
+      {
+        name: fallbackName,
+        sizeLabel: fallback.sizeLabel?.trim() || null,
+        priceLabel: fallback.priceLabel?.trim() || null,
+        mixerLabel: null,
+      },
+    ];
+  }
+
   private serializeReservation(reservation: {
     id: string;
     venueId: string;
@@ -5581,6 +5680,7 @@ export class ReservationsService {
     preferredDrinkName: string | null;
     preferredDrinkSizeLabel: string | null;
     preferredDrinkPriceLabel: string | null;
+    preferredDrinks: Prisma.JsonValue | null;
     notes: string | null;
     source: string;
     createdAt: Date;
@@ -5644,6 +5744,14 @@ export class ReservationsService {
       preferredDrinkName: reservation.preferredDrinkName,
       preferredDrinkSizeLabel: reservation.preferredDrinkSizeLabel,
       preferredDrinkPriceLabel: reservation.preferredDrinkPriceLabel,
+      preferredDrinks: this.serializePreferredReservationDrinks(
+        reservation.preferredDrinks,
+        {
+          name: reservation.preferredDrinkName,
+          sizeLabel: reservation.preferredDrinkSizeLabel,
+          priceLabel: reservation.preferredDrinkPriceLabel,
+        },
+      ),
       notes: statusReason ? null : reservation.notes,
       statusReason,
       pendingTimeChangeRequest: reservation.timeChangeRequests?.[0]
@@ -5835,6 +5943,7 @@ export class ReservationsService {
     preferredDrinkName: string | null;
     preferredDrinkSizeLabel: string | null;
     preferredDrinkPriceLabel: string | null;
+    preferredDrinks: Prisma.JsonValue | null;
     notes: string | null;
     source: string;
     createdAt: Date;

@@ -461,6 +461,7 @@ model Reservation {
   preferredDrinkName         String?
   preferredDrinkSizeLabel    String?
   preferredDrinkPriceLabel   String?
+  preferredDrinks            Json?
   notes                      String?
   source                     String            @default("user-app")
   createdAt                  DateTime          @default(now())
