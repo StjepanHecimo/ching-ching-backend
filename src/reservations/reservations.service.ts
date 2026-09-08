@@ -4145,13 +4145,13 @@ export class ReservationsService {
   private maxPartySizeFrom(tableMap: Record<string, unknown>) {
     const tier = this.chinChinTierFrom(tableMap);
     const fallback =
-      tier === "LARGE" || tier === "VIP" ? LARGE_TABLE_MIN_CAPACITY : 4;
+      tier === "VIP" ? 12 : tier === "LARGE" ? LARGE_TABLE_MIN_CAPACITY : 4;
     return Math.max(fallback, this.numberFrom(tableMap.maxPartySize, fallback));
   }
 
   private minPartySizeFrom(tableMap: Record<string, unknown>) {
     const tier = this.chinChinTierFrom(tableMap);
-    const fallback = tier === "LARGE" || tier === "VIP" ? 4 : 2;
+    const fallback = tier === "VIP" ? 6 : tier === "LARGE" ? 4 : 2;
     return Math.max(fallback, this.numberFrom(tableMap.minPartySize, fallback));
   }
 
