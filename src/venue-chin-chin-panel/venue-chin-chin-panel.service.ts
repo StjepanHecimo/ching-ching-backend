@@ -523,6 +523,7 @@ export class VenueChinChinPanelService {
                   name: venue.name,
                   slug: venue.slug,
                   country: venue.country,
+                  venueType: venue.venueType,
                 },
               })
             : null,
@@ -594,6 +595,7 @@ export class VenueChinChinPanelService {
             name: venue.name,
             slug: venue.slug,
             country: venue.country,
+            venueType: venue.venueType,
           },
         });
 
