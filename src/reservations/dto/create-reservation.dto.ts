@@ -29,7 +29,7 @@ export class CreateReservationDto {
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(6)
+  @Max(12)
   partySize!: number;
 
   @IsOptional()
@@ -65,4 +65,19 @@ export class CreateReservationDto {
   @IsString()
   @Length(2, 500)
   notes?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 120)
+  preferredDrinkName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  preferredDrinkSizeLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  preferredDrinkPriceLabel?: string;
 }

@@ -557,6 +557,9 @@ export class ReservationsService {
         customerName: dto.customerName?.trim(),
         customerEmail: dto.customerEmail?.trim().toLowerCase(),
         customerPhone: dto.customerPhone?.trim(),
+        preferredDrinkName: dto.preferredDrinkName?.trim(),
+        preferredDrinkSizeLabel: dto.preferredDrinkSizeLabel?.trim(),
+        preferredDrinkPriceLabel: dto.preferredDrinkPriceLabel?.trim(),
         notes: dto.notes?.trim(),
       },
       include: { venue: true },
@@ -5575,6 +5578,9 @@ export class ReservationsService {
     customerName: string | null;
     customerEmail: string | null;
     customerPhone: string | null;
+    preferredDrinkName: string | null;
+    preferredDrinkSizeLabel: string | null;
+    preferredDrinkPriceLabel: string | null;
     notes: string | null;
     source: string;
     createdAt: Date;
@@ -5635,6 +5641,9 @@ export class ReservationsService {
       customerName: reservation.customerName,
       customerEmail: reservation.customerEmail,
       customerPhone: reservation.customerPhone,
+      preferredDrinkName: reservation.preferredDrinkName,
+      preferredDrinkSizeLabel: reservation.preferredDrinkSizeLabel,
+      preferredDrinkPriceLabel: reservation.preferredDrinkPriceLabel,
       notes: statusReason ? null : reservation.notes,
       statusReason,
       pendingTimeChangeRequest: reservation.timeChangeRequests?.[0]
@@ -5823,6 +5832,9 @@ export class ReservationsService {
     customerName: string | null;
     customerEmail: string | null;
     customerPhone: string | null;
+    preferredDrinkName: string | null;
+    preferredDrinkSizeLabel: string | null;
+    preferredDrinkPriceLabel: string | null;
     notes: string | null;
     source: string;
     createdAt: Date;

@@ -458,6 +458,9 @@ model Reservation {
   customerName               String?
   customerEmail              String?
   customerPhone              String?
+  preferredDrinkName         String?
+  preferredDrinkSizeLabel    String?
+  preferredDrinkPriceLabel   String?
   notes                      String?
   source                     String            @default("user-app")
   createdAt                  DateTime          @default(now())
