@@ -32,6 +32,16 @@ export class VenueChinChinPanelPromotionalDrinkDto {
   mixerLabel?: string;
 
   @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  mixerName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 20)
+  mixerQuantity?: string;
+
+  @IsOptional()
   @IsArray()
   @ArrayMaxSize(3)
   @IsIn(["STANDARD", "LARGE", "VIP"], { each: true })

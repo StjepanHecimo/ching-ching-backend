@@ -36,6 +36,8 @@ type NormalizedDrink = {
   promoPriceLabel?: string | null;
   promoSizeLabel?: string | null;
   mixerLabel?: string | null;
+  mixerName?: string | null;
+  mixerQuantity?: string | null;
   tableConditionTiers?: TableConditionTier[];
 };
 
@@ -44,6 +46,8 @@ type DrinkPanelInput = {
   promoPriceLabel?: string | null;
   promoSizeLabel?: string | null;
   mixerLabel?: string | null;
+  mixerName?: string | null;
+  mixerQuantity?: string | null;
   tableConditionTiers?: TableConditionTier[];
 };
 
@@ -1287,6 +1291,8 @@ export class VenueChinChinPanelService {
           return null;
         }
 
+        const mixerParts = this.parseMixerParts(item);
+
         return {
           name,
           type: item.type?.toString() || "OTHER",
@@ -1299,7 +1305,9 @@ export class VenueChinChinPanelService {
             item.priceLabel?.toString().trim() ||
             null,
           promoSizeLabel: item.promoSizeLabel?.toString().trim() || null,
-          mixerLabel: item.mixerLabel?.toString().trim() || null,
+          mixerLabel: mixerParts.mixerLabel,
+          mixerName: mixerParts.mixerName,
+          mixerQuantity: mixerParts.mixerQuantity,
           tableConditionTiers: this.normalizeTableConditionTiers(
             item.tableConditionTiers,
             venueType,
@@ -1339,8 +1347,7 @@ export class VenueChinChinPanelService {
       : null;
     const rawSize = item.promoSizeLabel?.toString().trim() || "";
     const promoSizeLabel = rawSize ? rawSize.slice(0, 40) : null;
-    const rawMixer = item.mixerLabel?.toString().trim() || "";
-    const mixerLabel = rawMixer ? rawMixer.slice(0, 40) : null;
+    const mixerParts = this.parseMixerParts(item);
     const tableConditionTiers = this.normalizeTableConditionTiers(
       item.tableConditionTiers,
       venueType,
@@ -1349,8 +1356,45 @@ export class VenueChinChinPanelService {
       name,
       promoPriceLabel,
       promoSizeLabel,
-      mixerLabel,
+      mixerLabel: mixerParts.mixerLabel,
+      mixerName: mixerParts.mixerName,
+      mixerQuantity: mixerParts.mixerQuantity,
       tableConditionTiers,
+    };
+  }
+
+  private parseMixerParts(item: Record<string, unknown>): {
+    mixerLabel: string | null;
+    mixerName: string | null;
+    mixerQuantity: string | null;
+  } {
+    const rawLabel = item.mixerLabel?.toString().trim() || "";
+    let mixerName = item.mixerName?.toString().trim().slice(0, 40) || "";
+    let mixerQuantity =
+      item.mixerQuantity?.toString().trim().slice(0, 20) || "";
+
+    if (!mixerName && rawLabel) {
+      const labelMatch = rawLabel.match(/^(\d+)\s*x\s+(.+)$/i);
+      if (labelMatch) {
+        mixerQuantity = mixerQuantity || labelMatch[1].trim();
+        mixerName = labelMatch[2].trim().slice(0, 40);
+      } else {
+        mixerName = rawLabel.slice(0, 40);
+      }
+    }
+
+    const mixerLabel = mixerName
+      ? mixerQuantity
+        ? `${mixerQuantity}x ${mixerName}`.slice(0, 40)
+        : mixerName
+      : rawLabel
+        ? rawLabel.slice(0, 40)
+        : null;
+
+    return {
+      mixerLabel,
+      mixerName: mixerName || null,
+      mixerQuantity: mixerQuantity || null,
     };
   }
 
@@ -1928,6 +1972,8 @@ export class VenueChinChinPanelService {
       promoPriceLabel: drink.promoPriceLabel ?? null,
       promoSizeLabel: drink.promoSizeLabel ?? null,
       mixerLabel: drink.mixerLabel ?? null,
+      mixerName: drink.mixerName ?? null,
+      mixerQuantity: drink.mixerQuantity ?? null,
       tableConditionTiers: drink.tableConditionTiers ?? [],
     }));
   }

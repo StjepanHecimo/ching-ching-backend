@@ -34,6 +34,16 @@ export class PreferredReservationDrinkDto {
   @IsString()
   @Length(1, 40)
   mixerLabel?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 40)
+  mixerName?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(1, 20)
+  mixerQuantity?: string;
 }
 
 export class CreateReservationDto {

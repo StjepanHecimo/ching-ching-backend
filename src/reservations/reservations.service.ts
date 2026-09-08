@@ -5560,14 +5560,21 @@ export class ReservationsService {
       ? dto.preferredDrinks
       : [];
     const normalized = source
-      .map((drink) => ({
-        name: drink.name?.toString().trim().slice(0, 120) ?? "",
-        sizeLabel: drink.sizeLabel?.toString().trim().slice(0, 40) || undefined,
-        priceLabel:
-          drink.priceLabel?.toString().trim().slice(0, 40) || undefined,
-        mixerLabel:
-          drink.mixerLabel?.toString().trim().slice(0, 40) || undefined,
-      }))
+      .map((drink) => {
+        const mixerParts = this.normalizeReservationDrinkMixerParts({
+          mixerLabel: drink.mixerLabel,
+          mixerName: drink.mixerName,
+          mixerQuantity: drink.mixerQuantity,
+        });
+        return {
+          name: drink.name?.toString().trim().slice(0, 120) ?? "",
+          sizeLabel:
+            drink.sizeLabel?.toString().trim().slice(0, 40) || undefined,
+          priceLabel:
+            drink.priceLabel?.toString().trim().slice(0, 40) || undefined,
+          ...mixerParts,
+        };
+      })
       .filter((drink) => drink.name.length > 0);
 
     if (normalized.length) {
@@ -5587,8 +5594,47 @@ export class ReservationsService {
         priceLabel:
           dto.preferredDrinkPriceLabel?.trim().slice(0, 40) || undefined,
         mixerLabel: undefined,
+        mixerName: undefined,
+        mixerQuantity: undefined,
       },
     ];
+  }
+
+  private normalizeReservationDrinkMixerParts(input: {
+    mixerLabel?: unknown;
+    mixerName?: unknown;
+    mixerQuantity?: unknown;
+  }): {
+    mixerLabel?: string;
+    mixerName?: string;
+    mixerQuantity?: string;
+  } {
+    const rawLabel = input.mixerLabel?.toString().trim() || "";
+    let mixerName = input.mixerName?.toString().trim().slice(0, 40) || "";
+    let mixerQuantity =
+      input.mixerQuantity?.toString().trim().slice(0, 20) || "";
+
+    if (!mixerName && rawLabel) {
+      const match = rawLabel.match(/^(\d+)\s*x\s+(.+)$/i);
+      if (match) {
+        mixerQuantity = mixerQuantity || match[1].trim();
+        mixerName = match[2].trim().slice(0, 40);
+      } else {
+        mixerName = rawLabel.slice(0, 40);
+      }
+    }
+
+    if (!mixerName) {
+      return {};
+    }
+
+    return {
+      mixerLabel: mixerQuantity
+        ? `${mixerQuantity}x ${mixerName}`.slice(0, 40)
+        : mixerName,
+      mixerName,
+      mixerQuantity: mixerQuantity || undefined,
+    };
   }
 
   private serializePreferredReservationDrinks(
@@ -5610,11 +5656,18 @@ export class ReservationsService {
           if (!name) {
             return null;
           }
+          const mixerParts = this.normalizeReservationDrinkMixerParts({
+            mixerLabel: item.mixerLabel,
+            mixerName: item.mixerName,
+            mixerQuantity: item.mixerQuantity,
+          });
           return {
             name,
             sizeLabel: item.sizeLabel?.toString().trim() || null,
             priceLabel: item.priceLabel?.toString().trim() || null,
-            mixerLabel: item.mixerLabel?.toString().trim() || null,
+            mixerLabel: mixerParts.mixerLabel ?? null,
+            mixerName: mixerParts.mixerName ?? null,
+            mixerQuantity: mixerParts.mixerQuantity ?? null,
           };
         })
         .filter(
@@ -5625,6 +5678,8 @@ export class ReservationsService {
             sizeLabel: string | null;
             priceLabel: string | null;
             mixerLabel: string | null;
+            mixerName: string | null;
+            mixerQuantity: string | null;
           } => drink !== null,
         );
     }
@@ -5640,6 +5695,8 @@ export class ReservationsService {
         sizeLabel: fallback.sizeLabel?.trim() || null,
         priceLabel: fallback.priceLabel?.trim() || null,
         mixerLabel: null,
+        mixerName: null,
+        mixerQuantity: null,
       },
     ];
   }
