@@ -1029,6 +1029,59 @@ export class AuthService {
     };
   }
 
+  async deleteCustomerAccount(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException("User no longer exists.");
+    }
+    if (user.role !== UserRole.CUSTOMER) {
+      throw new BadRequestException(
+        "Only customer accounts can delete their customer account.",
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.reservation.updateMany({
+        where: { customerId: user.id },
+        data: {
+          customerId: null,
+          customerName: null,
+          customerEmail: null,
+          customerPhone: null,
+        },
+      });
+      await tx.reservationPayment.updateMany({
+        where: { customerId: user.id },
+        data: { customerId: null, paymentMethodId: null },
+      });
+      await tx.reservationPaymentRefund.updateMany({
+        where: { customerId: user.id },
+        data: { customerId: null },
+      });
+      await tx.ledgerEntry.updateMany({
+        where: { customerId: user.id },
+        data: { customerId: null },
+      });
+      await tx.customerProblemReport.updateMany({
+        where: { customerId: user.id },
+        data: { customerId: null },
+      });
+      await tx.reservationTimeChangeRequest.updateMany({
+        where: { customerId: user.id },
+        data: { customerId: null },
+      });
+      await tx.user.delete({ where: { id: user.id } });
+    });
+
+    return {
+      message: "Customer account deleted.",
+    };
+  }
+
   async requestCustomerPhoneChange(userId: string, dto: RequestPhoneChangeDto) {
     const phoneNumber = this.normalizePhoneNumber(dto.phoneNumber);
     const user = await this.prisma.user.findUnique({

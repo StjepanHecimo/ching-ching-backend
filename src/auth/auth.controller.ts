@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Patch,
   Post,
@@ -121,6 +122,12 @@ export class AuthController {
     @Body() dto: UpdateCustomerProfileDto,
   ) {
     return this.authService.updateCustomerProfile(request.user.userId, dto);
+  }
+
+  @Delete("me")
+  @UseGuards(JwtAuthGuard)
+  deleteMe(@Req() request: AuthenticatedRequest) {
+    return this.authService.deleteCustomerAccount(request.user.userId);
   }
 
   @Post("me/phone/request")
