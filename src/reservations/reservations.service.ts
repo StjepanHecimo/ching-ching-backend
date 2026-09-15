@@ -43,6 +43,7 @@ type ReservableTable = {
   chinChinTier: ChinChinTier;
   minPartySize: number;
   maxPartySize: number;
+  isVipLike: boolean;
   reservable: boolean;
 };
 
@@ -3565,11 +3566,19 @@ export class ReservationsService {
   private effectiveChinChinTier(
     table: {
       chinChinTier?: ChinChinTier | string | null;
+      tableLabel?: string | null;
+      minPartySize?: number;
       maxPartySize: number;
+      isVipLike?: boolean;
     },
     isClub = false,
   ): ChinChinTier {
-    if (isClub && table.chinChinTier === "VIP") {
+    if (
+      isClub &&
+      (table.chinChinTier === "VIP" ||
+        table.isVipLike === true ||
+        this.isVipLikeReservableTable(table))
+    ) {
       return "VIP";
     }
     if (
@@ -3735,6 +3744,7 @@ export class ReservationsService {
           chinChinTier: this.chinChinTierFrom(tableMap),
           minPartySize: this.minPartySizeFrom(tableMap),
           maxPartySize: this.maxPartySizeFrom(tableMap),
+          isVipLike: this.isVipLikeTable(tableMap),
           reservable: tableMap.reservable !== false,
         });
       }
@@ -4153,6 +4163,34 @@ export class ReservationsService {
     }
 
     return "STANDARD" as const;
+  }
+
+  private isVipLikeTable(tableMap: Record<string, unknown>) {
+    const tier = tableMap.chinChinTier?.toString().trim().toUpperCase();
+    const label = tableMap.label?.toString().trim().toUpperCase() ?? "";
+    const seats = this.numberFrom(tableMap.seats, 0);
+    const minPartySize = this.numberFrom(tableMap.minPartySize, 0);
+    const maxPartySize = this.numberFrom(tableMap.maxPartySize, 0);
+    return (
+      tier === "VIP" ||
+      label === "VIP" ||
+      label.startsWith("VIP ") ||
+      (minPartySize >= 6 && maxPartySize >= 12) ||
+      seats >= 12
+    );
+  }
+
+  private isVipLikeReservableTable(table: {
+    tableLabel?: string | null;
+    minPartySize?: number;
+    maxPartySize: number;
+  }) {
+    const label = table.tableLabel?.trim().toUpperCase() ?? "";
+    return (
+      label === "VIP" ||
+      label.startsWith("VIP ") ||
+      ((table.minPartySize ?? 0) >= 6 && table.maxPartySize >= 12)
+    );
   }
 
   private maxPartySizeFrom(tableMap: Record<string, unknown>) {
