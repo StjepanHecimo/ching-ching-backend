@@ -2736,7 +2736,7 @@ export class PaymentsService {
     );
     form.append("printBackground", "true");
     form.append("preferCssPageSize", "true");
-    form.append("emulatedMediaType", "screen");
+    form.append("emulatedMediaType", "print");
     form.append(
       "metadata",
       JSON.stringify({

@@ -80,6 +80,61 @@ function statusLabel(status: string) {
   }
 }
 
+function localizedTableLabel(value?: string | null) {
+  const raw = value?.trim();
+  if (!raw) {
+    return "";
+  }
+
+  return raw
+    .replace(/^table\s+/i, "Stol ")
+    .replace(/^room\s+/i, "Prostorija ")
+    .replace(/\btable\b/gi, "stol")
+    .replace(/\broom\b/gi, "prostorija")
+    .replace(/\bvip\b/gi, "VIP")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function tableTypeSuffix(value?: string | null) {
+  const normalized = value?.trim().toUpperCase() ?? "";
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (/\bVIP\b/.test(normalized)) {
+    return "VIP";
+  }
+  if (/\bLARGE\b/.test(normalized) || /\bL\b/.test(normalized)) {
+    return "L";
+  }
+  if (/\bSTANDARD\b/.test(normalized) || /\bS\b/.test(normalized)) {
+    return "S";
+  }
+
+  return "";
+}
+
+function localizedTableLabelWithType(value?: string | null) {
+  const tableLabel = localizedTableLabel(value);
+  const suffix = tableTypeSuffix(value);
+
+  if (!tableLabel) {
+    return suffix ? `Stol ${suffix}` : "";
+  }
+
+  if (
+    !suffix ||
+    new RegExp(`\\b${suffix}\\b`, "i").test(tableLabel) ||
+    (suffix === "VIP" && /\bVIP\b/i.test(tableLabel))
+  ) {
+    return tableLabel;
+  }
+
+  return `${tableLabel} ${suffix}`;
+}
+
 export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
   const grossLabel = formatMoney(input.item.amountCents, input.item.currency);
   const refundedLabel = formatMoney(
@@ -92,6 +147,10 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
   );
   const netLabel = formatMoney(netCents, input.item.currency);
   const hasRefund = input.item.refundedCents > 0;
+  const tableLabel = localizedTableLabelWithType(input.reservation.tableLabel);
+  const venueAndTableLabel =
+    [input.reservation.venueName, tableLabel].filter(Boolean).join(" · ") ||
+    "—";
 
   return `<!doctype html>
 <html lang="hr">
@@ -114,7 +173,7 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      padding: 32px;
+      padding: 0;
       background:
         radial-gradient(circle at 20% 0%, rgba(255, 247, 220, 0.48), transparent 32rem),
         linear-gradient(180deg, #ffd66b 0%, #ffa72a 48%, #ff7a1a 100%);
@@ -123,67 +182,67 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
       line-height: 1.35;
     }
     .page {
-      width: 794px;
-      min-height: 1123px;
+      width: 210mm;
+      min-height: 297mm;
       margin: 0 auto;
-      padding: 40px;
+      padding: 13mm 14mm;
       background: linear-gradient(180deg, #fffaf0 0%, #fff7dc 100%);
       border: 1px solid rgba(227, 200, 131, 0.9);
-      border-radius: 18px;
-      box-shadow: 0 18px 40px rgba(45, 26, 16, 0.12);
+      border-radius: 0;
+      box-shadow: none;
     }
     .brand {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 24px;
-      padding-bottom: 26px;
+      gap: 18px;
+      padding-bottom: 16px;
       border-bottom: 2px solid rgba(214, 166, 46, 0.35);
     }
     .brand-title {
       margin: 0;
-      font-size: 34px;
+      font-size: 28px;
       font-weight: 900;
       letter-spacing: -0.04em;
     }
     .brand-lockup {
       display: flex;
       align-items: center;
-      gap: 13px;
+      gap: 10px;
     }
     .brand-logo {
-      width: 56px;
-      height: 56px;
+      width: 46px;
+      height: 46px;
       object-fit: contain;
     }
     .pill {
       display: inline-flex;
       align-items: center;
-      padding: 9px 14px;
+      padding: 7px 12px;
       border-radius: 999px;
       background: rgba(255, 117, 31, 0.12);
       color: var(--brown);
       border: 1px solid rgba(255, 117, 31, 0.32);
-      font-size: 13px;
+      font-size: 11px;
       font-weight: 900;
       white-space: nowrap;
     }
     .invoice-head {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 26px;
-      margin-top: 30px;
+      gap: 16px;
+      margin-top: 18px;
     }
     .card {
-      padding: 18px;
+      padding: 13px 14px;
       background: rgba(255, 252, 245, 0.82);
       border: 1px solid rgba(227, 200, 131, 0.72);
       border-radius: 14px;
     }
     .label {
-      margin: 0 0 5px;
+      margin: 0 0 4px;
       color: var(--muted);
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 900;
       letter-spacing: 0.05em;
       text-transform: uppercase;
@@ -191,56 +250,56 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
     .value {
       margin: 0;
       color: var(--espresso);
-      font-size: 15px;
+      font-size: 12px;
       font-weight: 800;
     }
-    .value + .label { margin-top: 14px; }
-    .title-block { margin: 32px 0 22px; }
+    .value + .label { margin-top: 9px; }
+    .title-block { margin: 18px 0 14px; }
     .document-title {
       margin: 0;
-      font-size: 30px;
+      font-size: 24px;
       font-weight: 950;
       letter-spacing: -0.03em;
     }
     .document-subtitle {
-      margin: 8px 0 0;
+      margin: 5px 0 0;
       color: var(--brown);
-      font-size: 15px;
+      font-size: 12px;
       font-weight: 800;
     }
     table {
       width: 100%;
       border-collapse: collapse;
       overflow: hidden;
-      border-radius: 14px;
+      border-radius: 10px;
       border: 1px solid rgba(227, 200, 131, 0.86);
     }
     thead th {
-      padding: 13px 14px;
+      padding: 9px 11px;
       background: var(--espresso);
       color: #fff;
-      font-size: 12px;
+      font-size: 10px;
       font-weight: 900;
       text-align: left;
       text-transform: uppercase;
       letter-spacing: 0.04em;
     }
     tbody td {
-      padding: 16px 14px;
+      padding: 11px;
       background: rgba(255, 252, 245, 0.86);
       border-top: 1px solid rgba(227, 200, 131, 0.55);
       color: var(--brown);
-      font-size: 14px;
+      font-size: 12px;
       font-weight: 800;
       vertical-align: top;
     }
     .amount { text-align: right; white-space: nowrap; }
     .totals {
-      width: 330px;
+      width: 290px;
       margin-left: auto;
-      margin-top: 22px;
+      margin-top: 14px;
       border: 1px solid rgba(227, 200, 131, 0.86);
-      border-radius: 14px;
+      border-radius: 10px;
       overflow: hidden;
       background: rgba(255, 252, 245, 0.78);
     }
@@ -248,9 +307,9 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
       display: flex;
       justify-content: space-between;
       gap: 18px;
-      padding: 12px 16px;
+      padding: 9px 12px;
       color: var(--brown);
-      font-size: 14px;
+      font-size: 12px;
       font-weight: 850;
       border-bottom: 1px solid rgba(227, 200, 131, 0.5);
     }
@@ -258,31 +317,31 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
       border-bottom: 0;
       background: rgba(214, 166, 46, 0.14);
       color: var(--espresso);
-      font-size: 17px;
+      font-size: 14px;
       font-weight: 950;
     }
     .notice {
-      margin-top: 26px;
-      padding: 16px 18px;
-      border-radius: 14px;
+      margin-top: 18px;
+      padding: 11px 13px;
+      border-radius: 10px;
       background: rgba(255, 117, 31, 0.10);
       border: 1px solid rgba(255, 117, 31, 0.26);
       color: var(--brown);
-      font-size: 13px;
+      font-size: 10.5px;
       font-weight: 800;
     }
     .footer {
-      margin-top: 34px;
-      padding-top: 18px;
+      margin-top: 16px;
+      padding-top: 10px;
       border-top: 1px solid rgba(227, 200, 131, 0.7);
       color: var(--muted);
-      font-size: 11px;
+      font-size: 9.5px;
       font-weight: 750;
     }
     @page { size: A4; margin: 0; }
     @media print {
       body { padding: 0; background: white; }
-      .page { width: auto; min-height: auto; border: 0; border-radius: 0; box-shadow: none; }
+      .page { width: 210mm; min-height: 297mm; border: 0; border-radius: 0; box-shadow: none; }
     }
   </style>
 </head>
@@ -311,7 +370,7 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
     <section class="invoice-head">
       <div class="card">
         <p class="label">Izdavatelj</p>
-        <p class="value">${escapeHtml(input.seller.name)}</p>
+        <p class="value">Chin-Chin</p>
         <p class="label">OIB</p>
         <p class="value">${escapeHtml(input.seller.oib)}</p>
         <p class="label">Adresa</p>
@@ -331,7 +390,7 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
       </div>
     </section>
 
-    <section style="margin-top: 28px;">
+    <section style="margin-top: 18px;">
       <table>
         <thead>
           <tr>
@@ -343,7 +402,7 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
         <tbody>
           <tr>
             <td>${escapeHtml(input.item.description)}</td>
-            <td>${escapeHtml([input.reservation.venueName, input.reservation.tableLabel].filter(Boolean).join(" · ") || "—")}</td>
+            <td>${escapeHtml(venueAndTableLabel)}</td>
             <td class="amount">${escapeHtml(grossLabel)}</td>
           </tr>
         </tbody>
