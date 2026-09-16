@@ -166,6 +166,11 @@ export class ReservationsController {
     );
   }
 
+  @Get("preview/venues/:venueId/cancellation-usage")
+  getVenueCancellationUsage(@Param("venueId") venueId: string) {
+    return this.reservationsService.getVenueCancellationUsage(venueId);
+  }
+
   @Get("preview/venues/:venueId/reserved-table-ids")
   listVenueReservedTableIds(
     @Param("venueId") venueId: string,

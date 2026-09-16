@@ -216,6 +216,7 @@ const DEFAULT_RESERVATION_WINDOW_START_MINUTES = 18 * 60;
 const DEFAULT_RESERVATION_WINDOW_END_MINUTES = 22 * 60;
 const LAST_RESERVATION_REQUEST_BUFFER_MINUTES = 15;
 const ZAGREB_TIME_ZONE = "Europe/Zagreb";
+const VENUE_WEEKLY_CANCELLATION_LIMIT = 7;
 
 @Injectable()
 export class ReservationsService {
@@ -2498,6 +2499,12 @@ export class ReservationsService {
       throw new NotFoundException("Reservation was not found.");
     }
 
+    if (reservation.status === ReservationStatus.PENDING_VENUE_CONFIRMATION) {
+      throw new BadRequestException(
+        "Pending reservation requests must be declined, not cancelled.",
+      );
+    }
+
     if (
       reservation.status === ReservationStatus.CANCELLED ||
       reservation.status === ReservationStatus.CANCELLED_BY_USER ||
@@ -2511,6 +2518,14 @@ export class ReservationsService {
     }
 
     const now = new Date();
+    const cancellationUsage = await this.getVenueCancellationUsage(
+      reservation.venueId,
+      now,
+    );
+    if (!cancellationUsage.canCancel) {
+      throw new BadRequestException(cancellationUsage.message);
+    }
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const cancelled = await tx.reservation.update({
         where: { id },
@@ -2572,8 +2587,40 @@ export class ReservationsService {
       penalty: {
         monthKey: this.monthKey(now),
         reason: "VENUE_CANCELLED_RESERVATION",
-        monthlyAllowedWithoutCharge: 5,
+        weeklyAllowedCancellations: VENUE_WEEKLY_CANCELLATION_LIMIT,
+        weeklyUsedCancellations: cancellationUsage.used + 1,
+        resetsAt: cancellationUsage.resetsAt,
       },
+    };
+  }
+
+  async getVenueCancellationUsage(venueId: string, now = new Date()) {
+    const weekStart = this.startOfLocalWeek(now);
+    const nextWeekStart = this.nextLocalWeekStart(now);
+    const used = await this.prisma.venueReservationPenalty.count({
+      where: {
+        venueId,
+        reason: "VENUE_CANCELLED_RESERVATION",
+        createdAt: {
+          gte: weekStart,
+          lt: nextWeekStart,
+        },
+      },
+    });
+    const remaining = Math.max(0, VENUE_WEEKLY_CANCELLATION_LIMIT - used);
+    const canCancel = used < VENUE_WEEKLY_CANCELLATION_LIMIT;
+    const resetLabel = this.formatZagrebResetDate(nextWeekStart);
+
+    return {
+      used,
+      limit: VENUE_WEEKLY_CANCELLATION_LIMIT,
+      remaining,
+      canCancel,
+      weekStartAt: weekStart.toISOString(),
+      resetsAt: nextWeekStart.toISOString(),
+      message: canCancel
+        ? `Preostalo ${remaining} od ${VENUE_WEEKLY_CANCELLATION_LIMIT} otkazivanja ovaj tjedan.`
+        : `Dosegnuli ste tjedni limit od ${VENUE_WEEKLY_CANCELLATION_LIMIT} otkazivanja. Otkazivanje je ponovno dostupno od ${resetLabel}.`,
     };
   }
 
@@ -5201,6 +5248,42 @@ export class ReservationsService {
   private startOfLocalCalendarDay(value: Date) {
     const parts = this.zagrebDateParts(value);
     return this.zagrebDateTimeToUtc(parts.year, parts.month, parts.day, 0, 0);
+  }
+
+  private startOfLocalWeek(value: Date) {
+    const parts = this.zagrebDateParts(value);
+    const dayOfWeek = new Date(
+      Date.UTC(parts.year, parts.month - 1, parts.day),
+    ).getUTCDay();
+    const isoDayOfWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
+    return this.zagrebDateTimeToUtc(
+      parts.year,
+      parts.month,
+      parts.day - isoDayOfWeek + 1,
+      0,
+      0,
+    );
+  }
+
+  private nextLocalWeekStart(value: Date) {
+    const weekStart = this.startOfLocalWeek(value);
+    const parts = this.zagrebDateParts(weekStart);
+    return this.zagrebDateTimeToUtc(
+      parts.year,
+      parts.month,
+      parts.day + 7,
+      0,
+      0,
+    );
+  }
+
+  private formatZagrebResetDate(value: Date) {
+    return new Intl.DateTimeFormat("hr-HR", {
+      timeZone: ZAGREB_TIME_ZONE,
+      weekday: "long",
+      day: "2-digit",
+      month: "2-digit",
+    }).format(value);
   }
 
   private zagrebMinutesOfDay(value: Date) {
