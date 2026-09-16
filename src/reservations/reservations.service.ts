@@ -1118,6 +1118,10 @@ export class ReservationsService {
           orderBy: { createdAt: "desc" },
           take: 1,
         },
+        customerInvoices: {
+          orderBy: { issuedAt: "desc" },
+          take: 1,
+        },
         refundRequests: {
           where: {
             status: VenueRefundRequestStatus.REFUNDED_BY_CHIN_CHIN,
@@ -2044,14 +2048,25 @@ export class ReservationsService {
 
     const refreshed = await this.prisma.reservation.findUnique({
       where: { id },
-      include: { venue: true },
+      include: {
+        venue: true,
+        customerInvoices: {
+          orderBy: { issuedAt: "desc" },
+          take: 1,
+        },
+      },
     });
 
     if (!refreshed) {
       throw new NotFoundException("Reservation was not found.");
     }
 
-    return this.serializeReservation(refreshed);
+    return {
+      ...this.serializeReservation(refreshed),
+      customerInvoice: this.serializeCustomerInvoiceSummary(
+        refreshed.customerInvoices?.[0] ?? null,
+      ),
+    };
   }
 
   async acceptReservation(id: string) {
@@ -5987,21 +6002,7 @@ export class ReservationsService {
     const customerInvoice = reservation.customerInvoices?.[0] ?? null;
     return {
       ...this.serializeReservation(reservation),
-      customerInvoice: customerInvoice
-        ? {
-            id: customerInvoice.id,
-            invoiceNumber: customerInvoice.invoiceNumber,
-            status: customerInvoice.status,
-            documentTitle: customerInvoice.documentTitle,
-            amountCents: customerInvoice.amountCents,
-            refundedCents: customerInvoice.refundedCents,
-            currency: customerInvoice.currency,
-            pdfUrl: customerInvoice.pdfUrl,
-            issuedAt: customerInvoice.issuedAt,
-            emailedAt: customerInvoice.emailedAt,
-            refundedAt: customerInvoice.refundedAt,
-          }
-        : null,
+      customerInvoice: this.serializeCustomerInvoiceSummary(customerInvoice),
       chinChinSupportRefund:
         reservation.refundRequests?.[0] &&
         reservation.refundRequests[0].status ===
@@ -6030,6 +6031,26 @@ export class ReservationsService {
           }
         : null,
     };
+  }
+
+  private serializeCustomerInvoiceSummary(
+    customerInvoice: CustomerInvoiceSummary | null,
+  ) {
+    return customerInvoice
+      ? {
+          id: customerInvoice.id,
+          invoiceNumber: customerInvoice.invoiceNumber,
+          status: customerInvoice.status,
+          documentTitle: customerInvoice.documentTitle,
+          amountCents: customerInvoice.amountCents,
+          refundedCents: customerInvoice.refundedCents,
+          currency: customerInvoice.currency,
+          pdfUrl: customerInvoice.pdfUrl,
+          issuedAt: customerInvoice.issuedAt,
+          emailedAt: customerInvoice.emailedAt,
+          refundedAt: customerInvoice.refundedAt,
+        }
+      : null;
   }
 
   private customerAdminBlockExpiresAt(blockedAt?: Date | null): Date | null {
