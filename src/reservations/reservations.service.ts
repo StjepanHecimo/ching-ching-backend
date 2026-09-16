@@ -6159,6 +6159,7 @@ export class ReservationsService {
 
     return {
       ...this.serializeReservation(reservation),
+      customerName: this.customerVenueDisplayName(reservation.customerName),
       chinChinFeeCents: allocation.chinChinFeeCents,
       venueShareCents: allocation.venueShareCents,
       commissionBps: allocation.commissionBps,
@@ -6191,5 +6192,17 @@ export class ReservationsService {
           }
         : null,
     };
+  }
+
+  private customerVenueDisplayName(customerName: string | null) {
+    const normalized = customerName?.trim().replace(/\s+/g, " ");
+    if (!normalized) {
+      return "Chin-Chin gost";
+    }
+
+    const [firstName, ...lastNameParts] = normalized.split(" ");
+    const lastName = lastNameParts.join(" ").trim();
+    const lastInitial = lastName.charAt(0).toUpperCase();
+    return lastInitial ? `${firstName}.${lastInitial}` : firstName;
   }
 }
