@@ -113,6 +113,13 @@ enum PaymentWebhookStatus {
   FAILED
 }
 
+enum CustomerInvoiceStatus {
+  ISSUED
+  PARTIALLY_REFUNDED
+  REFUNDED
+  VOIDED
+}
+
 enum VenueRefundRequestStatus {
   PENDING
   REFUNDED_BY_CHIN_CHIN
@@ -223,6 +230,7 @@ model User {
   pushNotificationLogs          PushNotificationLog[]
   followedVenues                VenueFollower[]
   reservationTimeChangeRequests ReservationTimeChangeRequest[]
+  customerInvoices              CustomerInvoice[]
 
   @@index([status])
   @@index([customerBlockedAt])
@@ -475,6 +483,7 @@ model Reservation {
   customerProblemReports CustomerProblemReport[]
   refundEvents           ReservationPaymentRefund[]
   timeChangeRequests     ReservationTimeChangeRequest[]
+  customerInvoices       CustomerInvoice[]
 
   @@index([venueId])
   @@index([customerId])
@@ -547,6 +556,7 @@ model ReservationPayment {
   refundRequests            VenueRefundRequest[]
   customerProblemReports    CustomerProblemReport[]
   reservationPaymentRefunds ReservationPaymentRefund[]
+  customerInvoices          CustomerInvoice[]
 
   @@index([reservationId])
   @@index([venueId])
@@ -584,6 +594,49 @@ model ReservationPaymentRefund {
   @@index([providerPaymentId])
   @@index([providerRefundTransactionId])
   @@map("reservation_payment_refunds")
+}
+
+model CustomerInvoice {
+  id                String                @id @default(uuid())
+  reservationId     String
+  paymentId         String?
+  customerId        String?
+  invoiceNumber     String                @unique
+  status            CustomerInvoiceStatus @default(ISSUED)
+  documentTitle     String                @default("Račun za uslugu rezervacije")
+  sellerName        String
+  sellerOib         String
+  sellerAddress     String?
+  sellerEmail       String?
+  buyerName         String?
+  buyerEmail        String?
+  itemDescription   String
+  venueName         String?
+  tableLabel        String?
+  serviceDate       DateTime?
+  amountCents       Int
+  refundedCents     Int                   @default(0)
+  currency          String                @default("EUR")
+  paymentProvider   PaymentProvider       @default(WORLDLINE)
+  providerPaymentId String?
+  pdfUrl            String?
+  emailedAt         DateTime?
+  issuedAt          DateTime              @default(now())
+  refundedAt        DateTime?
+  accountingNotes   String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+
+  reservation Reservation         @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  payment     ReservationPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  customer    User?               @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([reservationId])
+  @@index([paymentId])
+  @@index([customerId])
+  @@index([status])
+  @@index([issuedAt])
+  @@map("customer_invoices")
 }
 
 model CustomerPaymentMethod {

@@ -11,6 +11,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "crypto";
 import { Prisma } from "../../generated/prisma/client";
 import {
+  CustomerInvoiceStatus,
   CustomerPaymentMethodStatus,
   CustomerProblemReportStatus,
   DevicePushApp,
@@ -36,12 +37,17 @@ import { CreateTestPaymentMethodDto } from "./dto/create-test-payment-method.dto
 import { CreateVenueRefundRequestDto } from "./dto/create-venue-refund-request.dto";
 import { ResolveVenueProblemReportDto } from "./dto/resolve-venue-problem-report.dto";
 import { WorldlineWebhookDto } from "./dto/worldline-webhook.dto";
+import { renderCustomerInvoiceHtml } from "./customer-invoice-template";
 import { WorldlinePaymentProvider } from "./worldline-payment.provider";
 
 const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 1000;
 const DEFAULT_FIRST_RESERVATION_COMMISSION_BPS = 1000;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const VENUE_NO_SHOW_REPORT_DELAY_MINUTES = 10;
+const DEFAULT_CHIN_CHIN_SELLER_NAME =
+  "Chin-Chin, obrt za prijevoz i usluge, vl. Stjepan Hećimović";
+const DEFAULT_CHIN_CHIN_SELLER_OIB = "28907046850";
+const DEFAULT_CHIN_CHIN_SELLER_ADDRESS = "Zagreb";
 
 function customerFacingTableLabel(value?: string | null): string {
   const label = value?.trim() || "Chin-Chin stol";
@@ -1540,7 +1546,7 @@ export class PaymentsService {
         status: ReservationPaymentStatus.AUTHORIZED,
       },
       orderBy: { createdAt: "desc" },
-      include: { reservation: true },
+      include: { reservation: { include: { venue: true } } },
     });
 
     if (!payment) {
@@ -1586,9 +1592,16 @@ export class PaymentsService {
       });
 
       await this.createCaptureLedgerEntries(tx, updatedPayment, allocation);
+      await this.ensureCustomerInvoiceForCapturedPayment(
+        tx,
+        updatedPayment,
+        payment.reservation,
+      );
 
       return updatedPayment;
     });
+
+    await this.tryGenerateAndUploadCustomerInvoicePdf(captured.id);
 
     return this.serializePayment(captured);
   }
@@ -1758,6 +1771,7 @@ export class PaymentsService {
         updatedPayment,
         reason,
       );
+      await this.updateCustomerInvoiceRefundStatus(tx, updatedPayment);
 
       await tx.reservation.update({
         where: { id: payment.reservationId },
@@ -1766,6 +1780,8 @@ export class PaymentsService {
 
       return updatedPayment;
     });
+
+    await this.tryGenerateAndUploadCustomerInvoicePdf(refunded.id);
 
     return this.serializePayment(refunded);
   }
@@ -1841,6 +1857,63 @@ export class PaymentsService {
       checked,
       repaired,
       createdEntries,
+    };
+  }
+
+  async regenerateMissingCustomerInvoicePdfs(limit = 25) {
+    const safeLimit = Math.min(Math.max(Math.floor(limit), 1), 100);
+    const invoices = await this.prisma.customerInvoice.findMany({
+      where: {
+        pdfUrl: null,
+        paymentId: { not: null },
+      },
+      orderBy: { issuedAt: "desc" },
+      take: safeLimit,
+      select: { id: true, invoiceNumber: true, paymentId: true },
+    });
+
+    const results: {
+      invoiceNumber: string;
+      status: "GENERATED" | "FAILED" | "SKIPPED";
+      pdfUrl?: string | null;
+      error?: string;
+    }[] = [];
+
+    for (const invoice of invoices) {
+      if (!invoice.paymentId) {
+        results.push({
+          invoiceNumber: invoice.invoiceNumber,
+          status: "SKIPPED",
+          error: "Invoice has no paymentId.",
+        });
+        continue;
+      }
+
+      try {
+        const updated = await this.generateAndUploadCustomerInvoicePdf(
+          invoice.paymentId,
+        );
+        results.push({
+          invoiceNumber: invoice.invoiceNumber,
+          status: "GENERATED",
+          pdfUrl: updated?.pdfUrl,
+        });
+      } catch (error) {
+        results.push({
+          invoiceNumber: invoice.invoiceNumber,
+          status: "FAILED",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return {
+      processed: results.length,
+      generated: results.filter((result) => result.status === "GENERATED")
+        .length,
+      failed: results.filter((result) => result.status === "FAILED").length,
+      skipped: results.filter((result) => result.status === "SKIPPED").length,
+      results,
     };
   }
 
@@ -2410,6 +2483,349 @@ export class PaymentsService {
       },
       orderBy: { createdAt: "desc" },
     });
+  }
+
+  private sellerInvoiceDetails() {
+    return {
+      sellerName:
+        this.configService.get<string>("CHIN_CHIN_SELLER_NAME")?.trim() ||
+        DEFAULT_CHIN_CHIN_SELLER_NAME,
+      sellerOib:
+        this.configService.get<string>("CHIN_CHIN_SELLER_OIB")?.trim() ||
+        DEFAULT_CHIN_CHIN_SELLER_OIB,
+      sellerAddress:
+        this.configService.get<string>("CHIN_CHIN_SELLER_ADDRESS")?.trim() ||
+        DEFAULT_CHIN_CHIN_SELLER_ADDRESS,
+      sellerEmail:
+        this.configService.get<string>("CHIN_CHIN_INVOICE_EMAIL")?.trim() ||
+        this.configService.get<string>("SMTP_FROM")?.trim() ||
+        null,
+    };
+  }
+
+  private customerInvoiceNumber(payment: {
+    id: string;
+    capturedAt?: Date | null;
+  }) {
+    const issuedAt = payment.capturedAt ?? new Date();
+    const year = issuedAt.getUTCFullYear();
+    return `CC-${year}-${payment.id.slice(0, 8).toUpperCase()}`;
+  }
+
+  private async ensureCustomerInvoiceForCapturedPayment(
+    tx: Prisma.TransactionClient,
+    payment: {
+      id: string;
+      reservationId: string;
+      customerId: string | null;
+      provider: PaymentProvider;
+      providerPaymentId: string | null;
+      capturedCents: number;
+      refundedCents: number;
+      currency: string;
+      capturedAt: Date | null;
+    },
+    reservation: {
+      id: string;
+      customerId: string | null;
+      customerName: string | null;
+      customerEmail: string | null;
+      tableLabel: string | null;
+      timeSlotStart: Date;
+      venue: { name: string };
+    },
+  ) {
+    if (payment.capturedCents <= 0) {
+      return null;
+    }
+
+    const seller = this.sellerInvoiceDetails();
+    const invoiceNumber = this.customerInvoiceNumber(payment);
+    const refundedAt =
+      payment.refundedCents > 0 &&
+      payment.refundedCents >= payment.capturedCents
+        ? new Date()
+        : null;
+    const status =
+      payment.refundedCents >= payment.capturedCents
+        ? CustomerInvoiceStatus.REFUNDED
+        : payment.refundedCents > 0
+          ? CustomerInvoiceStatus.PARTIALLY_REFUNDED
+          : CustomerInvoiceStatus.ISSUED;
+
+    return tx.customerInvoice.upsert({
+      where: { invoiceNumber },
+      create: {
+        reservationId: reservation.id,
+        paymentId: payment.id,
+        customerId: reservation.customerId ?? payment.customerId,
+        invoiceNumber,
+        status,
+        documentTitle: "Račun za uslugu rezervacije",
+        sellerName: seller.sellerName,
+        sellerOib: seller.sellerOib,
+        sellerAddress: seller.sellerAddress,
+        sellerEmail: seller.sellerEmail,
+        buyerName: reservation.customerName,
+        buyerEmail: reservation.customerEmail,
+        itemDescription: "Naknada za rezervaciju stola",
+        venueName: reservation.venue.name,
+        tableLabel: reservation.tableLabel,
+        serviceDate: reservation.timeSlotStart,
+        amountCents: payment.capturedCents,
+        refundedCents: payment.refundedCents,
+        currency: payment.currency,
+        paymentProvider: payment.provider,
+        providerPaymentId: payment.providerPaymentId,
+        issuedAt: payment.capturedAt ?? new Date(),
+        refundedAt,
+        accountingNotes:
+          "Računovodstveni/fiskalni format i PDF predložak potvrđuje knjigovođa prije produkcije.",
+      },
+      update: {
+        status,
+        refundedCents: payment.refundedCents,
+        refundedAt,
+        buyerName: reservation.customerName,
+        buyerEmail: reservation.customerEmail,
+        venueName: reservation.venue.name,
+        tableLabel: reservation.tableLabel,
+        serviceDate: reservation.timeSlotStart,
+        amountCents: payment.capturedCents,
+        currency: payment.currency,
+        providerPaymentId: payment.providerPaymentId,
+        sellerName: seller.sellerName,
+        sellerOib: seller.sellerOib,
+        sellerAddress: seller.sellerAddress,
+        sellerEmail: seller.sellerEmail,
+      },
+    });
+  }
+
+  private async updateCustomerInvoiceRefundStatus(
+    tx: Prisma.TransactionClient,
+    payment: {
+      id: string;
+      capturedCents: number;
+      refundedCents: number;
+    },
+  ) {
+    const status =
+      payment.refundedCents >= payment.capturedCents
+        ? CustomerInvoiceStatus.REFUNDED
+        : CustomerInvoiceStatus.PARTIALLY_REFUNDED;
+
+    await tx.customerInvoice.updateMany({
+      where: { paymentId: payment.id },
+      data: {
+        status,
+        refundedCents: payment.refundedCents,
+        refundedAt:
+          payment.refundedCents >= payment.capturedCents ? new Date() : null,
+      },
+    });
+  }
+
+  private async tryGenerateAndUploadCustomerInvoicePdf(paymentId: string) {
+    try {
+      await this.generateAndUploadCustomerInvoicePdf(paymentId);
+    } catch (error) {
+      this.logger.warn(
+        `Customer invoice PDF generation failed for payment ${paymentId}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
+  private async generateAndUploadCustomerInvoicePdf(paymentId: string) {
+    const invoice = await this.prisma.customerInvoice.findFirst({
+      where: { paymentId },
+      orderBy: { issuedAt: "desc" },
+    });
+
+    if (!invoice) {
+      return null;
+    }
+
+    const seller = this.sellerInvoiceDetails();
+    const html = renderCustomerInvoiceHtml({
+      documentTitle: invoice.documentTitle,
+      invoiceNumber: invoice.invoiceNumber,
+      status: invoice.status,
+      issuedAt: invoice.issuedAt,
+      seller: {
+        name: invoice.sellerName || seller.sellerName,
+        oib: invoice.sellerOib || seller.sellerOib,
+        address: invoice.sellerAddress || seller.sellerAddress,
+        email: invoice.sellerEmail || seller.sellerEmail,
+      },
+      buyer: {
+        name: invoice.buyerName,
+        email: invoice.buyerEmail,
+      },
+      brand: {
+        logoUrl:
+          this.configService.get<string>("CHIN_CHIN_LOGO_URL")?.trim() ||
+          "https://chin-chin.hr/assets/chin-chin-table-logo.png",
+      },
+      reservation: {
+        venueName: invoice.venueName,
+        tableLabel: invoice.tableLabel,
+        serviceDate: invoice.serviceDate,
+      },
+      item: {
+        description: invoice.itemDescription,
+        amountCents: invoice.amountCents,
+        refundedCents: invoice.refundedCents,
+        currency: invoice.currency,
+      },
+      note: invoice.accountingNotes,
+    });
+
+    const pdf = await this.renderPdfWithGotenberg(html, invoice.invoiceNumber);
+    const pdfUrl = await this.uploadCustomerInvoicePdf(
+      invoice.invoiceNumber,
+      pdf,
+    );
+
+    const updatedInvoice = await this.prisma.customerInvoice.update({
+      where: { id: invoice.id },
+      data: { pdfUrl },
+    });
+
+    if (updatedInvoice.buyerEmail && !invoice.emailedAt) {
+      try {
+        await this.emailService.sendCustomerInvoiceEmail({
+          to: updatedInvoice.buyerEmail,
+          invoiceNumber: updatedInvoice.invoiceNumber,
+          invoiceUrl: pdfUrl,
+          amountCents: updatedInvoice.amountCents,
+          currency: updatedInvoice.currency,
+          venueName: updatedInvoice.venueName,
+        });
+        await this.prisma.customerInvoice.update({
+          where: { id: updatedInvoice.id },
+          data: { emailedAt: new Date() },
+        });
+      } catch (error) {
+        this.logger.warn(
+          `Customer invoice ${updatedInvoice.invoiceNumber} email failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    return updatedInvoice;
+  }
+
+  private async renderPdfWithGotenberg(html: string, invoiceNumber: string) {
+    const gotenbergUrl = this.configService
+      .get<string>("GOTENBERG_URL")
+      ?.trim()
+      .replace(/\/+$/, "");
+
+    if (!gotenbergUrl) {
+      throw new InternalServerErrorException(
+        "Gotenberg URL is not configured.",
+      );
+    }
+
+    const FormDataCtor = (globalThis as unknown as { FormData?: new () => any })
+      .FormData;
+    const BlobCtor = (
+      globalThis as unknown as {
+        Blob?: new (parts: unknown[], options?: { type?: string }) => any;
+      }
+    ).Blob;
+    const fetchFn = (
+      globalThis as unknown as {
+        fetch?: (url: string, init?: Record<string, unknown>) => Promise<any>;
+      }
+    ).fetch;
+
+    if (!FormDataCtor || !BlobCtor || !fetchFn) {
+      throw new InternalServerErrorException(
+        "Native fetch/FormData/Blob are required for PDF generation.",
+      );
+    }
+
+    const form = new FormDataCtor();
+    form.append(
+      "files",
+      new BlobCtor([html], { type: "text/html; charset=utf-8" }),
+      "index.html",
+    );
+    form.append("printBackground", "true");
+    form.append("preferCssPageSize", "true");
+    form.append("emulatedMediaType", "screen");
+    form.append(
+      "metadata",
+      JSON.stringify({
+        Title: `Chin-Chin račun ${invoiceNumber}`,
+        Author: "Chin-Chin",
+        Subject: "Račun za uslugu rezervacije",
+      }),
+    );
+
+    const response = await fetchFn(
+      `${gotenbergUrl}/forms/chromium/convert/html`,
+      {
+        method: "POST",
+        body: form,
+        headers: {
+          "Gotenberg-Output-Filename": invoiceNumber,
+        },
+      },
+    );
+
+    if (!response.ok) {
+      const details =
+        typeof response.text === "function" ? await response.text() : "";
+      throw new InternalServerErrorException(
+        `Gotenberg PDF render failed with ${response.status}: ${details}`,
+      );
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  private async uploadCustomerInvoicePdf(invoiceNumber: string, pdf: Buffer) {
+    const bucket = this.configService.get<string>("R2_BUCKET")?.trim();
+    const publicBaseUrl = this.configService
+      .get<string>("R2_PUBLIC_BASE_URL")
+      ?.trim()
+      .replace(/\/+$/, "");
+
+    if (!bucket || !publicBaseUrl) {
+      throw new InternalServerErrorException(
+        "R2 storage is not configured for customer invoice PDFs.",
+      );
+    }
+
+    const publicPath =
+      this.configService
+        .get<string>("CHIN_CHIN_INVOICE_PUBLIC_PATH")
+        ?.trim()
+        .replace(/^\/+|\/+$/g, "") || "invoices/customer";
+    const safeInvoiceNumber =
+      this.slugForObjectKey(invoiceNumber).toUpperCase();
+    const key = `${publicPath}/${safeInvoiceNumber}.pdf`;
+
+    await this.getS3Client().send(
+      new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: pdf,
+        ContentType: "application/pdf",
+        CacheControl: "private, max-age=31536000, immutable",
+        ContentDisposition: `inline; filename="${safeInvoiceNumber}.pdf"`,
+      }),
+    );
+
+    return `${publicBaseUrl}/${key}`;
   }
 
   private async createCaptureLedgerEntries(

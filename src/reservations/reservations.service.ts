@@ -103,6 +103,7 @@ type ReservationWithVenue = Prisma.ReservationGetPayload<{
 }>;
 
 type ReservationWithVenueRefundRequests = ReservationWithVenue & {
+  customerInvoices?: CustomerInvoiceSummary[];
   refundRequests?: {
     id: string;
     status: VenueRefundRequestStatus;
@@ -119,6 +120,20 @@ type ReservationWithVenueRefundRequests = ReservationWithVenue & {
     updatedAt: Date;
   }[];
   timeChangeRequests?: ReservationTimeChangeRequestSummary[];
+};
+
+type CustomerInvoiceSummary = {
+  id: string;
+  invoiceNumber: string;
+  status: string;
+  documentTitle: string;
+  amountCents: number;
+  refundedCents: number;
+  currency: string;
+  pdfUrl: string | null;
+  issuedAt: Date;
+  emailedAt: Date | null;
+  refundedAt: Date | null;
 };
 
 type ReservationTimeChangeRequestSummary = {
@@ -966,6 +981,10 @@ export class ReservationsService {
         timeChangeRequests: {
           where: { status: ReservationTimeChangeRequestStatus.PENDING },
           orderBy: { createdAt: "desc" },
+          take: 1,
+        },
+        customerInvoices: {
+          orderBy: { issuedAt: "desc" },
           take: 1,
         },
         refundRequests: {
@@ -5965,8 +5984,24 @@ export class ReservationsService {
   private serializeCustomerReservation(
     reservation: ReservationWithVenueRefundRequests,
   ) {
+    const customerInvoice = reservation.customerInvoices?.[0] ?? null;
     return {
       ...this.serializeReservation(reservation),
+      customerInvoice: customerInvoice
+        ? {
+            id: customerInvoice.id,
+            invoiceNumber: customerInvoice.invoiceNumber,
+            status: customerInvoice.status,
+            documentTitle: customerInvoice.documentTitle,
+            amountCents: customerInvoice.amountCents,
+            refundedCents: customerInvoice.refundedCents,
+            currency: customerInvoice.currency,
+            pdfUrl: customerInvoice.pdfUrl,
+            issuedAt: customerInvoice.issuedAt,
+            emailedAt: customerInvoice.emailedAt,
+            refundedAt: customerInvoice.refundedAt,
+          }
+        : null,
       chinChinSupportRefund:
         reservation.refundRequests?.[0] &&
         reservation.refundRequests[0].status ===

@@ -28,6 +28,15 @@ type ReservationConfirmedEmailInput = {
   checkInClosesAt: Date;
 };
 
+type CustomerInvoiceEmailInput = {
+  to: string;
+  invoiceNumber: string;
+  invoiceUrl: string;
+  amountCents: number;
+  currency?: string;
+  venueName?: string | null;
+};
+
 type VenueProblemReportResolvedEmailInput = {
   to: string;
   venueName: string;
@@ -162,6 +171,39 @@ export class EmailService {
     this.logger.log(
       `Reservation confirmed email sent to ${input.to} from ${from}`,
     );
+  }
+
+  async sendCustomerInvoiceEmail(input: CustomerInvoiceEmailInput) {
+    const transporter = this.getTransporter();
+    const from = this.noReplyFrom();
+
+    if (!transporter) {
+      this.logCustomerInvoiceFallback(input);
+      return;
+    }
+
+    const amount = this.formatCents(input.amountCents, input.currency);
+    const venueName = input.venueName?.trim() || "Chin-Chin objekt";
+
+    await this.sendTrackedMail(transporter, "customer_invoice", input.to, {
+      from,
+      to: input.to,
+      subject: "Chin-Chin račun za rezervaciju",
+      text: [
+        "Chin-Chin račun za rezervaciju",
+        "",
+        `Račun ${input.invoiceNumber} za rezervaciju u ${venueName} je spreman.`,
+        `Iznos: ${amount}.`,
+        "",
+        "Račun možete preuzeti ovdje:",
+        input.invoiceUrl,
+        "",
+        "Račun je dostupan i u Chin-Chin aplikaciji unutar detalja rezervacije.",
+      ].join("\n"),
+      html: this.customerInvoiceHtml(input),
+    });
+
+    this.logger.log(`Customer invoice email sent to ${input.to} from ${from}`);
   }
 
   async sendVenueProblemReportResolvedEmail(
@@ -492,6 +534,44 @@ export class EmailService {
     `;
   }
 
+  private customerInvoiceHtml(input: CustomerInvoiceEmailInput) {
+    const amount = this.escapeHtml(
+      this.formatCents(input.amountCents, input.currency),
+    );
+    const invoiceNumber = this.escapeHtml(input.invoiceNumber);
+    const invoiceUrl = this.escapeHtml(input.invoiceUrl);
+    const venueName = this.escapeHtml(
+      input.venueName?.trim() || "Chin-Chin objekt",
+    );
+
+    return `
+      <div style="margin:0;padding:0;background:#ffc857;">
+        <div style="max-width:560px;margin:0 auto;padding:32px 18px;font-family:Arial,sans-serif;color:#2d1a10;">
+          <div style="background:#fff4d6;border:2px solid #ff9f1c;border-radius:18px;padding:28px;text-align:center;box-shadow:0 12px 32px rgba(45,26,16,0.12);">
+            <div style="font-size:38px;font-weight:900;letter-spacing:0;margin-bottom:4px;">Chin-Chin</div>
+            <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
+            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">Račun za rezervaciju je spreman</h1>
+            <p style="font-size:16px;line-height:1.55;margin:0 0 18px;color:#6c4127;">
+              Račun <strong>${invoiceNumber}</strong> za rezervaciju u <strong>${venueName}</strong> je dostupan za preuzimanje.
+            </p>
+            <div style="display:inline-block;background:#2d1a10;color:#ffffff;padding:16px 26px;border-radius:12px;margin:2px 0 18px;">
+              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">Iznos</div>
+              <div style="font-size:30px;font-weight:900;line-height:1.15;">${amount}</div>
+            </div>
+            <div>
+              <a href="${invoiceUrl}" style="display:inline-block;background:#2d1a10;color:#ffffff !important;padding:15px 24px;border-radius:10px;text-decoration:none;font-size:16px;font-weight:900;border:2px solid #2d1a10;">
+                Preuzmi račun
+              </a>
+            </div>
+            <p style="font-size:13px;line-height:1.5;margin:24px 0 0;color:#79533d;">
+              Račun je dostupan i u Chin-Chin aplikaciji unutar detalja rezervacije.
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   private venueProblemReportResolvedHtml(
     input: VenueProblemReportResolvedEmailInput,
   ) {
@@ -667,6 +747,19 @@ export class EmailService {
     console.log("Table: " + (input.tableLabel ?? "Chin-Chin stol"));
     console.log("Start: " + this.formatDateTime(input.startAt));
     console.log("Check-in: " + this.formatCheckInWindow(input));
+  }
+
+  private logCustomerInvoiceFallback(input: CustomerInvoiceEmailInput) {
+    this.logger.warn(
+      "SMTP is not configured. Customer invoice email was not sent; using console fallback.",
+    );
+    console.log("Chin-Chin customer invoice email");
+    console.log("To: " + input.to);
+    console.log("Invoice number: " + input.invoiceNumber);
+    console.log("Invoice URL: " + input.invoiceUrl);
+    console.log(
+      "Amount: " + this.formatCents(input.amountCents, input.currency),
+    );
   }
 
   private logVenueProblemReportResolvedFallback(

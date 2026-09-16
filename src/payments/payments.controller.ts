@@ -249,6 +249,15 @@ export class PaymentsController {
     return this.paymentsService.backfillCapturedPaymentLedger();
   }
 
+  @Post("preview/admin/customer-invoices/regenerate-missing-pdfs")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.ADMIN_ACCOUNTING)
+  regenerateMissingCustomerInvoicePdfs(@Query("limit") limit?: string) {
+    return this.paymentsService.regenerateMissingCustomerInvoicePdfs(
+      Number.parseInt(limit ?? "25", 10),
+    );
+  }
+
   @Post("preview/reservations/:reservationId/mock-authorize")
   mockAuthorizeReservationPayment(
     @Param("reservationId") reservationId: string,
