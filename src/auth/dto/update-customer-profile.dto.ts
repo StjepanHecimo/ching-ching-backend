@@ -1,4 +1,10 @@
-import { IsEmail, IsOptional, IsString, Length } from "class-validator";
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  Length,
+  MaxLength,
+} from "class-validator";
 
 export class UpdateCustomerProfileDto {
   @IsOptional()
@@ -8,7 +14,7 @@ export class UpdateCustomerProfileDto {
 
   @IsOptional()
   @IsString()
-  @Length(2, 80)
+  @MaxLength(80)
   lastName?: string;
 
   @IsOptional()

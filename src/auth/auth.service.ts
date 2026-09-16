@@ -375,7 +375,7 @@ export class AuthService {
           email: normalizedEmail,
           passwordHash,
           firstName: dto.firstName.trim(),
-          lastName: dto.lastName.trim(),
+          lastName: dto.lastName?.trim() ?? "",
           phoneNumber,
           phoneVerifiedAt: phoneVerification.verifiedAt,
           age: dto.age,

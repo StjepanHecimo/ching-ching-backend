@@ -2,8 +2,10 @@ import {
   IsEmail,
   IsIn,
   IsInt,
+  IsOptional,
   IsString,
   Length,
+  MaxLength,
   Max,
   Min,
 } from "class-validator";
@@ -16,9 +18,10 @@ export class RegisterCustomerDto {
   @Length(2, 80)
   firstName!: string;
 
+  @IsOptional()
   @IsString()
-  @Length(2, 80)
-  lastName!: string;
+  @MaxLength(80)
+  lastName?: string;
 
   @IsString()
   @Length(6, 30)
