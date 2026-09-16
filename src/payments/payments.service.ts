@@ -2694,29 +2694,6 @@ export class PaymentsService {
       data: { pdfUrl },
     });
 
-    if (updatedInvoice.buyerEmail && !invoice.emailedAt) {
-      try {
-        await this.emailService.sendCustomerInvoiceEmail({
-          to: updatedInvoice.buyerEmail,
-          invoiceNumber: updatedInvoice.invoiceNumber,
-          invoiceUrl: pdfUrl,
-          amountCents: updatedInvoice.amountCents,
-          currency: updatedInvoice.currency,
-          venueName: updatedInvoice.venueName,
-        });
-        await this.prisma.customerInvoice.update({
-          where: { id: updatedInvoice.id },
-          data: { emailedAt: new Date() },
-        });
-      } catch (error) {
-        this.logger.warn(
-          `Customer invoice ${updatedInvoice.invoiceNumber} email failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
-
     return updatedInvoice;
   }
 
