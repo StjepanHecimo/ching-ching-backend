@@ -203,6 +203,7 @@ model User {
   lastName              String
   phoneNumber           String?
   phoneVerifiedAt       DateTime?
+  languageCode          String      @default("hr")
   age                   Int?
   gender                UserGender?
   role                  UserRole    @default(VENUE_OWNER)

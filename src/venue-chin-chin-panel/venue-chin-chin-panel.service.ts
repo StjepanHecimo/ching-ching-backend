@@ -9,6 +9,7 @@ import { Prisma } from "../../generated/prisma/client";
 import { DevicePushApp, SpaceLayoutStatus } from "../../generated/prisma/enums";
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { customerLocale, isEnglishCustomer } from "../shared/customer-language";
 import { UpsertVenueChinChinPanelDto } from "./dto/upsert-venue-chin-chin-panel.dto";
 
 type DrinkBrandSeed = {
@@ -898,22 +899,36 @@ export class VenueChinChinPanelService {
         continue;
       }
 
-      const body = this.eventNotificationBody({
-        venueName: notification.venue.name,
-        eventName: notification.eventName,
-        day: notification.eventDay,
-        startsAt: notification.eventStartsAt,
+      const followerLanguages = await this.prisma.user.findMany({
+        where: { id: { in: followerUserIds } },
+        select: { id: true, languageCode: true },
       });
+      const languageByUserId = new Map(
+        followerLanguages.map((user) => [user.id, user.languageCode]),
+      );
 
       this.logger.log(
         `[push][customer] sending event notificationId=${notification.id} venueId=${notification.venueId} eventId=${notification.eventId} followerCount=${followerUserIds.length} title=Novi event u ${notification.venue.name}`,
       );
 
       for (const userId of followerUserIds) {
+        const languageCode = languageByUserId.get(userId);
+        const en = isEnglishCustomer(languageCode);
+        const body = this.eventNotificationBody(
+          {
+            venueName: notification.venue.name,
+            eventName: notification.eventName,
+            day: notification.eventDay,
+            startsAt: notification.eventStartsAt,
+          },
+          languageCode,
+        );
         const result = await this.deviceTokensService.sendToUser({
           userId,
           app: DevicePushApp.CUSTOMER,
-          title: `Novi event u ${notification.venue.name}`,
+          title: en
+            ? `New event at ${notification.venue.name}`
+            : `Novi event u ${notification.venue.name}`,
           body,
           data: {
             type: "VENUE_EVENT_CREATED",
@@ -1818,23 +1833,31 @@ export class VenueChinChinPanelService {
     return delayHours * 60 * 60 * 1000;
   }
 
-  private eventNotificationBody(event: {
-    venueName: string;
-    eventName: string;
-    day: string;
-    startsAt: string;
-  }) {
-    const date = this.formatEventNotificationDate(event.day);
-    return `${event.eventName} u ${event.venueName}, ${date} u ${event.startsAt}.`;
+  private eventNotificationBody(
+    event: {
+      venueName: string;
+      eventName: string;
+      day: string;
+      startsAt: string;
+    },
+    languageCode?: string | null,
+  ) {
+    const date = this.formatEventNotificationDate(event.day, languageCode);
+    return isEnglishCustomer(languageCode)
+      ? `${event.eventName} at ${event.venueName}, ${date} at ${event.startsAt}.`
+      : `${event.eventName} u ${event.venueName}, ${date} u ${event.startsAt}.`;
   }
 
-  private formatEventNotificationDate(day: string) {
+  private formatEventNotificationDate(
+    day: string,
+    languageCode?: string | null,
+  ) {
     const date = new Date(`${day}T12:00:00`);
     if (Number.isNaN(date.getTime())) {
       return day;
     }
 
-    return new Intl.DateTimeFormat("hr-HR", {
+    return new Intl.DateTimeFormat(customerLocale(languageCode), {
       timeZone: "Europe/Zagreb",
       day: "2-digit",
       month: "2-digit",

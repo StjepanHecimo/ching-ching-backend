@@ -27,6 +27,7 @@ import {
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { customerLanguageCode } from "../shared/customer-language";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import {
   CreateCustomerProblemReportDto,
@@ -2273,6 +2274,7 @@ export class PaymentsService {
     this.logger.log(
       `Sending customer problem report ${request.id} response email to ${recipient}.`,
     );
+    const languageCode = await this.customerLanguageCodeByEmail(recipient);
     await this.emailService.sendCustomerProblemReportResolvedEmail({
       to: recipient,
       venueName: request.venue.name,
@@ -2282,7 +2284,20 @@ export class PaymentsService {
       currency:
         request.resolutionCurrency ?? request.reservation.currency ?? "EUR",
       adminNotes: request.adminNotes,
+      languageCode,
     });
+  }
+
+  private async customerLanguageCodeByEmail(email: string | null | undefined) {
+    const normalized = email?.trim().toLowerCase();
+    if (!normalized) {
+      return "hr";
+    }
+    const customer = await this.prisma.user.findUnique({
+      where: { email: normalized },
+      select: { languageCode: true },
+    });
+    return customerLanguageCode(customer?.languageCode);
   }
 
   private getS3Client() {
@@ -2424,6 +2439,8 @@ export class PaymentsService {
     }
 
     try {
+      const languageCode =
+        await this.customerLanguageCodeByEmail(customerEmail);
       this.logger.log(
         `[email][customer-refund] sending reservationId=${payment.reservationId} to=${customerEmail} amountCents=${amountCents} currency=${payment.currency}`,
       );
@@ -2434,6 +2451,7 @@ export class PaymentsService {
         amountCents,
         currency: payment.currency,
         sender: "SUPPORT",
+        languageCode,
       });
       this.logger.log(
         `[email][customer-refund] sent reservationId=${payment.reservationId} to=${customerEmail}`,
@@ -2649,7 +2667,18 @@ export class PaymentsService {
     }
 
     const seller = this.sellerInvoiceDetails();
+    const languageCode = invoice.customerId
+      ? customerLanguageCode(
+          (
+            await this.prisma.user.findUnique({
+              where: { id: invoice.customerId },
+              select: { languageCode: true },
+            })
+          )?.languageCode,
+        )
+      : await this.customerLanguageCodeByEmail(invoice.buyerEmail);
     const html = renderCustomerInvoiceHtml({
+      languageCode,
       documentTitle: invoice.documentTitle,
       invoiceNumber: invoice.invoiceNumber,
       status: invoice.status,

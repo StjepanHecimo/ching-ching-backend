@@ -146,6 +146,7 @@ export class AuthService {
       result.user.email,
       verificationToken,
       result.user.role,
+      result.user.languageCode,
     );
 
     return {
@@ -368,6 +369,7 @@ export class AuthService {
     const verificationToken = this.createVerificationToken();
     const tokenHash = this.hashToken(verificationToken);
     const passwordHash = await bcrypt.hash(this.createVerificationToken(), 12);
+    const languageCode = this.normalizeCustomerLanguageCode(dto.languageCode);
 
     const user = await this.prisma.$transaction(async (tx) => {
       const createdUser = await tx.user.create({
@@ -378,6 +380,7 @@ export class AuthService {
           lastName: dto.lastName?.trim() ?? "",
           phoneNumber,
           phoneVerifiedAt: phoneVerification.verifiedAt,
+          languageCode,
           age: dto.age,
           gender: dto.gender,
           role: UserRole.CUSTOMER,
@@ -399,7 +402,12 @@ export class AuthService {
       return createdUser;
     });
 
-    await this.sendVerificationEmail(user.email, verificationToken, user.role);
+    await this.sendVerificationEmail(
+      user.email,
+      verificationToken,
+      user.role,
+      user.languageCode,
+    );
 
     return {
       userId: user.id,
@@ -623,7 +631,12 @@ export class AuthService {
       });
     });
 
-    await this.sendVerificationEmail(user.email, verificationToken, user.role);
+    await this.sendVerificationEmail(
+      user.email,
+      verificationToken,
+      user.role,
+      user.languageCode,
+    );
 
     return {
       message:
@@ -671,7 +684,12 @@ export class AuthService {
       });
     });
 
-    await this.sendVerificationEmail(user.email, verificationToken, user.role);
+    await this.sendVerificationEmail(
+      user.email,
+      verificationToken,
+      user.role,
+      user.languageCode,
+    );
 
     return {
       message:
@@ -684,6 +702,7 @@ export class AuthService {
         lastName: user.lastName,
         status: user.status,
         role: user.role,
+        languageCode: user.languageCode,
         age: user.age,
         gender: user.gender,
       },
@@ -740,6 +759,7 @@ export class AuthService {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        languageCode: user.languageCode,
         role: user.role,
       },
     };
@@ -927,6 +947,7 @@ export class AuthService {
       lastName: user.lastName,
       phoneNumber: user.phoneNumber,
       phoneVerifiedAt: user.phoneVerifiedAt,
+      languageCode: user.languageCode,
       age: user.age,
       gender: user.gender,
       role: user.role,
@@ -949,10 +970,14 @@ export class AuthService {
     const normalizedEmail = dto.email?.trim().toLowerCase();
     const firstName = dto.firstName?.trim();
     const lastName = dto.lastName?.trim();
+    const languageCode = dto.languageCode
+      ? this.normalizeCustomerLanguageCode(dto.languageCode)
+      : undefined;
     if (
       normalizedEmail === undefined &&
       firstName === undefined &&
-      lastName === undefined
+      lastName === undefined &&
+      languageCode === undefined
     ) {
       throw new BadRequestException("No profile changes were provided.");
     }
@@ -991,6 +1016,7 @@ export class AuthService {
         data: {
           ...(firstName !== undefined ? { firstName } : {}),
           ...(lastName !== undefined ? { lastName } : {}),
+          ...(languageCode !== undefined ? { languageCode } : {}),
           ...(normalizedEmail !== undefined ? { email: normalizedEmail } : {}),
           ...(emailChanged ? { emailVerifiedAt: null } : {}),
         },
@@ -1017,6 +1043,7 @@ export class AuthService {
         normalizedEmail!,
         verificationToken,
         UserRole.CUSTOMER,
+        languageCode,
       );
     }
 
@@ -1406,6 +1433,7 @@ export class AuthService {
     email: string,
     token: string,
     role: UserRole | string,
+    languageCode?: string | null,
   ) {
     const verificationLink =
       this.configService.getOrThrow<string>("APP_WEB_URL") +
@@ -1420,6 +1448,7 @@ export class AuthService {
       verificationLink,
       appVerificationLink,
       token,
+      languageCode,
     });
   }
 
@@ -1430,6 +1459,7 @@ export class AuthService {
     lastName: string;
     phoneNumber: string | null;
     phoneVerifiedAt?: Date | null;
+    languageCode?: string | null;
     age: number | null;
     gender: string | null;
     role: string;
@@ -1442,11 +1472,16 @@ export class AuthService {
       lastName: user.lastName,
       phoneNumber: user.phoneNumber,
       phoneVerifiedAt: user.phoneVerifiedAt ?? null,
+      languageCode: this.normalizeCustomerLanguageCode(user.languageCode),
       age: user.age,
       gender: user.gender,
       role: user.role,
       status: user.status,
     };
+  }
+
+  private normalizeCustomerLanguageCode(languageCode?: string | null) {
+    return languageCode?.trim().toLowerCase() === "en" ? "en" : "hr";
   }
 
   private slugify(value: string) {

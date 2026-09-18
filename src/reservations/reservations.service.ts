@@ -26,6 +26,7 @@ import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
 import { PaymentsService } from "../payments/payments.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { isEnglishCustomer } from "../shared/customer-language";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { CreateReservationTimeChangeRequestDto } from "./dto/create-reservation-time-change-request.dto";
 import { DeclineReservationDto } from "./dto/decline-reservation.dto";
@@ -4814,7 +4815,7 @@ export class ReservationsService {
       await this.notifyCustomer(reservation, {
         title: "Još 10 minuta za potvrdu dolaska",
         body: "Potvrdi dolazak u aplikaciji. Nakon isteka rezervacija se otkazuje i zadržava se 50% naknade.",
-        type: "reservation_check_in_reminder",
+        type: "reservation_check_in_final_reminder",
       });
     }
   }
@@ -5464,12 +5465,20 @@ export class ReservationsService {
     notification: { title: string; body: string; type: string },
   ) {
     let customerId = reservation.customerId;
+    let customerLanguageCode: string | null = null;
     if (!customerId && reservation.customerEmail) {
       const customer = await this.prisma.user.findUnique({
         where: { email: reservation.customerEmail.trim().toLowerCase() },
-        select: { id: true },
+        select: { id: true, languageCode: true },
       });
       customerId = customer?.id ?? null;
+      customerLanguageCode = customer?.languageCode ?? null;
+    } else if (customerId) {
+      const customer = await this.prisma.user.findUnique({
+        where: { id: customerId },
+        select: { languageCode: true },
+      });
+      customerLanguageCode = customer?.languageCode ?? null;
     }
 
     if (!customerId) {
@@ -5480,14 +5489,19 @@ export class ReservationsService {
     }
 
     try {
+      const localizedNotification = this.localizedCustomerNotification(
+        notification,
+        reservation,
+        customerLanguageCode,
+      );
       this.logger.log(
-        `[push][customer] sending reservationId=${reservation.id} customerId=${customerId} venueId=${reservation.venue.id} type=${notification.type} title=${notification.title}`,
+        `[push][customer] sending reservationId=${reservation.id} customerId=${customerId} venueId=${reservation.venue.id} type=${notification.type} title=${localizedNotification.title}`,
       );
       const result = await this.deviceTokensService.sendToUser({
         userId: customerId,
         app: DevicePushApp.CUSTOMER,
-        title: notification.title,
-        body: notification.body,
+        title: localizedNotification.title,
+        body: localizedNotification.body,
         data: {
           type: notification.type,
           reservationId: reservation.id,
@@ -5513,6 +5527,82 @@ export class ReservationsService {
     }
   }
 
+  private localizedCustomerNotification(
+    notification: { title: string; body: string; type: string },
+    reservation: {
+      tableLabel: string | null;
+      venue: { name: string };
+    },
+    languageCode?: string | null,
+  ) {
+    if (!isEnglishCustomer(languageCode)) {
+      return notification;
+    }
+
+    const table = this.customerPushTableLabel(reservation.tableLabel, true);
+    const venue = reservation.venue.name || "Venue";
+
+    switch (notification.type) {
+      case "reservation_confirmed":
+        return {
+          title: "Reservation confirmed",
+          body: `${venue} confirmed your reservation for ${table}.`,
+        };
+      case "reservation_declined":
+      case "reservation_declined_table_taken":
+        return {
+          title: "Reservation declined",
+          body:
+            notification.type === "reservation_declined_table_taken"
+              ? `${venue} could not confirm ${table} because the table was taken in the meantime.`
+              : `${venue} declined the reservation. Try another table.`,
+        };
+      case "reservation_cancelled":
+      case "reservation_cancelled_by_admin":
+      case "reservation_cancelled_by_venue":
+        return {
+          title: "Reservation cancelled",
+          body: `${venue} cancelled the reservation for ${table}.`,
+        };
+      case "reservation_check_in_confirmed":
+      case "venue_check_in_confirmed":
+        return {
+          title: "Arrival confirmed",
+          body: `${venue} confirmed that you are at the venue.`,
+        };
+      case "reservation_check_in_reminder":
+        return {
+          title: "Confirm arrival",
+          body: "Confirm your arrival in the app.",
+        };
+      case "reservation_check_in_final_reminder":
+        return {
+          title: "10 minutes left to confirm arrival",
+          body: "Confirm your arrival in the app. After the window expires, the reservation is cancelled and 50% of the fee is kept.",
+        };
+      case "reservation_time_change_accepted":
+        return {
+          title: "New time accepted",
+          body: `${venue} accepted the new reservation time for ${table}.`,
+        };
+      case "reservation_time_change_declined":
+        return {
+          title: "Time change was not accepted",
+          body: `${venue} cannot accept the new time. The reservation stays at the original time.`,
+        };
+      default:
+        return notification;
+    }
+  }
+
+  private customerPushTableLabel(value?: string | null, english = false) {
+    const fallback = english ? "Chin-Chin table" : "Chin-Chin stol";
+    const label = value?.trim() || fallback;
+    return english
+      ? label.replace(/^stol\s+/i, "Table ").replace(/^table\s+/i, "Table ")
+      : customerFacingTableLabel(label);
+  }
+
   private async notifyCustomerReservationConfirmedByEmail(reservation: {
     id: string;
     customerEmail: string | null;
@@ -5529,6 +5619,8 @@ export class ReservationsService {
     }
 
     try {
+      const languageCode =
+        await this.customerLanguageCodeByEmail(customerEmail);
       await this.emailService.sendReservationConfirmedEmail({
         to: customerEmail,
         venueName: reservation.venue.name,
@@ -5536,6 +5628,7 @@ export class ReservationsService {
         startAt: reservation.timeSlotStart,
         checkInOpensAt: this.effectiveCustomerCheckInOpensAt(reservation),
         checkInClosesAt: this.effectiveCustomerCheckInClosesAt(reservation),
+        languageCode,
       });
     } catch (error) {
       this.logger.warn(
@@ -5578,12 +5671,15 @@ export class ReservationsService {
     }
 
     try {
+      const languageCode =
+        await this.customerLanguageCodeByEmail(customerEmail);
       await this.emailService.sendReservationRefundEmail({
         to: customerEmail,
         venueName: reservation.venue.name,
         tableLabel: reservation.tableLabel,
         amountCents: reservation.refundCents,
         currency: reservation.currency,
+        languageCode,
       });
     } catch (error) {
       this.logger.warn(
@@ -5608,12 +5704,15 @@ export class ReservationsService {
     }
 
     try {
+      const languageCode =
+        await this.customerLanguageCodeByEmail(customerEmail);
       await this.emailService.sendReservationRefundEmail({
         to: customerEmail,
         venueName: reservation.venue.name,
         tableLabel: reservation.tableLabel,
         amountCents: reservation.refundCents,
         currency: reservation.currency,
+        languageCode,
       });
     } catch (error) {
       this.logger.warn(
@@ -5671,6 +5770,14 @@ export class ReservationsService {
       isCancellationOnReservationDay ||
       isCancellationDayBeforeReservation
     );
+  }
+
+  private async customerLanguageCodeByEmail(email: string) {
+    const customer = await this.prisma.user.findUnique({
+      where: { email: email.trim().toLowerCase() },
+      select: { languageCode: true },
+    });
+    return customer?.languageCode ?? "hr";
   }
 
   private async notifyVenueOwner(

@@ -2,12 +2,18 @@ import { Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import nodemailer, { Transporter } from "nodemailer";
 import { MonitoringService } from "../monitoring/monitoring.service";
+import {
+  customerLanguageCode,
+  customerLocale,
+  isEnglishCustomer,
+} from "../shared/customer-language";
 
 type VerificationEmailInput = {
   to: string;
   verificationLink: string;
   appVerificationLink: string;
   token: string;
+  languageCode?: string | null;
 };
 
 type ReservationRefundEmailInput = {
@@ -17,6 +23,7 @@ type ReservationRefundEmailInput = {
   amountCents: number;
   currency?: string;
   sender?: "NO_REPLY" | "INFO" | "SUPPORT";
+  languageCode?: string | null;
 };
 
 type ReservationConfirmedEmailInput = {
@@ -26,6 +33,7 @@ type ReservationConfirmedEmailInput = {
   startAt: Date;
   checkInOpensAt: Date;
   checkInClosesAt: Date;
+  languageCode?: string | null;
 };
 
 type VenueProblemReportResolvedEmailInput = {
@@ -35,6 +43,7 @@ type VenueProblemReportResolvedEmailInput = {
   amountCents?: number | null;
   currency?: string | null;
   adminNotes?: string | null;
+  languageCode?: string | null;
 };
 
 type CustomerProblemReportResolvedEmailInput = {
@@ -45,6 +54,7 @@ type CustomerProblemReportResolvedEmailInput = {
   amountCents?: number | null;
   currency?: string | null;
   adminNotes?: string | null;
+  languageCode?: string | null;
 };
 
 type VenueRoomDeletedEmailInput = {
@@ -66,6 +76,7 @@ export class EmailService {
   async sendVerificationEmail(input: VerificationEmailInput) {
     const transporter = this.getTransporter();
     const from = this.infoFrom();
+    const en = isEnglishCustomer(input.languageCode);
 
     if (!transporter) {
       this.logVerificationFallback(input);
@@ -75,17 +86,30 @@ export class EmailService {
     await this.sendTrackedMail(transporter, "verification", input.to, {
       from,
       to: input.to,
-      subject: "Chin-Chin verifikacijski link",
-      text: [
-        "Dobrodošli u Chin-Chin.",
-        "",
-        "Otvorite ovaj link za potvrdu maila:",
-        input.appVerificationLink,
-        "",
-        "Ako se aplikacija ne otvori automatski, otvorite Chin-Chin aplikaciju i nastavite verifikaciju.",
-        "",
-        "Ako niste zatražili ovaj link, slobodno ignorirajte ovu poruku.",
-      ].join("\n"),
+      subject: en
+        ? "Chin-Chin verification link"
+        : "Chin-Chin verifikacijski link",
+      text: en
+        ? [
+            "Welcome to Chin-Chin.",
+            "",
+            "Open this link to confirm your email:",
+            input.appVerificationLink,
+            "",
+            "If the app does not open automatically, open the Chin-Chin app and continue verification.",
+            "",
+            "If you did not request this link, you can safely ignore this message.",
+          ].join("\n")
+        : [
+            "Dobrodošli u Chin-Chin.",
+            "",
+            "Otvorite ovaj link za potvrdu maila:",
+            input.appVerificationLink,
+            "",
+            "Ako se aplikacija ne otvori automatski, otvorite Chin-Chin aplikaciju i nastavite verifikaciju.",
+            "",
+            "Ako niste zatražili ovaj link, slobodno ignorirajte ovu poruku.",
+          ].join("\n"),
       html: this.verificationHtml(input),
     });
 
@@ -95,30 +119,47 @@ export class EmailService {
   async sendReservationRefundEmail(input: ReservationRefundEmailInput) {
     const transporter = this.getTransporter();
     const from = this.senderFrom(input.sender ?? "NO_REPLY");
+    const en = isEnglishCustomer(input.languageCode);
 
     if (!transporter) {
       this.logReservationRefundFallback(input);
       return;
     }
 
-    const amount = this.formatCents(input.amountCents, input.currency);
-    const venueName = input.venueName.trim() || "kafić";
-    const tableLabel = input.tableLabel?.trim() || "Chin-Chin stol";
+    const amount = this.formatCents(
+      input.amountCents,
+      input.currency,
+      input.languageCode,
+    );
+    const venueName = input.venueName.trim() || (en ? "venue" : "kafić");
+    const tableLabel =
+      input.tableLabel?.trim() || (en ? "Chin-Chin table" : "Chin-Chin stol");
 
     await this.sendTrackedMail(transporter, "reservation_refund", input.to, {
       from,
       to: input.to,
-      subject: "Chin-Chin povrat sredstava",
-      text: [
-        "Chin-Chin povrat sredstava",
-        "",
-        `Povrat sredstava za rezervaciju u ${venueName} za ${tableLabel} je evidentiran.`,
-        `Iznos povrata: ${amount}.`,
-        "",
-        "Pravila otkazivanja dostupna su u aplikaciji pod rezervacijama.",
-        "",
-        "Ako imaš pitanje, javi se Chin-Chin podršci.",
-      ].join("\n"),
+      subject: en ? "Chin-Chin refund" : "Chin-Chin povrat sredstava",
+      text: en
+        ? [
+            "Chin-Chin refund",
+            "",
+            `A refund for your reservation at ${venueName} for ${tableLabel} has been recorded.`,
+            `Refund amount: ${amount}.`,
+            "",
+            "Cancellation rules are available in the app under Reservations.",
+            "",
+            "If you have any questions, contact Chin-Chin support.",
+          ].join("\n")
+        : [
+            "Chin-Chin povrat sredstava",
+            "",
+            `Povrat sredstava za rezervaciju u ${venueName} za ${tableLabel} je evidentiran.`,
+            `Iznos povrata: ${amount}.`,
+            "",
+            "Pravila otkazivanja dostupna su u aplikaciji pod rezervacijama.",
+            "",
+            "Ako imaš pitanje, javi se Chin-Chin podršci.",
+          ].join("\n"),
       html: this.reservationRefundHtml(input),
     });
 
@@ -130,33 +171,53 @@ export class EmailService {
   async sendReservationConfirmedEmail(input: ReservationConfirmedEmailInput) {
     const transporter = this.getTransporter();
     const from = this.noReplyFrom();
+    const en = isEnglishCustomer(input.languageCode);
 
     if (!transporter) {
       this.logReservationConfirmedFallback(input);
       return;
     }
 
-    const venueName = input.venueName.trim() || "kafić";
-    const tableLabel = input.tableLabel?.trim() || "Chin-Chin stol";
-    const reservationTime = this.formatDateTime(input.startAt);
+    const venueName = input.venueName.trim() || (en ? "venue" : "kafić");
+    const tableLabel =
+      input.tableLabel?.trim() || (en ? "Chin-Chin table" : "Chin-Chin stol");
+    const reservationTime = this.formatDateTime(
+      input.startAt,
+      input.languageCode,
+    );
     const checkInWindow = this.formatCheckInWindow(input);
 
     await this.sendTrackedMail(transporter, "reservation_confirmed", input.to, {
       from,
       to: input.to,
-      subject: "Chin-Chin rezervacija je prihvaćena",
-      text: [
-        "Chin-Chin rezervacija je prihvaćena",
-        "",
-        `${venueName} je prihvatio vaš zahtjev za rezervacijom za ${tableLabel}.`,
-        `Vrijeme rezervacije: ${reservationTime}.`,
-        "",
-        `Molimo vas da potvrdu dolaska, odnosno check-in, napravite u Chin-Chin aplikaciji u periodu ${checkInWindow}.`,
-        "",
-        "Rezervaciju kao i potrebnu potvrdu Vašeg dolaska možete pronaći u Chin-Chin aplikaciji pod Rezervacije.",
-        "Račun za plaćenu rezervaciju bit će dostupan u aplikaciji unutar detalja rezervacije.",
-        "U slučaju otkazivanja bit ćete obaviješteni.",
-      ].join("\n"),
+      subject: en
+        ? "Chin-Chin reservation accepted"
+        : "Chin-Chin rezervacija je prihvaćena",
+      text: en
+        ? [
+            "Chin-Chin reservation accepted",
+            "",
+            `${venueName} accepted your reservation request for ${tableLabel}.`,
+            `Reservation time: ${reservationTime}.`,
+            "",
+            `Please confirm your arrival, i.e. check in, in the Chin-Chin app during this period: ${checkInWindow}.`,
+            "",
+            "You can find the reservation and required arrival confirmation in the Chin-Chin app under Reservations.",
+            "The invoice for the paid reservation will be available in the app inside reservation details.",
+            "If the reservation is cancelled, you will be notified.",
+          ].join("\n")
+        : [
+            "Chin-Chin rezervacija je prihvaćena",
+            "",
+            `${venueName} je prihvatio vaš zahtjev za rezervacijom za ${tableLabel}.`,
+            `Vrijeme rezervacije: ${reservationTime}.`,
+            "",
+            `Molimo vas da potvrdu dolaska, odnosno check-in, napravite u Chin-Chin aplikaciji u periodu ${checkInWindow}.`,
+            "",
+            "Rezervaciju kao i potrebnu potvrdu Vašeg dolaska možete pronaći u Chin-Chin aplikaciji pod Rezervacije.",
+            "Račun za plaćenu rezervaciju bit će dostupan u aplikaciji unutar detalja rezervacije.",
+            "U slučaju otkazivanja bit ćete obaviješteni.",
+          ].join("\n"),
       html: this.reservationConfirmedHtml(input),
     });
 
@@ -220,6 +281,7 @@ export class EmailService {
   ) {
     const transporter = this.getTransporter();
     const from = this.supportFrom();
+    const en = isEnglishCustomer(input.languageCode);
 
     if (!transporter) {
       this.logCustomerProblemReportResolvedFallback(input);
@@ -227,13 +289,18 @@ export class EmailService {
     }
 
     const amount = this.customerProblemReportAmountLabel(input);
-    const venueName = input.venueName.trim() || "kafić";
-    const tableLabel = input.tableLabel?.trim() || "Chin-Chin stol";
+    const venueName = input.venueName.trim() || (en ? "venue" : "kafić");
+    const tableLabel =
+      input.tableLabel?.trim() || (en ? "Chin-Chin table" : "Chin-Chin stol");
     const adminNotes =
       input.adminNotes?.trim() ||
       (input.amountCents != null && input.amountCents > 0
-        ? "Prijava je pregledana i povrat sredstava je evidentiran."
-        : "Prijava je pregledana i riješena od strane Chin-Chin podrške.");
+        ? en
+          ? "The report has been reviewed and the refund has been recorded."
+          : "Prijava je pregledana i povrat sredstava je evidentiran."
+        : en
+          ? "The report has been reviewed and resolved by Chin-Chin support."
+          : "Prijava je pregledana i riješena od strane Chin-Chin podrške.");
 
     await this.sendTrackedMail(
       transporter,
@@ -242,24 +309,44 @@ export class EmailService {
       {
         from,
         to: input.to,
-        subject: "Chin-Chin odgovor na prijavu problema",
-        text: [
-          "Chin-Chin odgovor na prijavu problema",
-          "",
-          `Kafić: ${venueName}`,
-          `Stol: ${tableLabel}`,
-          `ID rezervacije: ${input.reservationId}`,
-          ...(input.amountCents != null && input.amountCents > 0
-            ? [`Iznos povrata: ${amount}`]
-            : []),
-          "",
-          "Odgovor admina:",
-          adminNotes,
-          "",
-          input.amountCents != null && input.amountCents > 0
-            ? "Povrat je evidentiran kroz Chin-Chin sustav plaćanja."
-            : "Prijava je zatvorena prema odgovoru admina.",
-        ].join("\n"),
+        subject: en
+          ? "Chin-Chin response to your problem report"
+          : "Chin-Chin odgovor na prijavu problema",
+        text: en
+          ? [
+              "Chin-Chin response to your problem report",
+              "",
+              `Venue: ${venueName}`,
+              `Table: ${tableLabel}`,
+              `Reservation ID: ${input.reservationId}`,
+              ...(input.amountCents != null && input.amountCents > 0
+                ? [`Refund amount: ${amount}`]
+                : []),
+              "",
+              "Admin response:",
+              adminNotes,
+              "",
+              input.amountCents != null && input.amountCents > 0
+                ? "The refund has been recorded through the Chin-Chin payment system."
+                : "The report has been closed based on the admin response.",
+            ].join("\n")
+          : [
+              "Chin-Chin odgovor na prijavu problema",
+              "",
+              `Kafić: ${venueName}`,
+              `Stol: ${tableLabel}`,
+              `ID rezervacije: ${input.reservationId}`,
+              ...(input.amountCents != null && input.amountCents > 0
+                ? [`Iznos povrata: ${amount}`]
+                : []),
+              "",
+              "Odgovor admina:",
+              adminNotes,
+              "",
+              input.amountCents != null && input.amountCents > 0
+                ? "Povrat je evidentiran kroz Chin-Chin sustav plaćanja."
+                : "Prijava je zatvorena prema odgovoru admina.",
+            ].join("\n"),
         html: this.customerProblemReportResolvedHtml(input),
       },
     );
@@ -402,21 +489,22 @@ export class EmailService {
   }
 
   private verificationHtml(input: VerificationEmailInput) {
+    const en = isEnglishCustomer(input.languageCode);
     return `
       <div style="margin:0;padding:0;background:#ffc857;">
         <div style="max-width:560px;margin:0 auto;padding:32px 18px;font-family:Arial,sans-serif;color:#2d1a10;">
           <div style="background:#fff4d6;border:2px solid #ff9f1c;border-radius:18px;padding:28px;text-align:center;box-shadow:0 12px 32px rgba(45,26,16,0.12);">
             <div style="font-size:38px;font-weight:900;letter-spacing:0;margin-bottom:4px;">Chin-Chin</div>
             <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
-            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">Potvrdi svoj email</h1>
+            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">${en ? "Confirm your email" : "Potvrdi svoj email"}</h1>
             <p style="font-size:16px;line-height:1.55;margin:0 0 24px;color:#6c4127;">
-              Otvori Chin-Chin aplikaciju i nastavi tamo gdje si stao.
+              ${en ? "Open the Chin-Chin app and continue where you left off." : "Otvori Chin-Chin aplikaciju i nastavi tamo gdje si stao."}
             </p>
             <a href="${input.appVerificationLink}" style="display:inline-block;background:#2d1a10;color:#ffffff !important;padding:15px 26px;border-radius:10px;text-decoration:none;font-size:17px;font-weight:900;border:2px solid #2d1a10;">
-              Verificiraj email
+              ${en ? "Verify email" : "Verificiraj email"}
             </a>
             <p style="font-size:13px;line-height:1.5;margin:24px 0 0;color:#79533d;">
-              Ako se aplikacija ne otvori automatski, otvori Chin-Chin aplikaciju i nastavi verifikaciju.
+              ${en ? "If the app does not open automatically, open the Chin-Chin app and continue verification." : "Ako se aplikacija ne otvori automatski, otvori Chin-Chin aplikaciju i nastavi verifikaciju."}
             </p>
           </div>
         </div>
@@ -425,12 +513,15 @@ export class EmailService {
   }
 
   private reservationRefundHtml(input: ReservationRefundEmailInput) {
+    const en = isEnglishCustomer(input.languageCode);
     const amount = this.escapeHtml(
-      this.formatCents(input.amountCents, input.currency),
+      this.formatCents(input.amountCents, input.currency, input.languageCode),
     );
-    const venueName = this.escapeHtml(input.venueName.trim() || "kafić");
+    const venueName = this.escapeHtml(
+      input.venueName.trim() || (en ? "venue" : "kafić"),
+    );
     const tableLabel = this.escapeHtml(
-      input.tableLabel?.trim() || "Chin-Chin stol",
+      input.tableLabel?.trim() || (en ? "Chin-Chin table" : "Chin-Chin stol"),
     );
 
     return `
@@ -439,16 +530,16 @@ export class EmailService {
           <div style="background:#fff4d6;border:2px solid #ff9f1c;border-radius:18px;padding:28px;text-align:center;box-shadow:0 12px 32px rgba(45,26,16,0.12);">
             <div style="font-size:38px;font-weight:900;letter-spacing:0;margin-bottom:4px;">Chin-Chin</div>
             <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
-            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">Povrat sredstava je evidentiran</h1>
+            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">${en ? "Refund recorded" : "Povrat sredstava je evidentiran"}</h1>
             <p style="font-size:16px;line-height:1.55;margin:0 0 18px;color:#6c4127;">
-              Povrat sredstava za rezervaciju u <strong>${venueName}</strong> za <strong>${tableLabel}</strong> je evidentiran.
+              ${en ? `A refund for your reservation at <strong>${venueName}</strong> for <strong>${tableLabel}</strong> has been recorded.` : `Povrat sredstava za rezervaciju u <strong>${venueName}</strong> za <strong>${tableLabel}</strong> je evidentiran.`}
             </p>
             <div style="display:inline-block;background:#2d1a10;color:#ffffff;padding:16px 26px;border-radius:12px;margin:2px 0 18px;">
-              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">Iznos povrata</div>
+              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">${en ? "Refund amount" : "Iznos povrata"}</div>
               <div style="font-size:30px;font-weight:900;line-height:1.15;">${amount}</div>
             </div>
             <p style="font-size:14px;line-height:1.55;margin:0;color:#79533d;">
-              Pravila otkazivanja i detalje rezervacije možeš provjeriti u Chin-Chin aplikaciji pod rezervacijama.
+              ${en ? "Cancellation rules and reservation details are available in the Chin-Chin app under Reservations." : "Pravila otkazivanja i detalje rezervacije možeš provjeriti u Chin-Chin aplikaciji pod rezervacijama."}
             </p>
           </div>
         </div>
@@ -457,11 +548,16 @@ export class EmailService {
   }
 
   private reservationConfirmedHtml(input: ReservationConfirmedEmailInput) {
-    const venueName = this.escapeHtml(input.venueName.trim() || "kafić");
-    const tableLabel = this.escapeHtml(
-      input.tableLabel?.trim() || "Chin-Chin stol",
+    const en = isEnglishCustomer(input.languageCode);
+    const venueName = this.escapeHtml(
+      input.venueName.trim() || (en ? "venue" : "kafić"),
     );
-    const reservationTime = this.escapeHtml(this.formatDateTime(input.startAt));
+    const tableLabel = this.escapeHtml(
+      input.tableLabel?.trim() || (en ? "Chin-Chin table" : "Chin-Chin stol"),
+    );
+    const reservationTime = this.escapeHtml(
+      this.formatDateTime(input.startAt, input.languageCode),
+    );
     const checkInWindow = this.escapeHtml(this.formatCheckInWindow(input));
 
     return `
@@ -470,25 +566,25 @@ export class EmailService {
           <div style="background:#fff4d6;border:2px solid #ff9f1c;border-radius:18px;padding:28px;text-align:center;box-shadow:0 12px 32px rgba(45,26,16,0.12);">
             <div style="font-size:38px;font-weight:900;letter-spacing:0;margin-bottom:4px;">Chin-Chin</div>
             <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
-            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">Rezervacija je prihvaćena</h1>
+            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;">${en ? "Reservation accepted" : "Rezervacija je prihvaćena"}</h1>
             <p style="font-size:16px;line-height:1.55;margin:0 0 18px;color:#6c4127;">
-              ${venueName} je prihvatio vaš zahtjev za rezervacijom za <strong>${tableLabel}</strong>.
+              ${en ? `${venueName} accepted your reservation request for <strong>${tableLabel}</strong>.` : `${venueName} je prihvatio vaš zahtjev za rezervacijom za <strong>${tableLabel}</strong>.`}
             </p>
             <div style="display:inline-block;background:#2d1a10;color:#ffffff;padding:16px 26px;border-radius:12px;margin:2px 0 18px;">
-              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">Vrijeme rezervacije</div>
+              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">${en ? "Reservation time" : "Vrijeme rezervacije"}</div>
               <div style="font-size:24px;font-weight:900;line-height:1.2;">${reservationTime}</div>
             </div>
             <p style="font-size:14px;line-height:1.55;margin:0;color:#79533d;">
-              Molimo vas da potvrdu dolaska, odnosno check-in, napravite u Chin-Chin aplikaciji u periodu <strong>${checkInWindow}</strong>.
+              ${en ? `Please confirm your arrival, i.e. check in, in the Chin-Chin app during this period: <strong>${checkInWindow}</strong>.` : `Molimo vas da potvrdu dolaska, odnosno check-in, napravite u Chin-Chin aplikaciji u periodu <strong>${checkInWindow}</strong>.`}
             </p>
             <p style="font-size:14px;line-height:1.55;margin:12px 0 0;color:#79533d;">
-              U slučaju otkazivanja bit ćete obaviješteni.
+              ${en ? "If the reservation is cancelled, you will be notified." : "U slučaju otkazivanja bit ćete obaviješteni."}
             </p>
             <p style="font-size:14px;line-height:1.55;margin:12px 0 0;color:#79533d;">
-              Rezervaciju kao i potrebnu potvrdu Vašeg dolaska možete pronaći u Chin-Chin aplikaciji pod <strong>Rezervacije</strong>.
+              ${en ? "You can find the reservation and required arrival confirmation in the Chin-Chin app under <strong>Reservations</strong>." : "Rezervaciju kao i potrebnu potvrdu Vašeg dolaska možete pronaći u Chin-Chin aplikaciji pod <strong>Rezervacije</strong>."}
             </p>
             <p style="font-size:14px;line-height:1.55;margin:12px 0 0;color:#79533d;">
-              Račun za plaćenu rezervaciju bit će dostupan u aplikaciji unutar <strong>detalja rezervacije</strong>.
+              ${en ? "The invoice for the paid reservation will be available in the app inside <strong>reservation details</strong>." : "Račun za plaćenu rezervaciju bit će dostupan u aplikaciji unutar <strong>detalja rezervacije</strong>."}
             </p>
           </div>
         </div>
@@ -551,10 +647,13 @@ export class EmailService {
   private customerProblemReportResolvedHtml(
     input: CustomerProblemReportResolvedEmailInput,
   ) {
-    const venueName = this.escapeHtml(input.venueName.trim() || "kafić");
+    const en = isEnglishCustomer(input.languageCode);
+    const venueName = this.escapeHtml(
+      input.venueName.trim() || (en ? "venue" : "kafić"),
+    );
     const reservationId = this.escapeHtml(input.reservationId);
     const tableLabel = this.escapeHtml(
-      input.tableLabel?.trim() || "Chin-Chin stol",
+      input.tableLabel?.trim() || (en ? "Chin-Chin table" : "Chin-Chin stol"),
     );
     const amount =
       input.amountCents != null && input.amountCents > 0
@@ -562,7 +661,9 @@ export class EmailService {
         : null;
     const adminNotes = this.escapeHtml(
       input.adminNotes?.trim() ||
-        "Prijava je pregledana i riješena od strane Chin-Chin podrške.",
+        (en
+          ? "The report has been reviewed and resolved by Chin-Chin support."
+          : "Prijava je pregledana i riješena od strane Chin-Chin podrške."),
     );
 
     return `
@@ -571,30 +672,34 @@ export class EmailService {
           <div style="background:#fff4d6;border:2px solid #ff9f1c;border-radius:18px;padding:28px;box-shadow:0 12px 32px rgba(45,26,16,0.12);">
             <div style="font-size:38px;font-weight:900;letter-spacing:0;margin-bottom:4px;text-align:center;">Chin-Chin</div>
             <div style="height:6px;width:96px;margin:0 auto 22px;border-radius:999px;background:linear-gradient(90deg,#ffcf57,#ff7a1a);"></div>
-            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;text-align:center;">Odgovor na prijavu problema</h1>
+            <h1 style="font-size:25px;line-height:1.15;margin:0 0 10px;text-align:center;">${en ? "Problem report response" : "Odgovor na prijavu problema"}</h1>
             <p style="font-size:16px;line-height:1.55;margin:0 0 18px;color:#6c4127;text-align:center;">
-              Prijava za <strong>${venueName}</strong> i <strong>${tableLabel}</strong> pregledana je od strane Chin-Chin podrške.
+              ${en ? `The report for <strong>${venueName}</strong> and <strong>${tableLabel}</strong> has been reviewed by Chin-Chin support.` : `Prijava za <strong>${venueName}</strong> i <strong>${tableLabel}</strong> pregledana je od strane Chin-Chin podrške.`}
             </p>
             <div style="background:#2d1a10;color:#ffffff;padding:16px 18px;border-radius:12px;margin:2px 0 18px;">
-              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">ID rezervacije</div>
+              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">${en ? "Reservation ID" : "ID rezervacije"}</div>
               <div style="font-size:16px;font-weight:900;line-height:1.25;word-break:break-word;">${reservationId}</div>
               ${
                 amount
                   ? `<div style="height:1px;background:rgba(255,255,255,.18);margin:14px 0;"></div>
-              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">Iznos povrata</div>
+              <div style="font-size:13px;font-weight:800;color:#ffd66b;text-transform:uppercase;letter-spacing:.04em;">${en ? "Refund amount" : "Iznos povrata"}</div>
               <div style="font-size:28px;font-weight:900;line-height:1.15;">${amount}</div>`
                   : ""
               }
             </div>
             <div style="background:#fff9e8;border:1px solid #e3c883;border-radius:12px;padding:14px 16px;">
-              <div style="font-size:13px;font-weight:900;color:#7a2f12;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Odgovor admina</div>
+              <div style="font-size:13px;font-weight:900;color:#7a2f12;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">${en ? "Admin response" : "Odgovor admina"}</div>
               <p style="font-size:15px;line-height:1.55;margin:0;color:#63391e;">${adminNotes}</p>
             </div>
             <p style="font-size:13px;line-height:1.55;margin:18px 0 0;color:#79533d;text-align:center;">
               ${
                 amount
-                  ? "Povrat je evidentiran kroz Chin-Chin sustav plaćanja."
-                  : "Ova prijava je zatvorena prema odgovoru admina."
+                  ? en
+                    ? "The refund has been recorded through the Chin-Chin payment system."
+                    : "Povrat je evidentiran kroz Chin-Chin sustav plaćanja."
+                  : en
+                    ? "The report has been closed based on the admin response."
+                    : "Ova prijava je zatvorena prema odgovoru admina."
               }
             </p>
           </div>
@@ -720,22 +825,38 @@ export class EmailService {
     input: VenueProblemReportResolvedEmailInput,
   ) {
     return input.amountCents != null
-      ? this.formatCents(input.amountCents, input.currency ?? "EUR")
-      : "Nije naveden";
+      ? this.formatCents(
+          input.amountCents,
+          input.currency ?? "EUR",
+          input.languageCode,
+        )
+      : isEnglishCustomer(input.languageCode)
+        ? "Not specified"
+        : "Nije naveden";
   }
 
   private customerProblemReportAmountLabel(
     input: CustomerProblemReportResolvedEmailInput,
   ) {
     return input.amountCents != null
-      ? this.formatCents(input.amountCents, input.currency ?? "EUR")
-      : "Nije naveden";
+      ? this.formatCents(
+          input.amountCents,
+          input.currency ?? "EUR",
+          input.languageCode,
+        )
+      : isEnglishCustomer(input.languageCode)
+        ? "Not specified"
+        : "Nije naveden";
   }
 
-  private formatCents(cents: number, currency = "EUR") {
+  private formatCents(
+    cents: number,
+    currency = "EUR",
+    languageCode?: string | null,
+  ) {
     const amount = Math.max(0, Math.round(cents)) / 100;
     try {
-      return new Intl.NumberFormat("hr-HR", {
+      return new Intl.NumberFormat(customerLocale(languageCode), {
         style: "currency",
         currency,
       }).format(amount);
@@ -744,24 +865,25 @@ export class EmailService {
     }
   }
 
-  private formatDateTime(date: Date) {
-    return new Intl.DateTimeFormat("hr-HR", {
+  private formatDateTime(date: Date, languageCode?: string | null) {
+    return new Intl.DateTimeFormat(customerLocale(languageCode), {
       dateStyle: "medium",
       timeStyle: "short",
       timeZone: "Europe/Zagreb",
     }).format(date);
   }
 
-  private formatTime(date: Date) {
-    return new Intl.DateTimeFormat("hr-HR", {
+  private formatTime(date: Date, languageCode?: string | null) {
+    return new Intl.DateTimeFormat(customerLocale(languageCode), {
       timeStyle: "short",
       timeZone: "Europe/Zagreb",
     }).format(date);
   }
 
   private formatCheckInWindow(input: ReservationConfirmedEmailInput) {
-    return `${this.formatTime(input.checkInOpensAt)} - ${this.formatTime(
+    return `${this.formatTime(input.checkInOpensAt, input.languageCode)} - ${this.formatTime(
       input.checkInClosesAt,
+      input.languageCode,
     )}`;
   }
 

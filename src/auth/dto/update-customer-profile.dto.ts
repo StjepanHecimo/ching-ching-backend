@@ -1,5 +1,6 @@
 import {
   IsEmail,
+  IsIn,
   IsOptional,
   IsString,
   Length,
@@ -20,4 +21,9 @@ export class UpdateCustomerProfileDto {
   @IsOptional()
   @IsEmail()
   email?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(["hr", "en"])
+  languageCode?: "hr" | "en";
 }

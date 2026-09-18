@@ -38,4 +38,9 @@ export class RegisterCustomerDto {
 
   @IsIn(["MALE", "FEMALE", "OTHER", "PREFER_NOT_TO_SAY"])
   gender!: "MALE" | "FEMALE" | "OTHER" | "PREFER_NOT_TO_SAY";
+
+  @IsOptional()
+  @IsString()
+  @IsIn(["hr", "en"])
+  languageCode?: "hr" | "en";
 }

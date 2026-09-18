@@ -1,4 +1,11 @@
+import {
+  customerLanguageCode,
+  customerLocale,
+  isEnglishCustomer,
+} from "../shared/customer-language";
+
 export type CustomerInvoiceTemplateInput = {
+  languageCode?: string | null;
   documentTitle: string;
   invoiceNumber: string;
   status: string;
@@ -41,56 +48,68 @@ function escapeHtml(value?: string | null) {
     .replace(/'/g, "&#039;");
 }
 
-function formatDate(value?: Date | null) {
+function formatDate(value?: Date | null, languageCode?: string | null) {
   if (!value) {
     return "—";
   }
-  return new Intl.DateTimeFormat("hr-HR", {
+  return new Intl.DateTimeFormat(customerLocale(languageCode), {
     dateStyle: "medium",
     timeStyle: "short",
     timeZone: "Europe/Zagreb",
   }).format(value);
 }
 
-function formatMoney(cents: number, currency: string) {
+function formatMoney(
+  cents: number,
+  currency: string,
+  languageCode?: string | null,
+) {
   const key = currency.trim().toUpperCase() || "EUR";
-  let formatter = formatterCache.get(key);
+  const cacheKey = `${customerLanguageCode(languageCode)}:${key}`;
+  let formatter = formatterCache.get(cacheKey);
   if (!formatter) {
-    formatter = new Intl.NumberFormat("hr-HR", {
+    formatter = new Intl.NumberFormat(customerLocale(languageCode), {
       style: "currency",
       currency: key,
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
-    formatterCache.set(key, formatter);
+    formatterCache.set(cacheKey, formatter);
   }
   return formatter.format(cents / 100);
 }
 
-function statusLabel(status: string) {
+function statusLabel(status: string, languageCode?: string | null) {
+  const en = isEnglishCustomer(languageCode);
   switch (status.trim().toUpperCase()) {
     case "REFUNDED":
-      return "Račun storniran / povrat evidentiran";
+      return en
+        ? "Invoice voided / refund recorded"
+        : "Račun storniran / povrat evidentiran";
     case "PARTIALLY_REFUNDED":
-      return "Djelomični povrat evidentiran";
+      return en ? "Partial refund recorded" : "Djelomični povrat evidentiran";
     case "VOIDED":
-      return "Račun poništen";
+      return en ? "Invoice voided" : "Račun poništen";
     default:
-      return "Izdano";
+      return en ? "Issued" : "Izdano";
   }
 }
 
-function localizedTableLabel(value?: string | null) {
+function localizedTableLabel(
+  value?: string | null,
+  languageCode?: string | null,
+) {
+  const en = isEnglishCustomer(languageCode);
   const raw = value?.trim();
   if (!raw) {
     return "";
   }
 
   return raw
-    .replace(/^table\s+/i, "Stol ")
-    .replace(/^room\s+/i, "Prostorija ")
-    .replace(/\btable\b/gi, "stol")
-    .replace(/\broom\b/gi, "prostorija")
+    .replace(/^table\s+/i, en ? "Table " : "Stol ")
+    .replace(/^room\s+/i, en ? "Room " : "Prostorija ")
+    .replace(/\btable\b/gi, en ? "table" : "stol")
+    .replace(/\broom\b/gi, en ? "room" : "prostorija")
     .replace(/\bvip\b/gi, "VIP")
     .replace(/\s+/g, " ")
     .trim();
@@ -116,12 +135,17 @@ function tableTypeSuffix(value?: string | null) {
   return "";
 }
 
-function localizedTableLabelWithType(value?: string | null) {
-  const tableLabel = localizedTableLabel(value);
+function localizedTableLabelWithType(
+  value?: string | null,
+  languageCode?: string | null,
+) {
+  const tableLabel = localizedTableLabel(value, languageCode);
   const suffix = tableTypeSuffix(value);
 
   if (!tableLabel) {
-    return suffix ? `Stol ${suffix}` : "";
+    return suffix
+      ? `${isEnglishCustomer(languageCode) ? "Table" : "Stol"} ${suffix}`
+      : "";
   }
 
   if (
@@ -136,28 +160,64 @@ function localizedTableLabelWithType(value?: string | null) {
 }
 
 export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
-  const grossLabel = formatMoney(input.item.amountCents, input.item.currency);
+  const en = isEnglishCustomer(input.languageCode);
+  const documentTitle = en
+    ? input.documentTitle.replace(
+        /Račun za uslugu rezervacije/i,
+        "Reservation service invoice",
+      )
+    : input.documentTitle;
+  const itemDescription = en
+    ? input.item.description.replace(
+        /Naknada za rezervaciju stola/i,
+        "Table reservation fee",
+      )
+    : input.item.description;
+  const note = en
+    ? input.note
+        ?.replace(
+          /Računovodstveni\/fiskalni format i PDF predložak potvrđuje knjigovođa prije produkcije\./i,
+          "Accounting/fiscal format and PDF template are confirmed by the accountant before production.",
+        )
+        .replace(
+          /Ovaj dokument odnosi se na naknadu za rezervaciju putem Chin-Chin aplikacije\. Piće i hrana se naručuju i plaćaju u objektu, osim ako je drukčije navedeno u službenim uvjetima\./i,
+          "This document relates to the reservation fee through the Chin-Chin app. Drinks and food are ordered and paid at the venue, unless official terms state otherwise.",
+        )
+    : input.note;
+  const grossLabel = formatMoney(
+    input.item.amountCents,
+    input.item.currency,
+    input.languageCode,
+  );
   const refundedLabel = formatMoney(
     input.item.refundedCents,
     input.item.currency,
+    input.languageCode,
   );
   const netCents = Math.max(
     0,
     input.item.amountCents - input.item.refundedCents,
   );
-  const netLabel = formatMoney(netCents, input.item.currency);
+  const netLabel = formatMoney(
+    netCents,
+    input.item.currency,
+    input.languageCode,
+  );
   const hasRefund = input.item.refundedCents > 0;
-  const tableLabel = localizedTableLabelWithType(input.reservation.tableLabel);
+  const tableLabel = localizedTableLabelWithType(
+    input.reservation.tableLabel,
+    input.languageCode,
+  );
   const venueAndTableLabel =
     [input.reservation.venueName, tableLabel].filter(Boolean).join(" · ") ||
     "—";
 
   return `<!doctype html>
-<html lang="hr">
+<html lang="${customerLanguageCode(input.languageCode)}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(input.documentTitle)} ${escapeHtml(input.invoiceNumber)}</title>
+  <title>${escapeHtml(documentTitle)} ${escapeHtml(input.invoiceNumber)}</title>
   <style>
     :root {
       color-scheme: light;
@@ -359,34 +419,34 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
           <p class="document-subtitle">Digitalna rezervacija ugostiteljskog objekta</p>
         </div>
       </div>
-      <span class="pill">${escapeHtml(statusLabel(input.status))}</span>
+      <span class="pill">${escapeHtml(statusLabel(input.status, input.languageCode))}</span>
     </header>
 
     <section class="title-block">
-      <h2 class="document-title">${escapeHtml(input.documentTitle)}</h2>
-      <p class="document-subtitle">Broj računa: ${escapeHtml(input.invoiceNumber)} · Izdano: ${escapeHtml(formatDate(input.issuedAt))}</p>
+      <h2 class="document-title">${escapeHtml(documentTitle)}</h2>
+      <p class="document-subtitle">${en ? "Invoice number" : "Broj računa"}: ${escapeHtml(input.invoiceNumber)} · ${en ? "Issued" : "Izdano"}: ${escapeHtml(formatDate(input.issuedAt, input.languageCode))}</p>
     </section>
 
     <section class="invoice-head">
       <div class="card">
-        <p class="label">Izdavatelj</p>
+        <p class="label">${en ? "Issuer" : "Izdavatelj"}</p>
         <p class="value">Chin-Chin</p>
         <p class="label">OIB</p>
         <p class="value">${escapeHtml(input.seller.oib)}</p>
-        <p class="label">Adresa</p>
+        <p class="label">${en ? "Address" : "Adresa"}</p>
         <p class="value">${escapeHtml(input.seller.address || "—")}</p>
         <p class="label">Email</p>
         <p class="value">${escapeHtml(input.seller.email || "—")}</p>
       </div>
       <div class="card">
-        <p class="label">Korisnik</p>
-        <p class="value">${escapeHtml(input.buyer.name || "Chin-Chin korisnik")}</p>
+        <p class="label">${en ? "Customer" : "Korisnik"}</p>
+        <p class="value">${escapeHtml(input.buyer.name || (en ? "Chin-Chin customer" : "Chin-Chin korisnik"))}</p>
         <p class="label">Email</p>
         <p class="value">${escapeHtml(input.buyer.email || "—")}</p>
-        <p class="label">Rezervacija</p>
-        <p class="value">${escapeHtml(input.reservation.venueName || "Chin-Chin objekt")}</p>
-        <p class="label">Termin</p>
-        <p class="value">${escapeHtml(formatDate(input.reservation.serviceDate))}</p>
+        <p class="label">${en ? "Reservation" : "Rezervacija"}</p>
+        <p class="value">${escapeHtml(input.reservation.venueName || (en ? "Chin-Chin venue" : "Chin-Chin objekt"))}</p>
+        <p class="label">${en ? "Time" : "Termin"}</p>
+        <p class="value">${escapeHtml(formatDate(input.reservation.serviceDate, input.languageCode))}</p>
       </div>
     </section>
 
@@ -394,14 +454,14 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
       <table>
         <thead>
           <tr>
-            <th>Opis usluge</th>
-            <th>Objekt / stol</th>
-            <th class="amount">Iznos</th>
+            <th>${en ? "Service description" : "Opis usluge"}</th>
+            <th>${en ? "Venue / table" : "Objekt / stol"}</th>
+            <th class="amount">${en ? "Amount" : "Iznos"}</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td>${escapeHtml(input.item.description)}</td>
+            <td>${escapeHtml(itemDescription)}</td>
             <td>${escapeHtml(venueAndTableLabel)}</td>
             <td class="amount">${escapeHtml(grossLabel)}</td>
           </tr>
@@ -411,31 +471,30 @@ export function renderCustomerInvoiceHtml(input: CustomerInvoiceTemplateInput) {
 
     <section class="totals">
       <div class="total-row">
-        <span>Ukupno plaćeno</span>
+        <span>${en ? "Total paid" : "Ukupno plaćeno"}</span>
         <span>${escapeHtml(grossLabel)}</span>
       </div>
       ${
         hasRefund
           ? `<div class="total-row">
-        <span>Evidentirani povrat</span>
+        <span>${en ? "Recorded refund" : "Evidentirani povrat"}</span>
         <span>-${escapeHtml(refundedLabel)}</span>
       </div>`
           : ""
       }
       <div class="total-row">
-        <span>Saldo</span>
+        <span>${en ? "Balance" : "Saldo"}</span>
         <span>${escapeHtml(netLabel)}</span>
       </div>
     </section>
 
     <section class="notice">
-      Ovaj dokument odnosi se na naknadu za rezervaciju putem Chin-Chin aplikacije.
-      Piće i hrana se naručuju i plaćaju u objektu, osim ako je drukčije navedeno u službenim uvjetima.
-      ${input.note ? `<br />${escapeHtml(input.note)}` : ""}
+      ${en ? "This document relates to the reservation fee through the Chin-Chin app. Drinks and food are ordered and paid at the venue, unless official terms state otherwise." : "Ovaj dokument odnosi se na naknadu za rezervaciju putem Chin-Chin aplikacije. Piće i hrana se naručuju i plaćaju u objektu, osim ako je drukčije navedeno u službenim uvjetima."}
+      ${note ? `<br />${escapeHtml(note)}` : ""}
     </section>
 
     <footer class="footer">
-      Dokument je generiran elektronički putem Chin-Chin sustava. Računovodstveni i fiskalni elementi potvrđuju se prema važećem pravnom i poreznom okviru.
+      ${en ? "This document was generated electronically through the Chin-Chin system. Accounting and fiscal elements are confirmed according to the applicable legal and tax framework." : "Dokument je generiran elektronički putem Chin-Chin sustava. Računovodstveni i fiskalni elementi potvrđuju se prema važećem pravnom i poreznom okviru."}
     </footer>
   </main>
 </body>
