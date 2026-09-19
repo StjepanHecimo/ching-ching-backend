@@ -1489,6 +1489,79 @@ export class ReservationsService {
     };
   }
 
+  async listVenueAcceptanceStatistics() {
+    const sampleLimit = 100;
+    const venues = await this.prisma.venue.findMany({
+      orderBy: [{ name: "asc" }],
+      select: {
+        id: true,
+        name: true,
+        venueType: true,
+        reservations: {
+          where: {
+            OR: [
+              { confirmedAt: { not: null } },
+              { declinedAt: { not: null } },
+              { status: ReservationStatus.EXPIRED },
+            ],
+          },
+          orderBy: [{ updatedAt: "desc" }],
+          take: sampleLimit,
+          select: {
+            status: true,
+            confirmedAt: true,
+            declinedAt: true,
+            updatedAt: true,
+          },
+        },
+      },
+    });
+
+    const items = venues.map((venue) => {
+      let acceptedCount = 0;
+      let declinedCount = 0;
+      let expiredCount = 0;
+
+      for (const reservation of venue.reservations) {
+        if (reservation.confirmedAt) {
+          acceptedCount += 1;
+        } else if (
+          reservation.declinedAt ||
+          reservation.status === ReservationStatus.DECLINED
+        ) {
+          declinedCount += 1;
+        } else if (reservation.status === ReservationStatus.EXPIRED) {
+          expiredCount += 1;
+        }
+      }
+
+      const sampleSize = acceptedCount + declinedCount + expiredCount;
+
+      return {
+        venueId: venue.id,
+        venueName: venue.name,
+        venueType: venue.venueType,
+        acceptedCount,
+        declinedCount,
+        expiredCount,
+        sampleSize,
+        sampleLimit,
+        acceptanceRate:
+          sampleSize === 0
+            ? null
+            : Math.round((acceptedCount / sampleSize) * 1000) / 10,
+        lastDecisionAt: venue.reservations[0]?.updatedAt ?? null,
+      };
+    });
+
+    return {
+      items,
+      total: items.length,
+      sampleLimit,
+      generatedAt: new Date(),
+    };
+  }
+
   async listAdminCustomerRiskUsers() {
     const now = new Date();
     const thirtyDaysAgo = new Date(now);

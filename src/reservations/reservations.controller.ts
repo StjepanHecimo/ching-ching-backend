@@ -244,6 +244,13 @@ export class ReservationsController {
     });
   }
 
+  @Get("preview/admin/statistics/venue-acceptance")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
+  listVenueAcceptanceStatistics() {
+    return this.reservationsService.listVenueAcceptanceStatistics();
+  }
+
   @Get("preview/admin/customers/risk")
   @UseGuards(JwtAuthGuard, AdminRolesGuard)
   @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
