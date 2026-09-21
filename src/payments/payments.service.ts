@@ -657,6 +657,76 @@ export class PaymentsService {
     };
   }
 
+  async listAdminVenueRefundStatistics() {
+    const rows = await this.prisma.$queryRaw<
+      Array<{
+        monthKey: string;
+        venueId: string;
+        venueName: string;
+        amountCents: bigint;
+      }>
+    >(Prisma.sql`
+      WITH venue_refund_rows AS (
+        SELECT
+          ledger."venueId" AS "venueId",
+          ledger."amountCents" AS "amountCents",
+          ledger."createdAt" AS "occurredAt"
+        FROM "ledger_entries" AS ledger
+        WHERE ledger."type" = 'VENUE_PAYOUT_ADJUSTMENT'
+          AND ledger."direction" = 'CREDIT'
+          AND ledger."amountCents" > 0
+          AND ledger."venueId" IS NOT NULL
+
+        UNION ALL
+
+        SELECT
+          request."venueId" AS "venueId",
+          request."resolutionAmountCents" AS "amountCents",
+          COALESCE(request."resolvedAt", request."updatedAt") AS "occurredAt"
+        FROM "venue_refund_requests" AS request
+        WHERE request."status" = 'REFUNDED_BY_CHIN_CHIN'
+          AND request."resolutionAmountCents" > 0
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "ledger_entries" AS ledger
+            WHERE ledger."type" = 'VENUE_PAYOUT_ADJUSTMENT'
+              AND ledger."direction" = 'CREDIT'
+              AND ledger."amountCents" > 0
+              AND (
+                (
+                  request."paymentId" IS NOT NULL
+                  AND ledger."paymentId" = request."paymentId"
+                )
+                OR ledger."reservationId" = request."reservationId"
+              )
+          )
+      )
+      SELECT
+        TO_CHAR(
+          DATE_TRUNC('month', refund."occurredAt" AT TIME ZONE 'Europe/Zagreb'),
+          'YYYY-MM'
+        ) AS "monthKey",
+        refund."venueId" AS "venueId",
+        venue."name" AS "venueName",
+        SUM(refund."amountCents")::BIGINT AS "amountCents"
+      FROM venue_refund_rows AS refund
+      INNER JOIN "venues" AS venue ON venue."id" = refund."venueId"
+      GROUP BY "monthKey", refund."venueId", venue."name"
+      ORDER BY "monthKey" ASC, venue."name" ASC
+    `);
+
+    return {
+      items: rows.map((row) => ({
+        monthKey: row.monthKey,
+        venueId: row.venueId,
+        venueName: row.venueName,
+        amountCents: Number(row.amountCents),
+      })),
+      total: rows.length,
+      generatedAt: new Date(),
+    };
+  }
+
   async createVenueRefundRequest(
     venueId: string,
     reservationId: string,

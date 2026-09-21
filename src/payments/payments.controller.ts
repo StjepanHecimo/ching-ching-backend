@@ -159,6 +159,17 @@ export class PaymentsController {
     return this.paymentsService.listAdminPaymentTransactions();
   }
 
+  @Get("preview/admin/statistics/venue-refunds")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(
+    UserRole.ADMIN,
+    UserRole.ADMIN_ACCOUNTING,
+    UserRole.CHIN_CHIN_SUPPORT,
+  )
+  listAdminVenueRefundStatistics() {
+    return this.paymentsService.listAdminVenueRefundStatistics();
+  }
+
   @Get("preview/admin/problem-reports")
   @UseGuards(JwtAuthGuard, AdminRolesGuard)
   @AdminRoles(UserRole.ADMIN, UserRole.CHIN_CHIN_SUPPORT)
