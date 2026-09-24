@@ -127,7 +127,7 @@ export class AuthController {
   @Delete("me")
   @UseGuards(JwtAuthGuard)
   deleteMe(@Req() request: AuthenticatedRequest) {
-    return this.authService.deleteCustomerAccount(request.user.userId);
+    return this.authService.deleteOwnAccount(request.user.userId);
   }
 
   @Post("me/phone/request")

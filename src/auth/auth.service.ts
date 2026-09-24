@@ -1056,7 +1056,7 @@ export class AuthService {
     };
   }
 
-  async deleteCustomerAccount(userId: string) {
+  async deleteOwnAccount(userId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { id: true, role: true },
@@ -1065,15 +1065,29 @@ export class AuthService {
     if (!user) {
       throw new UnauthorizedException("User no longer exists.");
     }
-    if (user.role !== UserRole.CUSTOMER) {
-      throw new BadRequestException(
-        "Only customer accounts can delete their customer account.",
-      );
+    if (user.role === UserRole.CUSTOMER) {
+      await this.deleteCustomerAccount(user.id);
+      return {
+        message: "Customer account deleted.",
+        accountType: "CUSTOMER",
+      };
     }
 
+    if (user.role === UserRole.VENUE_OWNER) {
+      await this.deleteVenueOwnerAccount(user.id);
+      return {
+        message: "Venue owner account deleted.",
+        accountType: "VENUE_OWNER",
+      };
+    }
+
+    throw new BadRequestException("This account cannot be deleted here.");
+  }
+
+  private async deleteCustomerAccount(userId: string) {
     await this.prisma.$transaction(async (tx) => {
       await tx.reservation.updateMany({
-        where: { customerId: user.id },
+        where: { customerId: userId },
         data: {
           customerId: null,
           customerName: null,
@@ -1082,31 +1096,69 @@ export class AuthService {
         },
       });
       await tx.reservationPayment.updateMany({
-        where: { customerId: user.id },
+        where: { customerId: userId },
         data: { customerId: null, paymentMethodId: null },
       });
       await tx.reservationPaymentRefund.updateMany({
-        where: { customerId: user.id },
+        where: { customerId: userId },
         data: { customerId: null },
       });
       await tx.ledgerEntry.updateMany({
-        where: { customerId: user.id },
+        where: { customerId: userId },
         data: { customerId: null },
       });
       await tx.customerProblemReport.updateMany({
-        where: { customerId: user.id },
+        where: { customerId: userId },
         data: { customerId: null },
       });
       await tx.reservationTimeChangeRequest.updateMany({
-        where: { customerId: user.id },
+        where: { customerId: userId },
         data: { customerId: null },
       });
-      await tx.user.delete({ where: { id: user.id } });
+      await tx.user.delete({ where: { id: userId } });
     });
+  }
 
-    return {
-      message: "Customer account deleted.",
-    };
+  private async deleteVenueOwnerAccount(userId: string) {
+    const deletedEmail = `deleted+${randomBytes(16).toString("hex")}@deleted.invalid`;
+    const disabledPasswordHash = await bcrypt.hash(
+      randomBytes(48).toString("hex"),
+      12,
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.venue.updateMany({
+        where: { ownerId: userId },
+        data: {
+          isLive: false,
+          liveStartedAt: null,
+          liveEndedAt: new Date(),
+          isChinChinPanelListed: false,
+        },
+      });
+      await tx.pushNotificationLog.deleteMany({ where: { userId } });
+      await tx.devicePushToken.deleteMany({ where: { userId } });
+      await tx.refreshToken.deleteMany({ where: { userId } });
+      await tx.emailVerificationToken.deleteMany({ where: { userId } });
+      await tx.phoneVerificationCode.deleteMany({ where: { userId } });
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          email: deletedEmail,
+          passwordHash: disabledPasswordHash,
+          firstName: "Izbrisani",
+          lastName: "račun",
+          phoneNumber: null,
+          phoneVerifiedAt: null,
+          age: null,
+          gender: null,
+          status: UserStatus.DISABLED,
+          emailVerifiedAt: null,
+          customerBlockedAt: null,
+          customerBlockedReason: null,
+        },
+      });
+    });
   }
 
   async requestCustomerPhoneChange(userId: string, dto: RequestPhoneChangeDto) {

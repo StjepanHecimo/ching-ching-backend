@@ -12,6 +12,8 @@ async function bootstrap() {
     [
       "https://admin.chin-chin.hr",
       "https://api.chin-chin.hr",
+      "https://chin-chin.hr",
+      "https://www.chin-chin.hr",
       "http://localhost:5173",
       "http://localhost:5174",
       "http://localhost:4000",
