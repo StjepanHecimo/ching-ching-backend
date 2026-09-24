@@ -4220,9 +4220,16 @@ export class ReservationsService {
       checkInClosesAt.getTime() <= referenceAt.getTime() &&
       startAt.getTime() > referenceAt.getTime()
     ) {
+      const lateCheckInClosesAt = new Date(
+        referenceAt.getTime() +
+          ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES * 60 * 1000,
+      );
       return {
         checkInOpensAt: referenceAt,
-        checkInClosesAt: startAt,
+        checkInClosesAt:
+          lateCheckInClosesAt.getTime() < startAt.getTime()
+            ? lateCheckInClosesAt
+            : startAt,
       };
     }
 
@@ -4277,15 +4284,16 @@ export class ReservationsService {
       checkInClosesAt.getTime() <= reservation.createdAt.getTime() &&
       reservation.timeSlotStart.getTime() > reservation.createdAt.getTime()
     ) {
-      return reservation.timeSlotStart;
+      const lateCheckInClosesAt = new Date(
+        reservation.createdAt.getTime() +
+          ADVANCE_CUSTOMER_CHECK_IN_WINDOW_MINUTES * 60 * 1000,
+      );
+      return lateCheckInClosesAt.getTime() < reservation.timeSlotStart.getTime()
+        ? lateCheckInClosesAt
+        : reservation.timeSlotStart;
     }
 
-    const effectiveClosesAt =
-      reservation.checkInClosesAt ??
-      this.customerCheckInClosesAt(reservation.timeSlotStart);
-    return effectiveClosesAt.getTime() < reservation.timeSlotStart.getTime()
-      ? reservation.timeSlotStart
-      : effectiveClosesAt;
+    return checkInClosesAt;
   }
 
   private effectiveCustomerCheckInWindow(reservation: {
