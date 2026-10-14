@@ -5,11 +5,12 @@ import {
   Logger,
   MessageEvent,
   NotFoundException,
+  OnModuleDestroy,
   UnauthorizedException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import bcrypt from "bcrypt";
-import { Observable, Subject } from "rxjs";
+import { Observable, Subject, Subscription } from "rxjs";
 import { Prisma } from "../../generated/prisma/client";
 import {
   DevicePushApp,
@@ -26,6 +27,7 @@ import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
 import { PaymentsService } from "../payments/payments.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { VenueLiveSyncEventsService } from "../realtime/venue-live-sync-events.service";
 import { isEnglishCustomer } from "../shared/customer-language";
 import { CreateReservationDto } from "./dto/create-reservation.dto";
 import { CreateReservationTimeChangeRequestDto } from "./dto/create-reservation-time-change-request.dto";
@@ -235,12 +237,13 @@ const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 const VENUE_WEEKLY_CANCELLATION_LIMIT = 7;
 
 @Injectable()
-export class ReservationsService {
+export class ReservationsService implements OnModuleDestroy {
   private readonly logger = new Logger(ReservationsService.name);
   private readonly venueLiveSyncSubjects = new Map<
     string,
     Subject<MessageEvent>
   >();
+  private readonly externalLiveSyncSubscription: Subscription;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -248,7 +251,18 @@ export class ReservationsService {
     private readonly deviceTokensService: DeviceTokensService,
     private readonly emailService: EmailService,
     private readonly configService: ConfigService,
-  ) {}
+    venueLiveSyncEvents: VenueLiveSyncEventsService,
+  ) {
+    this.externalLiveSyncSubscription = venueLiveSyncEvents.triggers$.subscribe(
+      ({ venueId, reason }) => {
+        void this.emitVenueLiveSync(venueId, reason);
+      },
+    );
+  }
+
+  onModuleDestroy() {
+    this.externalLiveSyncSubscription.unsubscribe();
+  }
 
   async runScheduledReservationCleanup() {
     const now = new Date();

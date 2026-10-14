@@ -27,6 +27,7 @@ import {
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { EmailService } from "../email/email.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { VenueLiveSyncEventsService } from "../realtime/venue-live-sync-events.service";
 import { customerLanguageCode } from "../shared/customer-language";
 import { AdminManualRefundDto } from "./dto/admin-manual-refund.dto";
 import {
@@ -45,6 +46,7 @@ const DEFAULT_CHIN_CHIN_COMMISSION_BPS = 1000;
 const DEFAULT_FIRST_RESERVATION_COMMISSION_BPS = 1000;
 const VENUE_CONFIRMATION_WINDOW_SECONDS = 60;
 const VENUE_NO_SHOW_REPORT_DELAY_MINUTES = 10;
+const ZAGREB_TIME_ZONE = "Europe/Zagreb";
 const DEFAULT_CHIN_CHIN_SELLER_NAME =
   "Chin-Chin, obrt za prijevoz i usluge, vl. Stjepan Hećimović";
 const DEFAULT_CHIN_CHIN_SELLER_OIB = "28907046850";
@@ -66,6 +68,7 @@ export class PaymentsService {
     private readonly worldlineProvider: WorldlinePaymentProvider,
     private readonly deviceTokensService: DeviceTokensService,
     private readonly emailService: EmailService,
+    private readonly venueLiveSyncEvents: VenueLiveSyncEventsService,
   ) {}
 
   async createReservationCheckout(
@@ -431,20 +434,18 @@ export class PaymentsService {
     }
 
     const now = new Date();
-    const todayStart = this.startOfLocalDay(now);
-    const todayEnd = this.addDays(todayStart, 1);
-    const currentWeekStart = this.startOfLocalWeek(now);
-    const weekWindowStart = this.addDays(currentWeekStart, -28);
-    const weekWindowEnd = this.addDays(currentWeekStart, 35);
+    const todayStart = this.startOfZagrebDay(now);
+    const todayEnd = this.addZagrebCalendarDays(todayStart, 1);
+    const currentWeekStart = this.startOfZagrebWeek(now);
+    const weekWindowStart = this.addZagrebCalendarDays(currentWeekStart, -28);
+    const weekWindowEnd = this.addZagrebCalendarDays(currentWeekStart, 35);
 
     const payments = await this.prisma.reservationPayment.findMany({
       where: {
         venueId,
-        reservation: {
-          timeSlotStart: {
-            gte: weekWindowStart,
-            lt: weekWindowEnd,
-          },
+        capturedAt: {
+          gte: weekWindowStart,
+          lt: weekWindowEnd,
         },
         status: {
           in: [
@@ -456,7 +457,7 @@ export class PaymentsService {
           ],
         },
       },
-      orderBy: { reservation: { timeSlotStart: "desc" } },
+      orderBy: { capturedAt: "desc" },
       include: {
         reservation: {
           select: {
@@ -479,8 +480,10 @@ export class PaymentsService {
     });
 
     const todayRows = payments.filter((payment) => {
-      const reservationStartAt = payment.reservation.timeSlotStart;
-      return reservationStartAt >= todayStart && reservationStartAt < todayEnd;
+      const capturedAt = payment.capturedAt;
+      return Boolean(
+        capturedAt && capturedAt >= todayStart && capturedAt < todayEnd,
+      );
     });
 
     const weekBuckets = new Map<
@@ -498,13 +501,15 @@ export class PaymentsService {
     >();
 
     for (const payment of payments) {
-      const periodStart = this.startOfLocalWeek(
-        payment.reservation.timeSlotStart,
-      );
+      if (!payment.capturedAt) {
+        continue;
+      }
+
+      const periodStart = this.startOfZagrebWeek(payment.capturedAt);
       const key = periodStart.toISOString();
       const bucket = weekBuckets.get(key) ?? {
         periodStart,
-        periodEnd: this.addDays(periodStart, 7),
+        periodEnd: this.addZagrebCalendarDays(periodStart, 7),
         capturedCents: 0,
         refundedCents: 0,
         netCents: 0,
@@ -1853,6 +1858,7 @@ export class PaymentsService {
     });
 
     await this.tryGenerateAndUploadCustomerInvoicePdf(refunded.id);
+    this.venueLiveSyncEvents.emit(payment.venueId, "payment_refunded");
 
     return this.serializePayment(refunded);
   }
@@ -3307,7 +3313,7 @@ export class PaymentsService {
   }
 
   private compareEarningsWeeks(left: Date, right: Date, now: Date) {
-    const currentWeekStart = this.startOfLocalWeek(now).getTime();
+    const currentWeekStart = this.startOfZagrebWeek(now).getTime();
     const leftTime = left.getTime();
     const rightTime = right.getTime();
 
@@ -3333,21 +3339,77 @@ export class PaymentsService {
     return rightTime - leftTime;
   }
 
-  private startOfLocalDay(date: Date) {
-    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  private startOfZagrebDay(value: Date) {
+    const parts = this.zagrebDateParts(value);
+    return this.zagrebDateTimeToUtc(parts.year, parts.month, parts.day, 0, 0);
   }
 
-  private startOfLocalWeek(date: Date) {
-    const dayStart = this.startOfLocalDay(date);
-    const day = dayStart.getDay();
-    const mondayOffset = day === 0 ? -6 : 1 - day;
-    return this.addDays(dayStart, mondayOffset);
+  private startOfZagrebWeek(value: Date) {
+    const parts = this.zagrebDateParts(value);
+    const dayOfWeek = new Date(
+      Date.UTC(parts.year, parts.month - 1, parts.day),
+    ).getUTCDay();
+    const isoDayOfWeek = dayOfWeek === 0 ? 7 : dayOfWeek;
+    return this.zagrebDateTimeToUtc(
+      parts.year,
+      parts.month,
+      parts.day - isoDayOfWeek + 1,
+      0,
+      0,
+    );
   }
 
-  private addDays(date: Date, days: number) {
-    const next = new Date(date);
-    next.setDate(next.getDate() + days);
-    return next;
+  private addZagrebCalendarDays(value: Date, days: number) {
+    const parts = this.zagrebDateParts(value);
+    return this.zagrebDateTimeToUtc(
+      parts.year,
+      parts.month,
+      parts.day + days,
+      0,
+      0,
+    );
+  }
+
+  private zagrebDateParts(value: Date) {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: ZAGREB_TIME_ZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(value);
+    const part = (type: string) =>
+      Number(parts.find((item) => item.type === type)?.value ?? 0);
+
+    return {
+      year: part("year"),
+      month: part("month"),
+      day: part("day"),
+      hour: part("hour"),
+      minute: part("minute"),
+    };
+  }
+
+  private zagrebDateTimeToUtc(
+    year: number,
+    month: number,
+    day: number,
+    hour: number,
+    minute: number,
+  ) {
+    const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute));
+    const zonedParts = this.zagrebDateParts(utcGuess);
+    const zonedAsUtc = Date.UTC(
+      zonedParts.year,
+      zonedParts.month - 1,
+      zonedParts.day,
+      zonedParts.hour,
+      zonedParts.minute,
+    );
+    const desiredAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+    return new Date(utcGuess.getTime() + desiredAsUtc - zonedAsUtc);
   }
 
   private commissionBps() {

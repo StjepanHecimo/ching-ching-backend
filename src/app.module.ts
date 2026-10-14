@@ -9,6 +9,7 @@ import { ApiExceptionFilter } from "./monitoring/api-exception.filter";
 import { MonitoringModule } from "./monitoring/monitoring.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { PaymentsModule } from "./payments/payments.module";
+import { VenueLiveSyncEventsModule } from "./realtime/venue-live-sync-events.module";
 import { ReservationsModule } from "./reservations/reservations.module";
 import { SpaceLayoutsModule } from "./space-layouts/space-layouts.module";
 import { VenueChinChinPanelModule } from "./venue-chin-chin-panel/venue-chin-chin-panel.module";
@@ -22,6 +23,7 @@ import { VenueDocumentsModule } from "./venue-documents/venue-documents.module";
     JwtModule.register({}),
     MonitoringModule,
     PrismaModule,
+    VenueLiveSyncEventsModule,
     AuthModule,
     DeviceTokensModule,
     PaymentsModule,
