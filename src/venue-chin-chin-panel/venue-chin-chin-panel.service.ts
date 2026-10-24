@@ -5,10 +5,12 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
+import { isDeepStrictEqual } from "node:util";
 import { Prisma } from "../../generated/prisma/client";
 import { DevicePushApp, SpaceLayoutStatus } from "../../generated/prisma/enums";
 import { DeviceTokensService } from "../device-tokens/device-tokens.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { VenueLiveSyncEventsService } from "../realtime/venue-live-sync-events.service";
 import { customerLocale, isEnglishCustomer } from "../shared/customer-language";
 import { UpsertVenueChinChinPanelDto } from "./dto/upsert-venue-chin-chin-panel.dto";
 
@@ -425,6 +427,7 @@ export class VenueChinChinPanelService {
     private readonly prisma: PrismaService,
     private readonly deviceTokensService: DeviceTokensService,
     private readonly configService: ConfigService,
+    private readonly venueLiveSyncEvents: VenueLiveSyncEventsService,
   ) {}
 
   async getForVenue(venueId: string) {
@@ -839,6 +842,15 @@ export class VenueChinChinPanelService {
       },
       include: { venue: true },
     });
+
+    // Menu/price/condition changes refresh customers without changing table locks.
+    this.venueLiveSyncEvents.emit(venueId, "chin_chin_panel_updated");
+    if (
+      (previousPanel?.hasEvent ?? false) !== panel.hasEvent ||
+      !isDeepStrictEqual(previousPanel?.events ?? [], panel.events ?? [])
+    ) {
+      this.venueLiveSyncEvents.emit(venueId, "chin_chin_panel_events_updated");
+    }
 
     await this.scheduleNotificationsForAddedEvents(
       panel.venueId,

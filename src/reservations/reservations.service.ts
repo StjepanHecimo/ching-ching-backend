@@ -3144,6 +3144,18 @@ export class ReservationsService implements OnModuleDestroy {
 
   private async emitVenueLiveSync(venueId: string, reason: string) {
     try {
+      if (
+        reason === "chin_chin_panel_updated" ||
+        reason === "chin_chin_panel_events_updated"
+      ) {
+        // A menu edit does not change occupancy. Customers batch these notices
+        // for 15 seconds; avoid rebuilding the reservation snapshot on each save.
+        this.venueLiveSyncSubject(venueId).next({
+          type: "venue_live_sync",
+          data: { venueId, reason, emittedAt: new Date().toISOString() },
+        });
+        return;
+      }
       const now = new Date();
       const from = this.startOfLocalCalendarDay(now);
       const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);

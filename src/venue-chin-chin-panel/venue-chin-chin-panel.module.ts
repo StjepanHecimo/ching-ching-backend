@@ -3,12 +3,18 @@ import { JwtModule } from "@nestjs/jwt";
 import { JwtAuthGuard } from "../auth/guards/jwt-auth.guard";
 import { DeviceTokensModule } from "../device-tokens/device-tokens.module";
 import { PrismaModule } from "../prisma/prisma.module";
+import { VenueLiveSyncEventsModule } from "../realtime/venue-live-sync-events.module";
 import { VenueEventNotificationScheduler } from "./venue-event-notification.scheduler";
 import { VenueChinChinPanelController } from "./venue-chin-chin-panel.controller";
 import { VenueChinChinPanelService } from "./venue-chin-chin-panel.service";
 
 @Module({
-  imports: [JwtModule.register({}), PrismaModule, DeviceTokensModule],
+  imports: [
+    JwtModule.register({}),
+    PrismaModule,
+    DeviceTokensModule,
+    VenueLiveSyncEventsModule,
+  ],
   controllers: [VenueChinChinPanelController],
   providers: [
     VenueChinChinPanelService,
