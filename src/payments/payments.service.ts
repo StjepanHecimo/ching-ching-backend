@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   InternalServerErrorException,
   Logger,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
@@ -1413,106 +1415,75 @@ export class PaymentsService {
     };
   }
 
-  async handleWorldlineWebhook(
-    dto: WorldlineWebhookDto,
-    headers: Record<string, unknown> = {},
-  ) {
-    if (!this.worldlineProvider.verifyWebhookSignature(headers, dto)) {
-      throw new BadRequestException("Invalid Worldline webhook signature.");
-    }
-
+  async handleWorldlineWebhook(dto: WorldlineWebhookDto) {
+    // A notification is only a hint. Never trust its status, amount or token.
     const payload = this.payloadFromWebhook(dto);
-    const providerEventId =
-      dto.eventId ??
-      this.stringFrom(payload.id) ??
-      this.stringFrom(payload.eventId);
-    const eventType =
-      dto.eventType ??
-      this.stringFrom(payload.type) ??
-      this.stringFrom(payload.eventType);
-
-    if (providerEventId) {
-      const existing = await this.prisma.paymentWebhookEvent.findUnique({
-        where: {
-          provider_providerEventId: {
-            provider: PaymentProvider.WORLDLINE,
-            providerEventId,
-          },
-        },
-      });
-
-      if (existing?.status === PaymentWebhookStatus.PROCESSED) {
-        return {
-          status: "ignored",
-          reason: "Webhook event was already processed.",
-          eventId: existing.id,
-        };
-      }
+    const merchantReference =
+      dto.merchantReference ??
+      this.stringFrom(payload.merchantReference) ??
+      this.nestedString(payload, "references", "merchantReference");
+    const providerPaymentId =
+      dto.paymentId ??
+      this.stringFrom(payload.paymentId) ??
+      this.nestedString(payload, "payment", "id");
+    if (!merchantReference && !providerPaymentId) {
+      throw new BadRequestException("Payment reference is required.");
     }
-
-    const event = await this.prisma.paymentWebhookEvent.create({
-      data: {
+    const payment = await this.prisma.reservationPayment.findFirst({
+      where: {
         provider: PaymentProvider.WORLDLINE,
-        providerEventId,
-        eventType,
-        status: PaymentWebhookStatus.RECEIVED,
-        payload: payload as Prisma.InputJsonValue,
+        ...(merchantReference
+          ? { providerMerchantReference: merchantReference }
+          : {}),
+        ...(providerPaymentId ? { providerPaymentId } : {}),
       },
     });
-
-    try {
-      const normalizedStatus = this.normalizedProviderStatus(dto, payload);
-      const providerPaymentId =
-        dto.paymentId ??
-        this.stringFrom(payload.paymentId) ??
-        this.nestedString(payload, "payment", "id");
-      const merchantReference =
-        dto.merchantReference ??
-        this.stringFrom(payload.merchantReference) ??
-        this.nestedString(payload, "references", "merchantReference");
-
-      if (normalizedStatus === "AUTHORIZED") {
-        const payment = await this.markPaymentAuthorized({
-          providerPaymentId,
-          merchantReference,
-          rawProviderData: payload,
-        });
-        await this.markWebhookProcessed(event.id);
-        return { status: "processed", payment: this.serializePayment(payment) };
-      }
-
-      if (normalizedStatus === "AUTH_FAILED") {
-        const payment = await this.markPaymentAuthorizationFailed({
-          providerPaymentId,
-          merchantReference,
-          rawProviderData: payload,
-        });
-        await this.markWebhookProcessed(event.id);
-        return { status: "processed", payment: this.serializePayment(payment) };
-      }
-
-      await this.prisma.paymentWebhookEvent.update({
-        where: { id: event.id },
-        data: {
-          status: PaymentWebhookStatus.IGNORED,
-          processedAt: new Date(),
-        },
-      });
-
-      return { status: "ignored", reason: "Webhook status is not actionable." };
-    } catch (error) {
-      await this.prisma.paymentWebhookEvent.update({
-        where: { id: event.id },
-        data: {
-          status: PaymentWebhookStatus.FAILED,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
-      throw error;
+    if (!payment)
+      throw new NotFoundException("Reservation payment was not found.");
+    if (payment.status !== ReservationPaymentStatus.AUTH_PENDING) {
+      return { status: "ignored" };
     }
+    if (!payment.providerCheckoutId || !payment.providerMerchantReference) {
+      throw new BadRequestException("Payment has no stored Saferpay checkout.");
+    }
+    // Mock state changes are only permitted through the guarded admin endpoint.
+    if (this.worldlineProvider.isMockMode()) {
+      throw new ForbiddenException(
+        "Payment notifications are disabled in mock mode.",
+      );
+    }
+    await this.assertReservationCheckout(payment.reservationId);
+    // Deduplicate using our payment ID, not an attacker-supplied event ID.
+    const providerEventId = `saferpay:${payment.id}:authorization-verified`;
+    const verifiedEvent = {
+      eventType: "SAFERPAY_AUTHORIZATION_VERIFIED",
+      status: PaymentWebhookStatus.PROCESSED,
+      processedAt: new Date(),
+      payload: {
+        paymentId: payment.id,
+        merchantReference: payment.providerMerchantReference,
+      },
+    };
+    await this.prisma.paymentWebhookEvent.upsert({
+      where: {
+        provider_providerEventId: {
+          provider: PaymentProvider.WORLDLINE,
+          providerEventId,
+        },
+      },
+      create: {
+        provider: PaymentProvider.WORLDLINE,
+        providerEventId,
+        ...verifiedEvent,
+      },
+      update: verifiedEvent,
+    });
+    // Notifications must not disclose payment/customer details.
+    return { status: "processed" };
   }
 
   async mockAuthorizeReservationPayment(reservationId: string) {
+    this.worldlineProvider.assertMockAuthorizationAllowed();
     const payment = await this.prisma.reservationPayment.findFirst({
       where: { reservationId },
       orderBy: { createdAt: "desc" },
@@ -1559,15 +1530,14 @@ export class PaymentsService {
       throw new NotFoundException("Reservation payment was not found.");
     }
 
-    if (
-      payment.status === ReservationPaymentStatus.AUTHORIZED ||
-      payment.status === ReservationPaymentStatus.CAPTURED ||
-      payment.status === ReservationPaymentStatus.CAPTURE_PENDING
-    ) {
+    if (payment.status !== ReservationPaymentStatus.AUTH_PENDING) {
       return this.serializePayment(payment);
     }
 
-    const providerCheckoutId = token?.trim() || payment.providerCheckoutId;
+    if (token?.trim() && token.trim() !== payment.providerCheckoutId) {
+      throw new BadRequestException("Payment checkout token does not match.");
+    }
+    const providerCheckoutId = payment.providerCheckoutId;
     if (!providerCheckoutId) {
       throw new BadRequestException("Payment checkout token is missing.");
     }
@@ -1576,6 +1546,12 @@ export class PaymentsService {
       const providerResult =
         await this.worldlineProvider.assertAuthorizationCheckout(
           providerCheckoutId,
+          {
+            amountCents: payment.amountCents,
+            currency: payment.currency,
+            merchantReference: payment.providerMerchantReference ?? "",
+            providerPaymentId: payment.providerPaymentId,
+          },
         );
       const rawProviderData = providerResult.rawProviderData;
       const providerStatus = this.normalizedRawProviderStatus(rawProviderData);
@@ -1602,15 +1578,9 @@ export class PaymentsService {
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return this.serializePayment(
-        await this.markPaymentAuthorizationFailed({
-          providerPaymentId: payment.providerPaymentId ?? undefined,
-          merchantReference: payment.providerMerchantReference ?? undefined,
-          rawProviderData: {
-            action: "PAYMENT_PAGE_ASSERT_FAILED",
-            error: error instanceof Error ? error.message : String(error),
-          },
-        }),
+      // Timeouts, pending payments and mismatches must not cancel a valid payment.
+      throw new ServiceUnavailableException(
+        "Payment verification is unavailable. Please retry.",
       );
     }
   }
@@ -2005,14 +1975,27 @@ export class PaymentsService {
       throw new NotFoundException("Reservation payment was not found.");
     }
 
-    const shouldNotifyReservationRequest =
-      payment.status !== ReservationPaymentStatus.AUTHORIZED &&
-      payment.status !== ReservationPaymentStatus.CAPTURED;
+    let shouldNotifyReservationRequest = false;
     const confirmationExpiresAt = new Date(
       Date.now() + VENUE_CONFIRMATION_WINDOW_SECONDS * 1000,
     );
 
     const updatedPayment = await this.prisma.$transaction(async (tx) => {
+      // Claim only a pending authorization. A repeated/concurrent callback must
+      // not reopen a reservation or downgrade an already captured/refunded payment.
+      const claimed = await tx.reservationPayment.updateMany({
+        where: {
+          id: payment.id,
+          status: ReservationPaymentStatus.AUTH_PENDING,
+        },
+        data: { status: ReservationPaymentStatus.AUTHORIZED },
+      });
+      if (!claimed.count) {
+        return tx.reservationPayment.findUniqueOrThrow({
+          where: { id: payment.id },
+        });
+      }
+      shouldNotifyReservationRequest = true;
       const paymentMethod = await this.upsertSavedPaymentMethodFromProviderData(
         tx,
         payment.customerId,
@@ -3471,37 +3454,6 @@ export class PaymentsService {
     return !previousReservationAtVenue;
   }
 
-  private normalizedProviderStatus(
-    dto: WorldlineWebhookDto,
-    payload: Record<string, unknown>,
-  ) {
-    const rawStatus = (
-      dto.status ??
-      this.stringFrom(payload.status) ??
-      this.nestedString(payload, "Transaction", "Status") ??
-      this.nestedString(payload, "transaction", "status") ??
-      this.nestedString(payload, "payment", "status") ??
-      ""
-    ).toUpperCase();
-
-    if (
-      rawStatus.includes("AUTHORIZED") ||
-      rawStatus === "AUTHORIZATION_REQUESTED"
-    ) {
-      return "AUTHORIZED" as const;
-    }
-
-    if (
-      rawStatus.includes("REJECTED") ||
-      rawStatus.includes("FAILED") ||
-      rawStatus.includes("CANCELLED")
-    ) {
-      return "AUTH_FAILED" as const;
-    }
-
-    return "IGNORED" as const;
-  }
-
   private normalizedRawProviderStatus(payload: Record<string, unknown>) {
     const saferpay = this.toJsonObject(payload.saferpay);
     const rawStatus = (
@@ -3573,16 +3525,6 @@ export class PaymentsService {
       return undefined;
     }
     return this.stringFrom((parent as Record<string, unknown>)[childKey]);
-  }
-
-  private markWebhookProcessed(id: string) {
-    return this.prisma.paymentWebhookEvent.update({
-      where: { id },
-      data: {
-        status: PaymentWebhookStatus.PROCESSED,
-        processedAt: new Date(),
-      },
-    });
   }
 
   private isTerminalReservationStatus(status: ReservationStatus) {

@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { ForbiddenException, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { randomUUID } from "crypto";
 import { MonitoringService } from "../monitoring/monitoring.service";
@@ -64,7 +64,7 @@ export class WorldlinePaymentProvider {
       };
     }
 
-    const notifyUrl = this.saferpayNotifyUrl();
+    const notifyUrl = this.saferpayNotifyUrl(input.merchantReference);
     const response = await this.saferpayPost<SaferpayPaymentPageInitialize>(
       "/Payment/v1/PaymentPage/Initialize",
       {
@@ -84,7 +84,8 @@ export class WorldlinePaymentProvider {
         ...(notifyUrl
           ? {
               Notification: {
-                NotifyUrl: notifyUrl,
+                SuccessNotifyUrl: notifyUrl,
+                FailNotifyUrl: notifyUrl,
               },
             }
           : {}),
@@ -117,6 +118,12 @@ export class WorldlinePaymentProvider {
 
   async assertAuthorizationCheckout(
     providerCheckoutId: string,
+    expected: {
+      amountCents: number;
+      currency: string;
+      merchantReference: string;
+      providerPaymentId?: string | null;
+    },
   ): Promise<ProviderPaymentResult> {
     if (this.useMockProvider()) {
       return {
@@ -140,6 +147,21 @@ export class WorldlinePaymentProvider {
     const providerPaymentId = response.Transaction?.Id;
     if (!providerPaymentId) {
       throw new Error("Saferpay assert did not return Transaction.Id.");
+    }
+    if (expected) {
+      const transaction = response.Transaction;
+      if (
+        transaction?.Status !== "AUTHORIZED" ||
+        transaction.OrderId !== expected.merchantReference ||
+        transaction.Amount?.Value !== String(expected.amountCents) ||
+        transaction.Amount.CurrencyCode !== expected.currency ||
+        (expected.providerPaymentId &&
+          providerPaymentId !== expected.providerPaymentId)
+      ) {
+        throw new Error(
+          "Saferpay transaction does not match the expected authorization.",
+        );
+      }
     }
 
     return {
@@ -447,11 +469,20 @@ export class WorldlinePaymentProvider {
     };
   }
 
-  verifyWebhookSignature(_headers: Record<string, unknown>, _body: unknown) {
-    // TODO: Wire Worldline signature validation once production credentials are
-    // issued. The payment service still stores and processes events
-    // idempotently, so local/mock development remains deterministic.
-    return true;
+  assertMockAuthorizationAllowed() {
+    if (
+      this.configService.get<string>("NODE_ENV")?.trim().toLowerCase() ===
+        "production" ||
+      !this.useMockProvider()
+    ) {
+      throw new ForbiddenException(
+        "Mock authorization is disabled outside local mock mode.",
+      );
+    }
+  }
+
+  isMockMode() {
+    return this.useMockProvider();
   }
 
   private useMockProvider() {
@@ -560,10 +591,13 @@ export class WorldlinePaymentProvider {
     );
   }
 
-  private saferpayNotifyUrl() {
+  private saferpayNotifyUrl(merchantReference?: string) {
     const configured = this.configService.get<string>("SAFERPAY_NOTIFY_URL");
     if (configured?.trim()) {
-      return configured.trim();
+      const url = new URL(configured.trim());
+      if (merchantReference)
+        url.searchParams.set("merchantReference", merchantReference);
+      return url.toString();
     }
     return undefined;
   }
@@ -770,6 +804,8 @@ type SaferpayPaymentPageAssert = {
   Transaction?: {
     Id?: string;
     Status?: string;
+    OrderId?: string;
+    Amount?: { Value?: string; CurrencyCode?: string };
   };
   RegistrationResult?: {
     Alias?: {

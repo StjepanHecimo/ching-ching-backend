@@ -3,7 +3,7 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -270,6 +270,8 @@ export class PaymentsController {
   }
 
   @Post("preview/reservations/:reservationId/mock-authorize")
+  @UseGuards(JwtAuthGuard, AdminRolesGuard)
+  @AdminRoles(UserRole.ADMIN)
   mockAuthorizeReservationPayment(
     @Param("reservationId") reservationId: string,
   ) {
@@ -277,11 +279,22 @@ export class PaymentsController {
   }
 
   @Post("webhooks/worldline")
+  @HttpCode(200)
   handleWorldlineWebhook(
     @Body() dto: WorldlineWebhookDto,
-    @Headers() headers: Record<string, unknown>,
+    @Query("merchantReference") merchantReference?: string,
   ) {
-    return this.paymentsService.handleWorldlineWebhook(dto, headers);
+    return this.paymentsService.handleWorldlineWebhook({
+      ...dto,
+      merchantReference: merchantReference ?? dto.merchantReference,
+    });
+  }
+
+  @Get("webhooks/worldline")
+  handleSaferpayNotification(
+    @Query("merchantReference") merchantReference?: string,
+  ) {
+    return this.paymentsService.handleWorldlineWebhook({ merchantReference });
   }
 
   @Get("returns/saferpay/payment-method")
