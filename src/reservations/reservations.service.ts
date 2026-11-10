@@ -215,7 +215,7 @@ const CLUB_LIVE_PRICING_BOOSTS: Record<
 };
 const LARGE_TABLE_MIN_CAPACITY = 6;
 const MIN_PUBLIC_SELECTION_ALLOWED_RATIO = 0.3;
-const LIVE_RADIUS_METERS = 10000;
+const DEFAULT_LIVE_RESERVATION_RADIUS_METERS = 10000;
 const LIVE_START_WINDOW_START_MINUTES = 18 * 60;
 const LIVE_START_WINDOW_END_MINUTES = 26 * 60;
 const LIVE_END_GRACE_MINUTES = 0;
@@ -258,6 +258,22 @@ export class ReservationsService implements OnModuleDestroy {
         void this.emitVenueLiveSync(venueId, reason);
       },
     );
+  }
+
+  private get liveReservationRadiusMeters(): number | null {
+    const configured = this.configService
+      .get<string>("LIVE_RESERVATION_RADIUS_METERS")
+      ?.trim()
+      .toUpperCase();
+
+    if (configured === "0" || configured === "UNLIMITED") {
+      return null;
+    }
+
+    const parsed = Number(configured);
+    return Number.isFinite(parsed) && parsed > 0
+      ? parsed
+      : DEFAULT_LIVE_RESERVATION_RADIUS_METERS;
   }
 
   onModuleDestroy() {
@@ -381,7 +397,8 @@ export class ReservationsService implements OnModuleDestroy {
       checkInClosesAt: slot.checkInClosesAt.toISOString(),
       arrivalDeadlineAt: slot.arrivalDeadlineAt.toISOString(),
       partySize: query.partySize,
-      liveRadiusMeters: reservationType === "LIVE" ? LIVE_RADIUS_METERS : null,
+      liveRadiusMeters:
+        reservationType === "LIVE" ? this.liveReservationRadiusMeters : null,
       distanceMeters: liveDistanceMeters,
       livePricingBoost:
         reservationType === "LIVE" ? effectiveLivePricingBoost : null,
@@ -2826,7 +2843,7 @@ export class ReservationsService implements OnModuleDestroy {
       isChinChinPanelListed: venue.isChinChinPanelListed,
       documentsApproved: hasApprovedDocuments,
       canGoLive,
-      liveRadiusMeters: LIVE_RADIUS_METERS,
+      liveRadiusMeters: this.liveReservationRadiusMeters,
       liveStartWindow: this.liveStartWindowStatus(
         venue.liveReservationWindowStartMinutes,
         venue.liveReservationWindowEndMinutes,
@@ -3706,10 +3723,11 @@ export class ReservationsService implements OnModuleDestroy {
       userLongitude,
     );
 
-    if (distanceMeters > LIVE_RADIUS_METERS) {
+    const liveRadiusMeters = this.liveReservationRadiusMeters;
+    if (liveRadiusMeters != null && distanceMeters > liveRadiusMeters) {
       throw new BadRequestException(
         `Live rezervacija je dostupna samo korisnicima unutar ${this.formatDistanceKm(
-          LIVE_RADIUS_METERS,
+          liveRadiusMeters,
         )} od kafića.`,
       );
     }
