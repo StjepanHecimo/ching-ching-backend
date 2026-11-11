@@ -1453,6 +1453,12 @@ export class AuthService {
     if (/^00[1-9]\d{5,14}$/.test(normalized)) {
       return `+${normalized.slice(2)}`;
     }
+    // Accept international numbers without the optional leading plus as a
+    // defensive compatibility measure. The mobile app normally sends +CC...
+    // after the user selects a country (including Pakistan +92).
+    if (/^[1-9]\d{5,14}$/.test(normalized)) {
+      return `+${normalized}`;
+    }
     if (/^0\d{7,14}$/.test(normalized)) {
       return `+385${normalized.slice(1)}`;
     }
