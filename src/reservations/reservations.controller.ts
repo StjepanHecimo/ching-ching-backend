@@ -336,68 +336,121 @@ export class ReservationsController {
   }
 
   @Patch("preview/:id/status")
+  @UseGuards(JwtAuthGuard)
   updateReservationStatus(
     @Param("id") id: string,
     @Body() dto: UpdateReservationStatusDto,
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.reservationsService.updateReservationStatus(id, dto);
+    return this.reservationsService.updateReservationStatus(
+      id,
+      dto,
+      request.user.userId,
+    );
   }
 
   @Get("preview/:id")
-  getReservation(@Param("id") id: string) {
-    return this.reservationsService.getReservation(id);
+  @UseGuards(JwtAuthGuard)
+  getReservation(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.reservationsService.getReservation(id, request.user.userId);
   }
 
   @Post("preview/:id/accept")
-  acceptReservation(@Param("id") id: string) {
-    return this.reservationsService.acceptReservation(id);
+  @UseGuards(JwtAuthGuard)
+  acceptReservation(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.reservationsService.acceptReservation(id, request.user.userId);
   }
 
   @Post("preview/time-change-requests/:requestId/accept")
-  acceptReservationTimeChangeRequest(@Param("requestId") requestId: string) {
+  @UseGuards(JwtAuthGuard)
+  acceptReservationTimeChangeRequest(
+    @Param("requestId") requestId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
     return this.reservationsService.acceptReservationTimeChangeRequest(
       requestId,
+      request.user.userId,
     );
   }
 
   @Post("preview/time-change-requests/:requestId/decline")
-  declineReservationTimeChangeRequest(@Param("requestId") requestId: string) {
+  @UseGuards(JwtAuthGuard)
+  declineReservationTimeChangeRequest(
+    @Param("requestId") requestId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
     return this.reservationsService.declineReservationTimeChangeRequest(
       requestId,
+      request.user.userId,
     );
   }
 
   @Post("preview/:id/check-in")
-  checkInReservation(@Param("id") id: string) {
-    return this.reservationsService.checkInReservation(id);
+  @UseGuards(JwtAuthGuard)
+  checkInReservation(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.reservationsService.checkInReservation(id, request.user.userId);
   }
 
   @Post("preview/:id/customer-check-in")
-  customerCheckInReservation(@Param("id") id: string) {
-    return this.reservationsService.customerCheckInReservation(id);
+  @UseGuards(JwtAuthGuard)
+  customerCheckInReservation(
+    @Param("id") id: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.reservationsService.customerCheckInReservation(
+      id,
+      request.user.userId,
+    );
   }
 
   @Post("preview/:id/customer-cancel")
+  @UseGuards(JwtAuthGuard)
   cancelReservationByCustomer(
     @Param("id") id: string,
     @Body() dto: DeclineReservationDto,
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.reservationsService.cancelReservationByCustomer(id, dto);
+    return this.reservationsService.cancelReservationByCustomer(
+      id,
+      dto,
+      request.user.userId,
+    );
   }
 
   @Post("preview/:id/decline")
+  @UseGuards(JwtAuthGuard)
   declineReservation(
     @Param("id") id: string,
     @Body() dto: DeclineReservationDto,
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.reservationsService.declineReservation(id, dto);
+    return this.reservationsService.declineReservation(
+      id,
+      dto,
+      request.user.userId,
+    );
   }
 
   @Post("preview/:id/venue-cancel")
+  @UseGuards(JwtAuthGuard)
   cancelReservationByVenue(
     @Param("id") id: string,
     @Body() dto: DeclineReservationDto,
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.reservationsService.cancelReservationByVenue(id, dto);
+    return this.reservationsService.cancelReservationByVenue(
+      id,
+      dto,
+      request.user.userId,
+    );
   }
 }

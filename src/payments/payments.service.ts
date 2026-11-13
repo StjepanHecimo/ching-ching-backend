@@ -87,6 +87,12 @@ export class PaymentsService {
       throw new NotFoundException("Reservation was not found.");
     }
 
+    if (customerUserId && reservation.customerId !== customerUserId) {
+      throw new ForbiddenException(
+        "Only the customer who created the reservation can pay for it.",
+      );
+    }
+
     if (this.isTerminalReservationStatus(reservation.status)) {
       throw new BadRequestException("Reservation is not payable.");
     }
@@ -212,9 +218,15 @@ export class PaymentsService {
     return this.serializePayment(payment);
   }
 
-  async getReservationPaymentSummary(reservationId: string) {
+  async getReservationPaymentSummary(
+    reservationId: string,
+    customerUserId: string,
+  ) {
     const payments = await this.prisma.reservationPayment.findMany({
-      where: { reservationId },
+      where: {
+        reservationId,
+        reservation: { customerId: customerUserId },
+      },
       orderBy: { createdAt: "desc" },
       include: { ledgerEntries: true },
     });

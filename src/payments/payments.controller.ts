@@ -30,11 +30,17 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   @Post("preview/reservations/:reservationId/checkout")
+  @UseGuards(JwtAuthGuard)
   createReservationCheckout(
     @Param("reservationId") reservationId: string,
     @Body() dto: CreateReservationCheckoutDto,
+    @Req() request: AuthenticatedRequest,
   ) {
-    return this.paymentsService.createReservationCheckout(reservationId, dto);
+    return this.paymentsService.createReservationCheckout(
+      reservationId,
+      dto,
+      request.user.userId,
+    );
   }
 
   @Post("customers/me/reservations/:reservationId/checkout")
@@ -114,18 +120,28 @@ export class PaymentsController {
   }
 
   @Get("preview/reservations/:reservationId")
-  getReservationPaymentSummary(@Param("reservationId") reservationId: string) {
-    return this.paymentsService.getReservationPaymentSummary(reservationId);
+  @UseGuards(JwtAuthGuard)
+  getReservationPaymentSummary(
+    @Param("reservationId") reservationId: string,
+    @Req() request: AuthenticatedRequest,
+  ) {
+    return this.paymentsService.getReservationPaymentSummary(
+      reservationId,
+      request.user.userId,
+    );
   }
 
   @Post("preview/reservations/:reservationId/assert")
+  @UseGuards(JwtAuthGuard)
   assertPreviewReservationCheckout(
     @Param("reservationId") reservationId: string,
     @Body() dto: { token?: string },
+    @Req() request: AuthenticatedRequest,
   ) {
     return this.paymentsService.assertReservationCheckout(
       reservationId,
       dto.token,
+      request.user.userId,
     );
   }
 

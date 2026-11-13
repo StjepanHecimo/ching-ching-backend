@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   MessageEvent,
@@ -278,6 +279,39 @@ export class ReservationsService implements OnModuleDestroy {
 
   onModuleDestroy() {
     this.externalLiveSyncSubscription.unsubscribe();
+  }
+
+  private async assertReservationAccess(
+    reservationId: string,
+    userId: string,
+    access: "customer" | "venue" | "either",
+  ) {
+    const reservation = await this.prisma.reservation.findUnique({
+      where: { id: reservationId },
+      select: {
+        customerId: true,
+        venue: { select: { ownerId: true } },
+      },
+    });
+
+    if (!reservation) {
+      throw new NotFoundException("Reservation was not found.");
+    }
+
+    const isCustomer = reservation.customerId === userId;
+    const isVenueOwner = reservation.venue.ownerId === userId;
+    const allowed =
+      access === "customer"
+        ? isCustomer
+        : access === "venue"
+          ? isVenueOwner
+          : isCustomer || isVenueOwner;
+
+    if (!allowed) {
+      throw new ForbiddenException(
+        "You are not allowed to access this reservation.",
+      );
+    }
   }
 
   async runScheduledReservationCleanup() {
@@ -825,7 +859,10 @@ export class ReservationsService implements OnModuleDestroy {
     };
   }
 
-  async acceptReservationTimeChangeRequest(requestId: string) {
+  async acceptReservationTimeChangeRequest(
+    requestId: string,
+    userId?: string,
+  ) {
     const request = await this.prisma.reservationTimeChangeRequest.findUnique({
       where: { id: requestId },
       include: { reservation: { include: { venue: true } } },
@@ -833,6 +870,9 @@ export class ReservationsService implements OnModuleDestroy {
 
     if (!request) {
       throw new NotFoundException("Zahtjev za promjenu termina nije pronađen.");
+    }
+    if (userId) {
+      await this.assertReservationAccess(request.reservationId, userId, "venue");
     }
     if (request.status !== ReservationTimeChangeRequestStatus.PENDING) {
       throw new BadRequestException(
@@ -921,7 +961,10 @@ export class ReservationsService implements OnModuleDestroy {
     return this.serializeReservation(updated);
   }
 
-  async declineReservationTimeChangeRequest(requestId: string) {
+  async declineReservationTimeChangeRequest(
+    requestId: string,
+    userId?: string,
+  ) {
     const request = await this.prisma.reservationTimeChangeRequest.findUnique({
       where: { id: requestId },
       include: { reservation: { include: { venue: true } } },
@@ -929,6 +972,9 @@ export class ReservationsService implements OnModuleDestroy {
 
     if (!request) {
       throw new NotFoundException("Zahtjev za promjenu termina nije pronađen.");
+    }
+    if (userId) {
+      await this.assertReservationAccess(request.reservationId, userId, "venue");
     }
     if (request.status !== ReservationTimeChangeRequestStatus.PENDING) {
       throw new BadRequestException(
@@ -2139,7 +2185,10 @@ export class ReservationsService implements OnModuleDestroy {
     return this.serializeReservation(checkedIn);
   }
 
-  async getReservation(id: string) {
+  async getReservation(id: string, userId?: string) {
+    if (userId) {
+      await this.assertReservationAccess(id, userId, "either");
+    }
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
@@ -2174,7 +2223,10 @@ export class ReservationsService implements OnModuleDestroy {
     };
   }
 
-  async acceptReservation(id: string) {
+  async acceptReservation(id: string, userId?: string) {
+    if (userId) {
+      await this.assertReservationAccess(id, userId, "venue");
+    }
     let reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
@@ -2372,7 +2424,10 @@ export class ReservationsService implements OnModuleDestroy {
     }
   }
 
-  async checkInReservation(id: string) {
+  async checkInReservation(id: string, userId?: string) {
+    if (userId) {
+      await this.assertReservationAccess(id, userId, "venue");
+    }
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
@@ -2428,7 +2483,10 @@ export class ReservationsService implements OnModuleDestroy {
     return this.serializeReservation(checkedIn);
   }
 
-  async customerCheckInReservation(id: string) {
+  async customerCheckInReservation(id: string, userId?: string) {
+    if (userId) {
+      await this.assertReservationAccess(id, userId, "customer");
+    }
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
@@ -2499,7 +2557,14 @@ export class ReservationsService implements OnModuleDestroy {
     return this.serializeReservation(checkedIn);
   }
 
-  async declineReservation(id: string, dto?: DeclineReservationDto) {
+  async declineReservation(
+    id: string,
+    dto?: DeclineReservationDto,
+    userId?: string,
+  ) {
+    if (userId) {
+      await this.assertReservationAccess(id, userId, "venue");
+    }
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
@@ -2547,7 +2612,14 @@ export class ReservationsService implements OnModuleDestroy {
     return this.serializeReservation(updated);
   }
 
-  async cancelReservationByCustomer(id: string, dto?: DeclineReservationDto) {
+  async cancelReservationByCustomer(
+    id: string,
+    dto?: DeclineReservationDto,
+    userId?: string,
+  ) {
+    if (userId) {
+      await this.assertReservationAccess(id, userId, "customer");
+    }
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
@@ -2628,7 +2700,14 @@ export class ReservationsService implements OnModuleDestroy {
     return this.serializeReservation(updated);
   }
 
-  async cancelReservationByVenue(id: string, dto?: DeclineReservationDto) {
+  async cancelReservationByVenue(
+    id: string,
+    dto?: DeclineReservationDto,
+    userId?: string,
+  ) {
+    if (userId) {
+      await this.assertReservationAccess(id, userId, "venue");
+    }
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
@@ -2763,7 +2842,14 @@ export class ReservationsService implements OnModuleDestroy {
     };
   }
 
-  async updateReservationStatus(id: string, dto: UpdateReservationStatusDto) {
+  async updateReservationStatus(
+    id: string,
+    dto: UpdateReservationStatusDto,
+    userId?: string,
+  ) {
+    if (userId) {
+      await this.assertReservationAccess(id, userId, "venue");
+    }
     const reservation = await this.prisma.reservation.findUnique({
       where: { id },
       include: { venue: true },
